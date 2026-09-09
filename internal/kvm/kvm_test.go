@@ -195,6 +195,51 @@ func TestSlaveEntryOnPrimarySharedEdge(t *testing.T) {
 	}
 }
 
+// 回归：入口高度必须是被控主屏"同比例"位置，而非固定居中或角落。
+func TestSlaveEntryFollowsProportionalHeight(t *testing.T) {
+	cases := []struct {
+		y    float64
+		want int
+	}{
+		{0.0, 0},
+		{0.25, 270},
+		{0.75, 810},
+		{1.0, 1079}, // 比例=1 落在主屏最后一行，不越界
+	}
+	for _, c := range cases {
+		inj := newFakeInjector()
+		_, port := newTestService(t, inj)
+		tm := dialMaster(t, port, "tok")
+		if _, err := tm.recv(); err != nil {
+			t.Fatal(err)
+		}
+		if err := tm.send(wireMsg{T: "enter", Dir: "right", Y: c.y}); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, func() bool { return len(inj.abs) > 0 }, "入口绝对注入")
+		x, y := inj.lastAbs()
+		if x != 0+entryMargin || y != c.want {
+			t.Fatalf("比例 %.2f：入口坐标 got (%d,%d), want (%d,%d)",
+				c.y, x, y, entryMargin, c.want)
+		}
+	}
+}
+
+// 回归：主控多屏时，入口比例应以"光标离场所属屏"为基准，而非整个虚拟桌面。
+// 副屏(-1920,0) + 主屏(0,0) 均 1920x1080，虚拟桌面高仍为 1080，
+// 若误用整桌面宽度/原点在 -1920 的坐标算高度比例会得同样结果，故用主屏
+// 下半（y=810）验证比例 = 0.75，且副屏上半（y=270, x=-960）应给 0.25。
+func TestEntryRatioUsesSourceMonitor(t *testing.T) {
+	inj := newFakeInjector()
+	svc, _ := newTestService(t, inj)
+	if got := svc.entryRatio(960, 810); got != 0.75 {
+		t.Fatalf("主屏 y=810 比例应为 0.75, got %.3f", got)
+	}
+	if got := svc.entryRatio(-960, 270); got != 0.25 {
+		t.Fatalf("副屏 y=270 比例应为 0.25, got %.3f", got)
+	}
+}
+
 func TestSlaveRelMoveAndLeave(t *testing.T) {
 	inj := newFakeInjector()
 	_, port := newTestService(t, inj)

@@ -61,8 +61,6 @@ const (
 	mouseEventfXUp         = 0x0100
 	mouseEventfWheel       = 0x0800
 	mouseEventfHWheel      = 0x1000
-	mouseEventfVirtualDesk = 0x4000
-	mouseEventfAbsolute    = 0x8000
 
 	keyeventfExtendedKey = 0x0001
 	keyeventfKeyUp       = 0x0002
@@ -73,25 +71,26 @@ const (
 var (
 	user32 = windows.NewLazySystemDLL("user32.dll")
 
-	procSetWindowsHookExW       = user32.NewProc("SetWindowsHookExW")
-	procUnhookWindowsHookEx     = user32.NewProc("UnhookWindowsHookEx")
-	procCallNextHookEx          = user32.NewProc("CallNextHookEx")
-	procGetMessageW             = user32.NewProc("GetMessageW")
-	procTranslateMessage        = user32.NewProc("TranslateMessage")
-	procDispatchMessageW        = user32.NewProc("DispatchMessageW")
-	procDefWindowProcW          = user32.NewProc("DefWindowProcW")
-	procRegisterClassExW        = user32.NewProc("RegisterClassExW")
-	procCreateWindowExW         = user32.NewProc("CreateWindowExW")
-	procRegisterRawInputDevices = user32.NewProc("RegisterRawInputDevices")
-	procGetRawInputData         = user32.NewProc("GetRawInputData")
-	procSendInput               = user32.NewProc("SendInput")
-	procGetSystemMetrics        = user32.NewProc("GetSystemMetrics")
-	procSetCursorPos            = user32.NewProc("SetCursorPos")
-	procGetCursorPos            = user32.NewProc("GetCursorPos")
-	procMapVirtualKeyW          = user32.NewProc("MapVirtualKeyW")
-	procSetProcessDPIAware      = user32.NewProc("SetProcessDPIAware")
-	procEnumDisplayMonitors     = user32.NewProc("EnumDisplayMonitors")
-	procGetMonitorInfoW         = user32.NewProc("GetMonitorInfoW")
+	procSetWindowsHookExW             = user32.NewProc("SetWindowsHookExW")
+	procUnhookWindowsHookEx           = user32.NewProc("UnhookWindowsHookEx")
+	procCallNextHookEx                = user32.NewProc("CallNextHookEx")
+	procGetMessageW                   = user32.NewProc("GetMessageW")
+	procTranslateMessage              = user32.NewProc("TranslateMessage")
+	procDispatchMessageW              = user32.NewProc("DispatchMessageW")
+	procDefWindowProcW                = user32.NewProc("DefWindowProcW")
+	procRegisterClassExW              = user32.NewProc("RegisterClassExW")
+	procCreateWindowExW               = user32.NewProc("CreateWindowExW")
+	procRegisterRawInputDevices       = user32.NewProc("RegisterRawInputDevices")
+	procGetRawInputData               = user32.NewProc("GetRawInputData")
+	procSendInput                     = user32.NewProc("SendInput")
+	procGetSystemMetrics              = user32.NewProc("GetSystemMetrics")
+	procSetCursorPos                  = user32.NewProc("SetCursorPos")
+	procGetCursorPos                  = user32.NewProc("GetCursorPos")
+	procMapVirtualKeyW                = user32.NewProc("MapVirtualKeyW")
+	procSetProcessDPIAware            = user32.NewProc("SetProcessDPIAware")
+	procSetProcessDpiAwarenessContext = user32.NewProc("SetProcessDpiAwarenessContext")
+	procEnumDisplayMonitors           = user32.NewProc("EnumDisplayMonitors")
+	procGetMonitorInfoW               = user32.NewProc("GetMonitorInfoW")
 )
 
 // Callbacks 是输入事件回调集合，全部在钩子线程上调用，必须非阻塞。
@@ -119,9 +118,17 @@ var (
 func SetSuppress(b bool) { suppress.Store(b) }
 
 // 必须在任何显示器枚举/坐标查询之前声明 DPI 感知，否则拿到的是 DPI 虚拟化
-// 坐标（缩小过的），而 SendInput/GetCursorPos 随后是物理坐标——两套体系混用
-// 会导致注入位置系统性漂移（入口跑到屏幕角落）。
+// 坐标（缩小过的），而 SendInput/SetCursorPos 随后是物理坐标——两套体系混用
+// 会导致注入位置系统性漂移（双屏且两屏缩放率不同时，入口被顶到屏幕角落）。
+// 首选 Per-Monitor v2（Win10 1703+）：让 EnumDisplayMonitors / GetSystemMetrics /
+// SetCursorPos 全程处于同一套"物理虚拟桌面"坐标系，各屏可独立缩放。老系统上
+// 该调用失败，退回 System Aware（单缩放率环境仍正确）。
+const dpiAwarenessContextPerMonitorV2 = ^uintptr(3) // (DPI_AWARENESS_CONTEXT)-4 == 0xFFFFFFFC
+
 func init() {
+	if r, _, _ := procSetProcessDpiAwarenessContext.Call(dpiAwarenessContextPerMonitorV2); r != 0 {
+		return
+	}
 	procSetProcessDPIAware.Call()
 }
 
@@ -218,14 +225,12 @@ func CursorPos() (int, int) {
 func SetCursorPos(x, y int) { procSetCursorPos.Call(uintptr(x), uintptr(y)) }
 
 // InjectMoveAbs 在虚拟桌面绝对坐标处放置光标。
+// 用 SetCursorPos 而非 SendInput 绝对坐标：后者需把像素折算成 0..65535，
+// 折算基准（主屏 or 虚拟桌面）与多屏排列/DPI 缩放强相关，双屏下极易把
+// 入口顶到主屏角落；SetCursorPos 直接吃 GetCursorPos/Monitors() 同一套
+// 物理虚拟桌面像素坐标，位置精确且与屏数、缩放无关。
 func InjectMoveAbs(x, y int) {
-	vx, vy, vw, vh := VirtualScreen()
-	if vw <= 1 || vh <= 1 {
-		return
-	}
-	nx := (x - vx) * 65535 / (vw - 1)
-	ny := (y - vy) * 65535 / (vh - 1)
-	sendMouse(mouseEventfMove|mouseEventfAbsolute|mouseEventfVirtualDesk, int32(nx), int32(ny), 0)
+	SetCursorPos(x, y)
 }
 
 // InjectButton 注入鼠标按键。button: 1=左 2=右 3=中 4/5=侧键。

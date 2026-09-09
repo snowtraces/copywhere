@@ -371,12 +371,16 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 			mons := s.injector.Monitors()
 			sess.entry = pickEntryMonitor(mons, s.cfg.EntryMonitor)
 			sess.leaveEdges = leaveEdgesFor(mons, m.Dir)
-			// 入口：入口显示器的共享边缘；垂直位置跟随主控机光标离开时的高度
+			// 入口：入口显示器的共享边缘；垂直位置按主控比例映射到入口显示器
+			// 同比例高度（m.Y 已是主控"离场所属屏"内的比例，见 entryRatio）。
 			ex := sess.entry.X + entryMargin
 			if m.Dir == "left" {
 				ex = sess.entry.X + sess.entry.W - 1 - entryMargin
 			}
 			ey := sess.entry.Y + int(clamp01(m.Y)*float64(sess.entry.H))
+			if ey >= sess.entry.Y+sess.entry.H { // 比例=1 时防越界一行
+				ey = sess.entry.Y + sess.entry.H - 1
+			}
 			sess.entryX = ex
 			s.injector.MoveAbs(ex, ey)
 			log.Printf("KVM：入口显示器 (%d,%d %dx%d 主屏=%v)，光标注入到 (%d,%d)",
@@ -512,21 +516,39 @@ func (s *Service) trySwitch(dir string) {
 	sess.virtX = float64(cx)
 	sess.virtY = float64(cy)
 	sess.lastX, sess.lastY = sess.virtX, sess.virtY
-	// 入口垂直比例：主控机光标在自身虚拟桌面中的高度，副机按此映射
-	_, _, _, mvh := s.injector.ScreenBounds()
-	ny := 0.5
-	if mvh > 0 {
-		ny = clamp01(sess.virtY / float64(mvh))
-	}
+	// 入口垂直比例：光标在"主控离场所属显示器"内的高度比例（0..1）。
+	// 用所在显示器而非整个虚拟桌面，主控多屏时才能把比例正确对应到被控主屏，
+	// 实现"主控比例 → 被控主屏同比例"。找不到所在显示器时退回整桌面比例。
+	ny := s.entryRatio(float64(cx), float64(cy))
 	select {
 	case sess.sendCh <- wireMsg{T: "enter", Dir: dir, Y: ny}:
 	default:
 	}
-	log.Printf("KVM：开始控制 %q（向%s），Ctrl+Alt+Shift+X 紧急退出", peer.Name, dir)
+	log.Printf("KVM：开始控制 %q（向%s），入口比例 %.2f，Ctrl+Alt+Shift+X 紧急退出",
+		peer.Name, dir, ny)
 
 	go s.masterSender(sess)
 	go s.masterReader(sess, peer.Name)
 	go s.masterPinger(sess)
+}
+
+// entryRatio 计算光标 (x,y) 在其所属显示器内的高度比例（0..1）。
+// 主控多屏时，该比例才反映光标在当前工作屏上的位置；无匹配显示器时
+// 退回以整个虚拟桌面高度估算。
+func (s *Service) entryRatio(x, y float64) float64 {
+	for _, m := range s.currentMonitors() {
+		if x >= float64(m.X) && x < float64(m.X+m.W) &&
+			y >= float64(m.Y) && y < float64(m.Y+m.H) {
+			if m.H > 0 {
+				return clamp01((y - float64(m.Y)) / float64(m.H))
+			}
+		}
+	}
+	_, _, _, vh := s.injector.ScreenBounds()
+	if vh > 0 {
+		return clamp01(y / float64(vh))
+	}
+	return 0.5
 }
 
 func (s *Service) masterHandshake(conn net.Conn) (*masterSession, error) {

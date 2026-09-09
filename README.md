@@ -36,8 +36,9 @@
 # 开发构建
 go build -o copywhere.exe ./cmd/copywhere
 
-# 发布构建（注入版本号）
-go build -trimpath -ldflags "-s -w -X copywhere/internal/app.Version=v0.1.0" `
+# 发布构建（注入版本号；$v 与 CHANGELOG / git tag 保持一致）
+$v = "v0.2.0"
+go build -trimpath -ldflags "-s -w -X copywhere/internal/app.Version=$v" `
   -o copywhere.exe ./cmd/copywhere
 
 go test ./...        # 运行全部单元测试
@@ -87,8 +88,8 @@ copywhere version    # 查看版本号
 | --- | --- |
 | `copywhere init` | 生成默认配置（含随机 token） |
 | `copywhere run [-config 路径] [-plain]` | 启动常驻服务；默认三页 TUI，`-plain` 纯日志 |
-| `copywhere nodes [-wait 4s]` | 扫描并列出在线节点（含多网卡地址合并结果） |
-| `copywhere send [-text 内容] 文件...` | 立即发送到所有在线节点，不受阈值限制 |
+| `copywhere nodes [-config 路径] [-wait 4s]` | 扫描并列出在线节点（含多网卡地址合并结果） |
+| `copywhere send [-config 路径] [-text 内容] [-wait 4s] 文件...` | 立即发送到所有在线节点，不受阈值限制 |
 | `copywhere clip-test` | 本机剪贴板读写自检（覆盖并尝试恢复剪贴板） |
 
 ### TUI 快捷键（`run` 界面）
@@ -120,6 +121,7 @@ copywhere version    # 查看版本号
 | `kvm_port` | 47832 | KVM 监听端口 |
 | `kvm_left` | 空 | 左边缘邻居的**节点名**（`node_name`，与对端配置互为镜像） |
 | `kvm_right` | 空 | 右边缘邻居的节点名 |
+| `kvm_entry_monitor` | -1 | 被控入口显示器下标（`-1` = 恒用主显示器） |
 
 ## 鼠标键盘跨屏（KVM，实验性）
 
@@ -134,15 +136,19 @@ copywhere version    # 查看版本号
 
 重启 `run` 后即可使用：
 
-- 在 A 上把光标推向**右边缘并继续推**（累计约 24px）→ 控制权切到 B，键盘/滚轮同步转发
+- 在 A 上把光标推向**右边缘并继续推**（累计约 16px）→ 控制权切到 B，键盘/滚轮同步转发
 - 在 B 上把光标推回**左边缘并继续推** → 控制权交还 A
 - 紧急退出：`Ctrl+Alt+Shift+X`
 - 主控机失联 5 秒，副机自动释放控制
 
+多显示器：被控入口固定在其**主显示器**的共享边缘，入口高度跟随主控光标比例
+（主控在自身屏 50% 高度处推出 → 落在被控主屏 50% 高度处），双屏、不同缩放率
+下也不会跑到屏幕角落；副机本地多屏由操作系统自然跨越，切换/切回只在其
+"暴露边缘"（外侧）触发。
+
 当前限制（MVP）：对 UAC/锁屏等安全桌面无法注入输入；按键按 VK 码转发，中文输入
 依赖对端输入法（跨机传文字建议直接用剪贴板同步）；跨 ZeroTier 中继时延迟取决于
-链路质量。多显示器：被控入口固定为主显示器，副机本地多屏可自然跨越，切换/切回
-只在其"暴露边缘"（外侧）触发。协议细节见 [docs/protocol.md](docs/protocol.md)。
+链路质量。协议细节见 [docs/protocol.md](docs/protocol.md)。
 
 ## 节点指纹与多网卡地址
 
