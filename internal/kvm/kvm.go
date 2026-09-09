@@ -395,7 +395,11 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 		case "key":
 			s.injector.Key(m.VK, m.Scan, m.Down, m.Ext)
 		case "ping":
-			// 保活
+			// 保活：必须回应，否则主控端读超时会误判连接断开
+			if err := writeMsg(bw, wireMsg{T: "pong"}); err != nil {
+				sess.end(false, "回应 ping 失败: "+err.Error())
+				return
+			}
 		default:
 			// 未知消息忽略
 		}
@@ -576,6 +580,8 @@ func (s *Service) masterReader(sess *masterSession, peerName string) {
 		case "error":
 			s.endMasterSession(sess, false, peerName+" 返回错误: "+m.Msg)
 			return
+		case "pong":
+			// 被控端对 ping 的应答，读超时随之刷新
 		}
 	}
 }
