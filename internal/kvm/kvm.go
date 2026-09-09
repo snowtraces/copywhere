@@ -129,8 +129,10 @@ type Service struct {
 	pushLast      time.Time
 	modsDown      map[uint32]bool // 控制期间跟踪的修饰键（归一化后的）状态
 
-	mons   []input.Rect // 本机显示器布局缓存
-	monsAt time.Time
+	// 显示器布局缓存：由后台协程定期刷新。钩子线程只读缓存，
+	// 绝不能在持有 s.mu 时做可能阻塞的事情（曾因此死锁拖垮全系统鼠标）。
+	monsMu sync.Mutex
+	mons   []input.Rect
 }
 
 // NewService 创建 KVM 服务。
@@ -156,6 +158,19 @@ func (s *Service) Start(ctx context.Context) error {
 		return fmt.Errorf("监听 KVM 端口 %d/tcp 失败: %w", s.cfg.Port, err)
 	}
 	log.Printf("KVM 被控端已监听 :%d/tcp", s.cfg.Port)
+	s.refreshMonitors()
+	go func() {
+		t := time.NewTicker(3 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				s.refreshMonitors()
+			}
+		}
+	}()
 	go func() {
 		<-ctx.Done()
 		ln.Close()
@@ -180,16 +195,22 @@ func (s *Service) acceptLoop(ctx context.Context, ln net.Listener) {
 
 // ---------- 本机显示器布局 ----------
 
-// currentMonitors 返回本机显示器布局（缓存 3 秒）。
+// currentMonitors 返回本机显示器布局缓存（由后台协程刷新，本函数不阻塞）。
 func (s *Service) currentMonitors() []input.Rect {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	now := time.Now()
-	if s.mons == nil || now.Sub(s.monsAt) > 3*time.Second {
-		s.mons = s.injector.Monitors()
-		s.monsAt = now
+	s.monsMu.Lock()
+	defer s.monsMu.Unlock()
+	if s.mons == nil {
+		return []input.Rect{{X: 0, Y: 0, W: 1920, H: 1080, Primary: true}}
 	}
 	return s.mons
+}
+
+func (s *Service) refreshMonitors() {
+	if m := s.injector.Monitors(); len(m) > 0 {
+		s.monsMu.Lock()
+		s.mons = m
+		s.monsMu.Unlock()
+	}
 }
 
 // exposedEdges 计算暴露边缘：某显示器某侧没有（垂直方向有重叠的）相邻显示器

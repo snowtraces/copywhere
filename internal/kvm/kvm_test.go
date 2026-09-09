@@ -290,6 +290,32 @@ func TestSlaveWatchdogRelease(t *testing.T) {
 	}
 }
 
+// 回归：OnMouseMove 在钩子线程上调用，绝不能死锁。
+// 曾因持有 s.mu 时再锁 s.mu（显示器缓存）卡死钩子线程，导致全系统鼠标卡顿。
+func TestOnMouseMoveLocalNoDeadlock(t *testing.T) {
+	inj := newFakeInjector()
+	store := discovery.NewStore("self")
+	svc := NewService(Config{Port: 47899, Right: "GHOST"}, "S", "tok", store, 12*time.Second, inj)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := svc.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 100; i++ {
+			svc.OnMouseMove(3, 0) // 触发本地边缘检测路径（曾死锁）
+			svc.OnMouseMove(-1, 0)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("OnMouseMove 死锁")
+	}
+}
+
 func waitFor(t *testing.T, cond func() bool, what string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
