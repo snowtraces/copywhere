@@ -31,8 +31,15 @@
 要求 Go 1.21+（Windows 下开发与使用）。
 
 ```powershell
+# 开发构建
 go build -o copywhere.exe ./cmd/copywhere
+
+# 发布构建（注入版本号）
+go build -trimpath -ldflags "-s -w -X copywhere/internal/app.Version=v0.1.0" `
+  -o copywhere.exe ./cmd/copywhere
+
 go test ./...        # 运行全部单元测试
+copywhere version    # 查看版本号
 ```
 
 协议与设计细节见 [docs/protocol.md](docs/protocol.md)。

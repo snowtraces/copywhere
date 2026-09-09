@@ -593,7 +593,7 @@ func printBanner(cfg *config.Config) {
 	if t := cfg.Threshold(); t > 0 {
 		threshold = fmt.Sprintf("%d MB", cfg.MaxAutoCopyMB)
 	}
-	log.Printf("copywhere 节点 %q 已启动", cfg.NodeName)
+	log.Printf("copywhere v%s 节点 %q 已启动", Version, cfg.NodeName)
 	log.Printf("发现端口 %d/udp，传输端口 %d/tcp，自动同步阈值 %s", cfg.DiscoveryPort, cfg.TransferPort, threshold)
 	log.Printf("接收目录: %s", cfg.ReceiveDir)
 	log.Printf("自动回贴剪贴板: %v，文本同步: %v", cfg.AutoPaste, cfg.TextSync)

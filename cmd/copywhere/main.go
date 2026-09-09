@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"time"
 
@@ -31,6 +32,7 @@ func usage() {
   copywhere send [-config 路径] [-text 内容] [-wait 4s] 文件/目录...
                                             立即发送到所有在线节点（不受大小阈值限制）
   copywhere clip-test                       本机剪贴板读写自检
+  copywhere version                         显示版本号
 
 工作方式:
   - 各节点通过 UDP 广播自动发现彼此，无需配置 IP；同一节点多网卡地址自动去重
@@ -62,6 +64,9 @@ func main() {
 		err = cmdSend(os.Args[2:])
 	case "clip-test":
 		err = cmdClipTest(os.Args[2:])
+	case "version", "-v", "--version":
+		fmt.Printf("copywhere %s (%s/%s)\n", app.Version, runtime.GOOS, runtime.GOARCH)
+		return
 	case "help", "-h", "--help":
 		usage()
 		return
