@@ -1,5 +1,5 @@
-# 构建产物
-copywhere.exe
+# 构建产物（发布产物走 GitHub Release 附件，不入库）
+*.exe
 *.exe~
 
 # 本地测试与临时文件
