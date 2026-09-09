@@ -50,17 +50,17 @@ const (
 	inputMouse    = 0
 	inputKeyboard = 1
 
-	mouseEventfMove        = 0x0001
-	mouseEventfLeftDown    = 0x0002
-	mouseEventfLeftUp      = 0x0004
-	mouseEventfRightDown   = 0x0008
-	mouseEventfRightUp     = 0x0010
-	mouseEventfMiddleDown  = 0x0020
-	mouseEventfMiddleUp    = 0x0040
-	mouseEventfXDown       = 0x0080
-	mouseEventfXUp         = 0x0100
-	mouseEventfWheel       = 0x0800
-	mouseEventfHWheel      = 0x1000
+	mouseEventfMove       = 0x0001
+	mouseEventfLeftDown   = 0x0002
+	mouseEventfLeftUp     = 0x0004
+	mouseEventfRightDown  = 0x0008
+	mouseEventfRightUp    = 0x0010
+	mouseEventfMiddleDown = 0x0020
+	mouseEventfMiddleUp   = 0x0040
+	mouseEventfXDown      = 0x0080
+	mouseEventfXUp        = 0x0100
+	mouseEventfWheel      = 0x0800
+	mouseEventfHWheel     = 0x1000
 
 	keyeventfExtendedKey = 0x0001
 	keyeventfKeyUp       = 0x0002
