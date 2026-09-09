@@ -45,7 +45,8 @@ go test ./...        # 运行全部单元测试
 copywhere version    # 查看版本号
 ```
 
-协议与设计细节见 [docs/protocol.md](docs/protocol.md)。
+协议与设计细节见 [docs/protocol.md](docs/protocol.md)；版本发布流程见
+[docs/release.md](docs/release.md)。
 
 ## 快速开始（两台机器 A、B）
 
@@ -58,14 +59,9 @@ copywhere version    # 查看版本号
 2. **让两台机器 token 一致**：打开 `~/.copywhere/config.json`，把 A 的
    `token` 复制到 B（或两边改成同一个值）。建议顺便改一个友好的 `node_name`。
 
-3. 两边放行防火墙（管理员 PowerShell，按实际路径修改）：
-
-   ```powershell
-   netsh advfirewall firewall add rule name="copywhere" dir=in action=allow `
-     program="C:\tools\copywhere.exe" profile=private,public
-   ```
-
-   > 首次运行时 Windows 也会弹窗询问，选择"允许"即可（至少专用网络必须允许）。
+3. 防火墙提示：发现/传输/KVM 三个端口（默认 47830~47832）需要允许入站。
+   首次运行时 Windows 会弹窗询问，选择"允许"（至少专用网络）；按需也可用
+   `netsh advfirewall` 按程序放行。
 
 4. 两边启动服务：
 
@@ -183,6 +179,7 @@ internal/input/       全局输入捕获（钩子+Raw Input）与 SendInput 注�
 internal/ui/          三页终端界面（日志/在线节点/文件记录）
 internal/bytesize/    字节数格式化
 docs/protocol.md      协议与设计说明
+docs/release.md       版本发布流程
 ```
 
 ## 许可证
