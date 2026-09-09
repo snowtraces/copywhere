@@ -11,10 +11,11 @@ type Rect struct {
 
 // Callbacks 输入事件回调集合（非 Windows 平台不会被调用）。
 type Callbacks struct {
-	OnMouseMove   func(dx, dy int)
-	OnMouseButton func(down bool, button int, x, y int)
-	OnWheel       func(delta int32, horizontal bool)
-	OnKey         func(vk, scan uint32, down, ext bool)
+	OnMouseMove     func(dx, dy int)
+	OnMouseButton   func(down bool, button int, x, y int)
+	OnWheel         func(delta int32, horizontal bool)
+	OnKey           func(vk, scan uint32, down, ext bool)
+	OnLocalActivity func()
 }
 
 // SetSuppress 无操作。

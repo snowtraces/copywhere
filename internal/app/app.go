@@ -213,10 +213,11 @@ func Run(ctx context.Context, cfg *config.Config, opts Options) error {
 			log.Printf("KVM 服务启动失败: %v", err)
 		} else {
 			if err := input.Start(input.Callbacks{
-				OnMouseMove:   ks.OnMouseMove,
-				OnMouseButton: ks.OnMouseButton,
-				OnWheel:       ks.OnWheel,
-				OnKey:         ks.OnKey,
+				OnMouseMove:     ks.OnMouseMove,
+				OnMouseButton:   ks.OnMouseButton,
+				OnWheel:         ks.OnWheel,
+				OnKey:           ks.OnKey,
+				OnLocalActivity: ks.OnLocalActivity,
 			}); err != nil {
 				log.Printf("输入钩子启动失败: %v", err)
 			}

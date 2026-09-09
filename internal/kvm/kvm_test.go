@@ -317,6 +317,25 @@ func TestOnMouseMoveLocalNoDeadlock(t *testing.T) {
 	}
 }
 
+// 被控期间本机物理输入应立即结束会话。
+func TestLocalActivityEndsSession(t *testing.T) {
+	inj := newFakeInjector()
+	svc, port := newTestService(t, inj)
+
+	tm := dialMaster(t, port, "tok")
+	if _, err := tm.recv(); err != nil {
+		t.Fatal(err)
+	}
+	tm.send(wireMsg{T: "enter", Dir: "right"})
+	waitFor(t, func() bool { return len(inj.abs) > 0 }, "入口注入")
+
+	svc.OnLocalActivity() // 本机物理输入
+	m, err := tm.recv()
+	if err != nil || m.T != "leave" {
+		t.Fatalf("本机物理输入应触发 leave: %+v %v", m, err)
+	}
+}
+
 func waitFor(t *testing.T, cond func() bool, what string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

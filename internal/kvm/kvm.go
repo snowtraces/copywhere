@@ -27,16 +27,17 @@ import (
 
 const (
 	moveSendInterval = 20 * time.Millisecond // 移动事件合拍间隔（≤50Hz）
-	edgePushPixels   = 24                    // 本地边缘推动判定：累计推动像素
-	pushGapReset     = 400 * time.Millisecond
+	edgePushPixels   = 16                    // 本地边缘推动判定：累计推动像素
+	pushGapReset     = 600 * time.Millisecond
 	edgeAdjacency    = 2  // 判断两显示器相邻的坐标容差（像素）
 	edgeBand         = 2  // 光标距边缘多少像素内算"贴边"
 	armPixels        = 30 // 进入副机后深入多少像素才允许触发切回
-	leavePushPixels  = 20 // 切回判定：贴边累计推动像素
-	pushGapLeave     = 400 * time.Millisecond
+	leavePushPixels  = 16 // 切回判定：贴边累计推动像素
+	pushGapLeave     = 600 * time.Millisecond
 	entryMargin      = 2 // 入口位置距共享边缘的像素
 	pingInterval     = 1 * time.Second
 	readTimeout      = 5 * time.Second
+	unconfigLogEvery = 5 * time.Second // 未配置邻居提示的节流间隔
 )
 
 // Config 是 KVM 的配置（来自 config.json）。
@@ -108,6 +109,19 @@ type slaveSession struct {
 	pushAccum  int // 贴边向外推动的累计像素
 	pushLast   time.Time
 	leaveEdges []input.Rect // 主控方向上暴露的边缘（切回触发区）
+	endOnce    sync.Once
+}
+
+// end 结束被控会话（幂等）：可选发送 leave 并关闭连接。
+func (sess *slaveSession) end(writeLeave bool, reason string) {
+	sess.endOnce.Do(func() {
+		if writeLeave {
+			sess.conn.SetWriteDeadline(time.Now().Add(time.Second))
+			writeMsg(sess.w, wireMsg{T: "leave"})
+		}
+		sess.conn.Close()
+		log.Printf("KVM：被控会话结束（%s）", reason)
+	})
 }
 
 // Service 是 KVM 服务。
@@ -119,15 +133,16 @@ type Service struct {
 	ttl      time.Duration
 	injector Injector
 
-	mu            sync.Mutex
-	master        *masterSession // 正在控制别人
-	serving       *slaveSession  // 正在被控制
-	cooldownUntil time.Time      // 切换失败/释放后的冷却
-	attemptUntil  time.Time      // 正在尝试切换（防重复触发）
-	pushDir       string
-	pushAccum     int
-	pushLast      time.Time
-	modsDown      map[uint32]bool // 控制期间跟踪的修饰键（归一化后的）状态
+	mu               sync.Mutex
+	master           *masterSession // 正在控制别人
+	serving          *slaveSession  // 正在被控制
+	cooldownUntil    time.Time      // 切换失败/释放后的冷却
+	attemptUntil     time.Time      // 正在尝试切换（防重复触发）
+	pushDir          string
+	pushAccum        int
+	pushLast         time.Time
+	modsDown         map[uint32]bool // 控制期间跟踪的修饰键（归一化后的）状态
+	unconfigLogUntil time.Time       // 未配置邻居提示的节流
 
 	// 显示器布局缓存：由后台协程定期刷新。钩子线程只读缓存，
 	// 绝不能在持有 s.mu 时做可能阻塞的事情（曾因此死锁拖垮全系统鼠标）。
@@ -317,9 +332,7 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 		var m wireMsg
 		if err := readMsg(br, &m); err != nil {
 			if isTimeout(err) { // 主控机失联，自动释放
-				log.Printf("KVM：主控机 %q 无响应，释放控制", hello.Name)
-				conn.SetWriteDeadline(time.Now().Add(time.Second))
-				writeMsg(bw, wireMsg{T: "leave"})
+				sess.end(true, "主控机 "+hello.Name+" 无响应")
 			}
 			return
 		}
@@ -352,8 +365,7 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 			}
 			s.injector.MoveRel(m.DX, m.DY)
 			if s.detectLeave(sess, m.DX) { // 返回 true 表示触发切回
-				writeMsg(bw, wireMsg{T: "leave"})
-				log.Printf("KVM：光标推回共享边缘，控制权交还本机")
+				sess.end(true, "光标推回共享边缘")
 				return
 			}
 		case "btn":
@@ -413,6 +425,9 @@ func (s *Service) detectLeave(sess *slaveSession, dx int) bool {
 	}
 	if sess.dir == "left" && dx > 0 {
 		outward = dx
+	}
+	if outward < 1 {
+		outward = 1 // 每次推动事件至少计 1px
 	}
 	sess.pushAccum += outward
 	sess.pushLast = now
@@ -660,6 +675,10 @@ func (s *Service) OnMouseMove(dx, dy int) {
 		s.pushDir = dir
 		s.pushAccum = 0
 	}
+	// 每次推动事件至少计 1px：低速微动也能累积，避免"推了没反应"
+	if push < 1 {
+		push = 1
+	}
 	s.pushAccum += push
 	s.pushLast = now
 	if s.pushAccum < edgePushPixels {
@@ -674,6 +693,13 @@ func (s *Service) OnMouseMove(dx, dy int) {
 	s.pushAccum = 0
 	s.pushDir = ""
 	if neighbor == "" {
+		// 节流提示：向未配置邻居的方向推动，避免"没反应"无从排查
+		if now.After(s.unconfigLogUntil) {
+			s.unconfigLogUntil = now.Add(unconfigLogEvery)
+			s.mu.Unlock()
+			log.Printf("KVM：%s 方向未配置邻居（kvm_%s），忽略切换", dir, dir)
+			return
+		}
 		s.mu.Unlock()
 		return
 	}
@@ -731,6 +757,19 @@ func (s *Service) OnKey(vk, scan uint32, down, ext bool) {
 	case m.sendCh <- wireMsg{T: "key", VK: vk, Scan: scan, Down: down, Ext: ext}:
 	default:
 	}
+}
+
+// OnLocalActivity 实现 input.Callbacks：被控期间检测到本机物理输入（鼠标/键盘），
+// 立即结束被控会话——真人已回到本机操作。
+func (s *Service) OnLocalActivity() {
+	defer func() { _ = recover() }()
+	s.mu.Lock()
+	sess := s.serving
+	s.mu.Unlock()
+	if sess == nil {
+		return
+	}
+	go sess.end(true, "本机有物理输入")
 }
 
 // 修饰键状态跟踪（控制期间本地键被吞掉，GetAsyncKeyState 不可靠）。

@@ -104,6 +104,9 @@ type Callbacks struct {
 	OnWheel func(delta int32, horizontal bool)
 	// OnKey 键盘事件。
 	OnKey func(vk, scan uint32, down, ext bool)
+	// OnLocalActivity 检测到本机物理输入（排除注入事件）。
+	// 用于被控端感知"真人在本机操作"，自动结束被控会话。
+	OnLocalActivity func()
 }
 
 var (
@@ -442,7 +445,12 @@ func mouseHookProc(nCode int, wParam, lParam uintptr) uintptr {
 	defer func() { _ = recover() }()
 	if nCode >= 0 {
 		ms := (*msllhookstruct)(unsafe.Pointer(lParam))
-		deliver := !suppress.Load() || ms.flags&llmhfInjected != 0
+		injected := ms.flags&llmhfInjected != 0
+		// 物理输入（排除注入）通知：被控端借此感知真人在本机操作
+		if !injected && cbs.OnLocalActivity != nil {
+			cbs.OnLocalActivity()
+		}
+		deliver := !suppress.Load() || injected
 		switch wParam {
 		case wmLButtonDown, wmLButtonUp, wmRButtonDown, wmRButtonUp,
 			wmMButtonDown, wmMButtonUp, wmXButtonDown, wmXButtonUp:
@@ -479,6 +487,9 @@ func keyHookProc(nCode int, wParam, lParam uintptr) uintptr {
 	defer func() { _ = recover() }()
 	if nCode >= 0 {
 		kb := (*kbdllhookstruct)(unsafe.Pointer(lParam))
+		if kb.flags&llkhfInjected == 0 && cbs.OnLocalActivity != nil {
+			cbs.OnLocalActivity()
+		}
 		if cbs.OnKey != nil {
 			cbs.OnKey(kb.vkCode, kb.scanCode, kb.flags&llkhfUp == 0, kb.flags&llkhfExtended != 0)
 		}
