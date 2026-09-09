@@ -90,6 +90,8 @@ var (
 	procGetCursorPos            = user32.NewProc("GetCursorPos")
 	procMapVirtualKeyW          = user32.NewProc("MapVirtualKeyW")
 	procSetProcessDPIAware      = user32.NewProc("SetProcessDPIAware")
+	procEnumDisplayMonitors     = user32.NewProc("EnumDisplayMonitors")
+	procGetMonitorInfoW         = user32.NewProc("GetMonitorInfoW")
 )
 
 // Callbacks 是输入事件回调集合，全部在钩子线程上调用，必须非阻塞。
@@ -124,15 +126,51 @@ func Start(cb Callbacks) error {
 	return nil
 }
 
+// Rect 是虚拟桌面坐标系中的一个矩形。
+type Rect struct {
+	X, Y, W, H int
+	Primary    bool // 是否为系统主显示器
+}
+
 // DefaultInjector 是基于 SendInput 的注入器。
 type DefaultInjector struct{}
 
 func (DefaultInjector) MoveAbs(x, y int)                    { InjectMoveAbs(x, y) }
+func (DefaultInjector) MoveRel(dx, dy int)                  { InjectMoveRel(dx, dy) }
 func (DefaultInjector) Button(down bool, button int)        { InjectButton(down, button) }
 func (DefaultInjector) Wheel(delta int32, horizontal bool)  { InjectWheel(delta, horizontal) }
 func (DefaultInjector) Key(vk, scan uint32, down, ext bool) { InjectKey(vk, scan, down, ext) }
 func (DefaultInjector) ScreenBounds() (int, int, int, int)  { return VirtualScreen() }
 func (DefaultInjector) CursorPos() (int, int)               { return CursorPos() }
+func (DefaultInjector) Monitors() []Rect                    { return Monitors() }
+
+// InjectMoveRel 以相对位移注入（光标随本机多显示器布局自然跨屏）。
+func InjectMoveRel(dx, dy int) {
+	sendMouse(mouseEventfMove, int32(dx), int32(dy), 0)
+}
+
+// Monitors 枚举所有显示器的虚拟桌面矩形。
+func Monitors() []Rect {
+	var out []Rect
+	var mu sync.Mutex
+	cb := windows.NewCallback(func(hMon, hdc, lprect, lparam uintptr) uintptr {
+		var mi monitorinfo
+		mi.cbSize = uint32(unsafe.Sizeof(mi))
+		if r, _, _ := procGetMonitorInfoW.Call(hMon, uintptr(unsafe.Pointer(&mi))); r != 0 {
+			mu.Lock()
+			out = append(out, Rect{
+				X: int(mi.rcMonitor.left), Y: int(mi.rcMonitor.top),
+				W:       int(mi.rcMonitor.right - mi.rcMonitor.left),
+				H:       int(mi.rcMonitor.bottom - mi.rcMonitor.top),
+				Primary: mi.dwFlags&1 != 0, // MONITORINFOF_PRIMARY
+			})
+			mu.Unlock()
+		}
+		return 1 // 继续枚举
+	})
+	procEnumDisplayMonitors.Call(0, 0, cb, 0)
+	return out
+}
 
 // VirtualScreen 返回虚拟桌面 (x, y, w, h)。
 func VirtualScreen() (x, y, w, h int) {
@@ -226,6 +264,15 @@ func InjectKey(vk, scan uint32, down, ext bool) {
 // ---------- 内部实现 ----------
 
 type point struct{ x, y int32 }
+
+type rect struct{ left, top, right, bottom int32 }
+
+type monitorinfo struct {
+	cbSize    uint32
+	rcMonitor rect
+	rcWork    rect
+	dwFlags   uint32
+}
 
 type msllhookstruct struct {
 	x, y      int32

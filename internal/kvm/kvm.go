@@ -1,10 +1,12 @@
 // Package kvm 实现鼠标/键盘跨屏（软 KVM）：主控机捕获本地输入流式转发，
 // 副机通过 SendInput 注入。复用 copywhere 的节点发现与 token 鉴权。
 //
-// 切换模型：光标推向本机屏幕边缘（配置了邻居的一侧）并继续推动即切换到
-// 邻居；在邻居屏幕上向回推过共享边缘即释放，控制权回到本机。
-// 坐标协议：主控机发送其虚拟桌面内的归一化坐标 m∈(-∞,∞)，副机按
-// dir=right → rel=m-1、dir=left → rel=m+1 映射到自身虚拟桌面（[0,1]）。
+// 切换模型：光标推向某显示器"暴露边缘"（该侧没有相邻的本地显示器）并继续
+// 推动，即切换到该方向配置的邻居；在邻居屏幕上把光标推回共享边缘（穿越其
+// 本机多屏布局到达暴露边缘）即释放，控制权回到本机。
+//
+// 多显示器：被控端入口固定为其主显示器（primary）的共享边缘；随后以相对
+// 位移注入，副机本地多屏由操作系统自然跨越。
 package kvm
 
 import (
@@ -14,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"sync"
 	"time"
@@ -25,12 +28,13 @@ import (
 const (
 	moveSendInterval = 20 * time.Millisecond // 移动事件合拍间隔（≤50Hz）
 	edgePushPixels   = 24                    // 本地边缘推动判定：累计推动像素
-	edgeResetPixels  = 8                     // 离开边缘该距离后重新计数
 	pushGapReset     = 400 * time.Millisecond
-	leaveGrace       = 300 * time.Millisecond
-	leaveSoft        = 0.005 // 归一化越界软阈值（连续 2 次即离开）
-	leaveHard        = 0.03  // 归一化越界硬阈值（一次即离开）
-	armThreshold     = 0.02  // 进入副机多深后才允许触发离开
+	edgeAdjacency    = 2  // 判断两显示器相邻的坐标容差（像素）
+	edgeBand         = 2  // 光标距边缘多少像素内算"贴边"
+	armPixels        = 30 // 进入副机后深入多少像素才允许触发切回
+	leavePushPixels  = 20 // 切回判定：贴边累计推动像素
+	pushGapLeave     = 400 * time.Millisecond
+	entryMargin      = 2 // 入口位置距共享边缘的像素
 	pingInterval     = 1 * time.Second
 	readTimeout      = 5 * time.Second
 )
@@ -38,18 +42,20 @@ const (
 // Config 是 KVM 的配置（来自 config.json）。
 type Config struct {
 	Port  int    // 监听端口（默认 47832）
-	Left  string // 光标从本机左边缘离开时控制的节点名
-	Right string // 光标从本机右边缘离开时控制的节点名
+	Left  string // 光标从本机暴露的左边缘离开时控制的节点名
+	Right string // 光标从本机暴露的右边缘离开时控制的节点名
 }
 
 // Injector 是输入注入接口（生产环境为 input.DefaultInjector，测试用假实现）。
 type Injector interface {
 	MoveAbs(x, y int)
+	MoveRel(dx, dy int)
 	Button(down bool, button int)
 	Wheel(delta int32, horizontal bool)
 	Key(vk, scan uint32, down, ext bool)
 	ScreenBounds() (x, y, w, h int)
 	CursorPos() (x, y int)
+	Monitors() []input.Rect
 }
 
 // Callbacks 是输入捕获回调集合（实现 input.Callbacks）。
@@ -61,20 +67,20 @@ type Callbacks interface {
 }
 
 type wireMsg struct {
-	T     string  `json:"t"`
-	Token string  `json:"token,omitempty"`
-	Name  string  `json:"name,omitempty"`
-	Dir   string  `json:"dir,omitempty"`
-	Y     float64 `json:"y,omitempty"` // 垂直归一化坐标
-	X     float64 `json:"x,omitempty"` // 主控机空间水平归一化坐标
-	B     int     `json:"b,omitempty"`
-	D     int     `json:"d,omitempty"`
-	Down  bool    `json:"down,omitempty"`
-	H     bool    `json:"h,omitempty"`
-	VK    uint32  `json:"vk,omitempty"`
-	Scan  uint32  `json:"scan,omitempty"`
-	Ext   bool    `json:"ext,omitempty"`
-	Msg   string  `json:"msg,omitempty"`
+	T     string `json:"t"`
+	Token string `json:"token,omitempty"`
+	Name  string `json:"name,omitempty"`
+	Dir   string `json:"dir,omitempty"`
+	DX    int    `json:"dx,omitempty"`
+	DY    int    `json:"dy,omitempty"`
+	B     int    `json:"b,omitempty"`
+	D     int    `json:"d,omitempty"`
+	Down  bool   `json:"down,omitempty"`
+	H     bool   `json:"h,omitempty"`
+	VK    uint32 `json:"vk,omitempty"`
+	Scan  uint32 `json:"scan,omitempty"`
+	Ext   bool   `json:"ext,omitempty"`
+	Msg   string `json:"msg,omitempty"`
 }
 
 type masterSession struct {
@@ -83,18 +89,25 @@ type masterSession struct {
 	sendCh   chan wireMsg
 	virtX    float64 // 主控机虚拟桌面内未裁剪光标位置（像素）
 	virtY    float64
+	lastX    float64 // 上次发送时的位置（差值基准）
+	lastY    float64
 	lastSent time.Time
 	stop     chan struct{}
 	stopOnce sync.Once
 }
 
 type slaveSession struct {
-	conn        net.Conn
-	w           *bufio.Writer
-	dir         string // "right": 主控机在我左侧；"left": 主控机在我右侧
-	armed       bool
-	beyondCount int
-	graceUntil  time.Time
+	conn       net.Conn
+	w          *bufio.Writer
+	dir        string     // "right": 主控机在我左侧；"left": 主控机在我右侧
+	entry      input.Rect // 入口显示器
+	entryX     int        // 入口放置的光标 X（用于计算深入距离）
+	entryTime  time.Time
+	armed      bool
+	maxDist    int // 距入口位置的最大深入距离
+	pushAccum  int // 贴边向外推动的累计像素
+	pushLast   time.Time
+	leaveEdges []input.Rect // 主控方向上暴露的边缘（切回触发区）
 }
 
 // Service 是 KVM 服务。
@@ -115,6 +128,9 @@ type Service struct {
 	pushAccum     int
 	pushLast      time.Time
 	modsDown      map[uint32]bool // 控制期间跟踪的修饰键（归一化后的）状态
+
+	mons   []input.Rect // 本机显示器布局缓存
+	monsAt time.Time
 }
 
 // NewService 创建 KVM 服务。
@@ -160,6 +176,110 @@ func (s *Service) acceptLoop(ctx context.Context, ln net.Listener) {
 		}
 		go s.handleSlaveConn(conn)
 	}
+}
+
+// ---------- 本机显示器布局 ----------
+
+// currentMonitors 返回本机显示器布局（缓存 3 秒）。
+func (s *Service) currentMonitors() []input.Rect {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	if s.mons == nil || now.Sub(s.monsAt) > 3*time.Second {
+		s.mons = s.injector.Monitors()
+		s.monsAt = now
+	}
+	return s.mons
+}
+
+// exposedEdges 计算暴露边缘：某显示器某侧没有（垂直方向有重叠的）相邻显示器
+// 贴着，光标才能在该侧推出去。
+func exposedEdges(mons []input.Rect) (leftExp, rightExp []input.Rect) {
+	for i, m := range mons {
+		left, right := true, true
+		for j, o := range mons {
+			if i == j || !verticalOverlap(m, o) {
+				continue
+			}
+			if abs(o.X+o.W-m.X) <= edgeAdjacency {
+				left = false
+			}
+			if abs(m.X+m.W-o.X) <= edgeAdjacency {
+				right = false
+			}
+		}
+		if left {
+			leftExp = append(leftExp, m)
+		}
+		if right {
+			rightExp = append(rightExp, m)
+		}
+	}
+	return
+}
+
+func verticalOverlap(a, b input.Rect) bool {
+	return a.Y < b.Y+b.H-edgeAdjacency && b.Y < a.Y+a.H-edgeAdjacency
+}
+
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+// pickEntryMonitor 选择被控入口显示器：主控方向上暴露边缘的显示器优先，
+// 其中主显示器最优先；无暴露候选时退回主显示器。
+func pickEntryMonitor(mons []input.Rect, dir string) input.Rect {
+	leftExp, rightExp := exposedEdges(mons)
+	candidates := rightExp
+	if dir == "left" {
+		candidates = leftExp
+	}
+	primary := input.Rect{}
+	hasPrimary := false
+	for _, m := range mons {
+		if m.Primary {
+			primary = m
+			hasPrimary = true
+			break
+		}
+	}
+	for _, m := range candidates {
+		if hasPrimary && m == primary {
+			return m
+		}
+	}
+	if len(candidates) > 0 {
+		// 取最靠主控方向的那个
+		best := candidates[0]
+		for _, m := range candidates[1:] {
+			if dir == "right" && m.X < best.X {
+				best = m
+			}
+			if dir == "left" && m.X+m.W > best.X+best.W {
+				best = m
+			}
+		}
+		return best
+	}
+	if hasPrimary {
+		return primary
+	}
+	if len(mons) > 0 {
+		return mons[0]
+	}
+	return input.Rect{X: 0, Y: 0, W: 1920, H: 1080}
+}
+
+// leaveEdgesFor 返回切回触发边缘：主控方向上暴露的显示器边缘集合。
+func leaveEdgesFor(mons []input.Rect, dir string) []input.Rect {
+	left, right := exposedEdges(mons)
+	if dir == "right" {
+		return left
+	}
+	return right
 }
 
 // ---------- 被控端（slave） ----------
@@ -213,15 +333,30 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 		case "enter":
 			s.mu.Lock()
 			sess.dir = m.Dir
-			sess.graceUntil = time.Now().Add(leaveGrace)
+			sess.entryTime = time.Now()
 			sess.armed = false
-			sess.beyondCount = 0
+			sess.maxDist = 0
+			sess.pushAccum = 0
 			s.mu.Unlock()
+
+			mons := s.injector.Monitors()
+			sess.entry = pickEntryMonitor(mons, m.Dir)
+			sess.leaveEdges = leaveEdgesFor(mons, m.Dir)
+			// 入口：入口显示器的共享边缘、垂直居中
+			ex := sess.entry.X + entryMargin
+			if m.Dir == "left" {
+				ex = sess.entry.X + sess.entry.W - 1 - entryMargin
+			}
+			sess.entryX = ex
+			s.injector.MoveAbs(ex, sess.entry.Y+sess.entry.H/2)
+			log.Printf("KVM：入口显示器 (%d,%d %dx%d)，光标置于共享边缘",
+				sess.entry.X, sess.entry.Y, sess.entry.W, sess.entry.H)
 		case "move":
 			if sess.dir == "" {
 				continue
 			}
-			if s.injectMove(sess, m) { // 返回 true 表示触发离开
+			s.injector.MoveRel(m.DX, m.DY)
+			if s.detectLeave(sess, m.DX) { // 返回 true 表示触发切回
 				writeMsg(bw, wireMsg{T: "leave"})
 				log.Printf("KVM：光标推回共享边缘，控制权交还本机")
 				return
@@ -240,46 +375,53 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 	}
 }
 
-// injectMove 注入绝对移动并检测"推回共享边缘"的离开动作。
-func (s *Service) injectMove(sess *slaveSession, m wireMsg) bool {
+// detectLeave 检测"光标推回共享边缘"的切回动作。光标为真实位置，
+// 副机本机多显示器由操作系统自然跨越，因此只需监测暴露边缘。
+func (s *Service) detectLeave(sess *slaveSession, dx int) bool {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	now := time.Now()
-	rel := m.X - 1 // dir=right：主控机在我左侧，rel∈[0,1] 从左边缘往右
-	if sess.dir == "left" {
-		rel = m.X + 1 // 主控机在我右侧，rel=1 为右边缘
+
+	cx, cy := s.injector.CursorPos()
+	// 深入距离武装：光标离开共享边缘足够远后才允许触发切回
+	dist := abs(cx - sess.entryX)
+	if dist > sess.maxDist {
+		sess.maxDist = dist
 	}
-	// 进入武装：光标深入本机屏幕后，回推才有意义
 	if !sess.armed {
-		if (sess.dir == "right" && rel >= armThreshold) ||
-			(sess.dir == "left" && rel <= 1-armThreshold) {
+		if sess.maxDist >= armPixels {
 			sess.armed = true
 		}
+		return false
 	}
-	leave := false
-	if now.After(sess.graceUntil) && sess.armed {
-		beyond := (sess.dir == "right" && rel < -leaveSoft) ||
-			(sess.dir == "left" && rel > 1+leaveSoft)
-		hard := (sess.dir == "right" && rel < -leaveHard) ||
-			(sess.dir == "left" && rel > 1+leaveHard)
-		if beyond {
-			sess.beyondCount++
-			if hard || sess.beyondCount >= 2 {
-				leave = true
-			}
-		} else {
-			sess.beyondCount = 0
+
+	atEdge := false
+	for _, r := range sess.leaveEdges {
+		inY := cy >= r.Y && cy < r.Y+r.H
+		if sess.dir == "right" && inY && cx <= r.X+edgeBand {
+			atEdge = true
+		}
+		if sess.dir == "left" && inY && cx >= r.X+r.W-1-edgeBand {
+			atEdge = true
 		}
 	}
-	s.mu.Unlock()
-
-	if rel < 0 {
-		rel = 0
-	} else if rel > 1 {
-		rel = 1
+	if !atEdge {
+		if now.Sub(sess.pushLast) > pushGapLeave {
+			sess.pushAccum = 0
+		}
+		sess.pushLast = now
+		return false
 	}
-	vx, vy, vw, vh := s.injector.ScreenBounds()
-	s.injector.MoveAbs(vx+int(rel*float64(vw)), vy+int(clamp01(m.Y)*float64(vh)))
-	return leave
+	outward := 0
+	if sess.dir == "right" && dx < 0 {
+		outward = -dx
+	}
+	if sess.dir == "left" && dx > 0 {
+		outward = dx
+	}
+	sess.pushAccum += outward
+	sess.pushLast = now
+	return sess.pushAccum >= leavePushPixels
 }
 
 // ---------- 主控端（master） ----------
@@ -318,7 +460,7 @@ func (s *Service) trySwitch(dir string) {
 		return
 	}
 
-	sess, err := s.masterHandshake(conn, dir)
+	sess, err := s.masterHandshake(conn)
 	if err != nil {
 		conn.Close()
 		log.Printf("KVM：与 %q 握手失败: %v", peer.Name, err)
@@ -331,17 +473,11 @@ func (s *Service) trySwitch(dir string) {
 	s.mu.Unlock()
 	inputSetSuppress(true)
 	cx, cy := s.injector.CursorPos()
-	_, _, vw, vh := s.injector.ScreenBounds()
 	sess.virtX = float64(cx)
 	sess.virtY = float64(cy)
-	entry := wireMsg{T: "enter", Dir: dir, Y: sess.virtY / float64(vh)}
-	first := wireMsg{T: "move", X: sess.virtX / float64(vw), Y: sess.virtY / float64(vh)}
+	sess.lastX, sess.lastY = sess.virtX, sess.virtY
 	select {
-	case sess.sendCh <- entry:
-	default:
-	}
-	select {
-	case sess.sendCh <- first:
+	case sess.sendCh <- wireMsg{T: "enter", Dir: dir}:
 	default:
 	}
 	log.Printf("KVM：开始控制 %q（向%s），Ctrl+Alt+Shift+X 紧急退出", peer.Name, dir)
@@ -351,7 +487,7 @@ func (s *Service) trySwitch(dir string) {
 	go s.masterPinger(sess)
 }
 
-func (s *Service) masterHandshake(conn net.Conn, dir string) (*masterSession, error) {
+func (s *Service) masterHandshake(conn net.Conn) (*masterSession, error) {
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
 	br := bufio.NewReaderSize(conn, 16*1024)
 	bw := bufio.NewWriter(conn)
@@ -477,11 +613,15 @@ func (s *Service) OnMouseMove(dx, dy int) {
 			return
 		}
 		m.lastSent = now
-		_, _, vw, vh := s.injector.ScreenBounds()
-		msg := wireMsg{T: "move", X: m.virtX / float64(vw), Y: m.virtY / float64(vh)}
+		// 发送自上次发送以来的累计位移（未裁剪，副机自行处理边界）
+		ddx := int(math.Round(m.virtX - m.lastX))
+		ddy := int(math.Round(m.virtY - m.lastY))
+		m.lastX += float64(ddx)
+		m.lastY += float64(ddy)
+		msg := wireMsg{T: "move", DX: ddx, DY: ddy}
 		select {
 		case m.sendCh <- msg:
-		default: // 队列满则丢弃移动事件，位置由下一事件校正
+		default: // 队列满则丢弃移动事件，位移由后续事件补足
 		}
 		s.mu.Unlock()
 		return
@@ -491,21 +631,28 @@ func (s *Service) OnMouseMove(dx, dy int) {
 		return
 	}
 
-	// 本地模式：边缘推动检测（原始位移 + 真实光标位置）
+	// 本地模式：暴露边缘推动检测（原始位移 + 真实光标位置）
 	now := time.Now()
-	x, _ := s.injector.CursorPos()
-	vx, _, vw, _ := s.injector.ScreenBounds()
+	x, y := s.injector.CursorPos()
+	leftExp, rightExp := exposedEdges(s.currentMonitors())
 	dir, push := "", 0
-	if x >= vx+vw-2 && dx > 0 {
-		dir, push = "right", dx
-	} else if x <= vx+1 && dx < 0 {
-		dir, push = "left", -dx
+	if dx > 0 {
+		for _, r := range rightExp {
+			if x >= r.X+r.W-1-edgeBand && y >= r.Y && y < r.Y+r.H {
+				dir, push = "right", dx
+				break
+			}
+		}
+	}
+	if dir == "" && dx < 0 {
+		for _, r := range leftExp {
+			if x <= r.X+edgeBand && y >= r.Y && y < r.Y+r.H {
+				dir, push = "left", -dx
+				break
+			}
+		}
 	}
 	if dir == "" {
-		// 离开边缘足够远才清零；停在边缘的静止不重置，由超时规则清理
-		if x > vx+edgeResetPixels && x < vx+vw-edgeResetPixels {
-			s.pushDir, s.pushAccum = "", 0
-		}
 		if s.pushAccum > 0 && now.Sub(s.pushLast) > pushGapReset {
 			s.pushDir, s.pushAccum = "", 0
 		}

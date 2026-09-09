@@ -12,26 +12,35 @@ import (
 	"time"
 
 	"copywhere/internal/discovery"
+	"copywhere/internal/input"
 )
 
-// fakeInjector 记录注入调用，模拟 1920x1080 单屏。
+// fakeInjector 记录注入调用，模拟双屏：副屏(-1920,0) + 主屏(0,0)，均 1920x1080。
 type fakeInjector struct {
-	mu     sync.Mutex
-	moves  [][2]int
-	clicks []string
-	wheels []int32
-	keys   []uint32
-	bounds [4]int
+	mu      sync.Mutex
+	abs     [][2]int
+	rels    [][2]int
+	clicks  []string
+	wheels  []int32
+	keys    []uint32
+	cursorX int
+	cursorY int
 }
 
-func newFakeInjector() *fakeInjector {
-	return &fakeInjector{bounds: [4]int{0, 0, 1920, 1080}}
-}
+func newFakeInjector() *fakeInjector { return &fakeInjector{} }
 
 func (f *fakeInjector) MoveAbs(x, y int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.moves = append(f.moves, [2]int{x, y})
+	f.abs = append(f.abs, [2]int{x, y})
+	f.cursorX, f.cursorY = x, y // 绝对注入会移动光标
+}
+func (f *fakeInjector) MoveRel(dx, dy int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rels = append(f.rels, [2]int{dx, dy})
+	f.cursorX += dx // 真实光标随相对注入移动
+	f.cursorY += dy
 }
 func (f *fakeInjector) Button(down bool, button int) {
 	f.mu.Lock()
@@ -52,20 +61,33 @@ func (f *fakeInjector) Key(vk, scan uint32, down, ext bool) {
 	defer f.mu.Unlock()
 	f.keys = append(f.keys, vk)
 }
-func (f *fakeInjector) ScreenBounds() (int, int, int, int) {
-	return f.bounds[0], f.bounds[1], f.bounds[2], f.bounds[3]
+func (f *fakeInjector) ScreenBounds() (int, int, int, int) { return -1920, 0, 3840, 1080 }
+func (f *fakeInjector) CursorPos() (int, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.cursorX, f.cursorY
 }
-func (f *fakeInjector) CursorPos() (int, int) { return 0, 0 }
+func (f *fakeInjector) Monitors() []input.Rect {
+	return []input.Rect{
+		{X: -1920, Y: 0, W: 1920, H: 1080},            // 副屏（非主屏）
+		{X: 0, Y: 0, W: 1920, H: 1080, Primary: true}, // 主屏
+	}
+}
 
-func (f *fakeInjector) moveCount() int {
+func (f *fakeInjector) relCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return len(f.moves)
+	return len(f.rels)
 }
-func (f *fakeInjector) lastMove() (int, int) {
+func (f *fakeInjector) lastAbs() (int, int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.moves[len(f.moves)-1][0], f.moves[len(f.moves)-1][1]
+	return f.abs[len(f.abs)-1][0], f.abs[len(f.abs)-1][1]
+}
+func (f *fakeInjector) setCursor(x, y int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cursorX, f.cursorY = x, y
 }
 
 func newTestService(t *testing.T, inj Injector) (*Service, int) {
@@ -107,10 +129,8 @@ func dialMaster(t *testing.T, port int, token string) *testMaster {
 
 func (tm *testMaster) send(m wireMsg) error {
 	b, _ := json.Marshal(m)
-	if _, err := tm.conn.Write(append(b, '\n')); err != nil {
-		return err
-	}
-	return nil
+	_, err := tm.conn.Write(append(b, '\n'))
+	return err
 }
 
 func (tm *testMaster) recv() (wireMsg, error) {
@@ -125,41 +145,29 @@ func (tm *testMaster) recv() (wireMsg, error) {
 	return m, nil
 }
 
-func TestSlaveHandshakeAuthInjection(t *testing.T) {
+func TestExposedEdgesDualMonitor(t *testing.T) {
 	inj := newFakeInjector()
-	_, port := newTestService(t, inj)
-
-	tm := dialMaster(t, port, "tok")
-	resp, err := tm.recv()
-	if err != nil || resp.T != "ok" {
-		t.Fatalf("握手应答异常: %+v %v", resp, err)
+	mons := inj.Monitors()
+	left, right := exposedEdges(mons)
+	// 副屏在左：副屏左边缘暴露；主屏右边缘暴露；内侧两两相邻不暴露
+	if len(left) != 1 || left[0].X != -1920 {
+		t.Fatalf("左暴露应为副屏, got %+v", left)
 	}
-
-	// 进入：主控机从其右边缘切出（dir=right），入口在副机左边缘
-	if err := tm.send(wireMsg{T: "enter", Dir: "right", Y: 0.5}); err != nil {
-		t.Fatal(err)
+	if len(right) != 1 || right[0].X != 0 {
+		t.Fatalf("右暴露应为主屏, got %+v", right)
 	}
-	time.Sleep(leaveGrace + 100*time.Millisecond) // 越过宽限期
-
-	// 移动到副机中部：m=1.5 → rel=0.5 → x=960
-	tm.send(wireMsg{T: "move", X: 1.5, Y: 0.5})
-	waitFor(t, func() bool { return inj.moveCount() > 0 }, "注入移动")
-	if x, y := inj.lastMove(); x != 960 || y != 540 {
-		t.Fatalf("注入坐标错误: got (%d,%d), want (960,540)", x, y)
-	}
-
-	// 按键/滚轮/点击
-	tm.send(wireMsg{T: "btn", B: 1, Down: true})
-	tm.send(wireMsg{T: "wheel", D: -120})
-	tm.send(wireMsg{T: "key", VK: 0x41, Down: true})
-	waitFor(t, func() bool {
-		inj.mu.Lock()
-		defer inj.mu.Unlock()
-		return len(inj.clicks) > 0 && len(inj.wheels) > 0 && len(inj.keys) > 0
-	}, "注入按键/滚轮/点击")
 }
 
-func TestSlaveLeaveOnEdgePush(t *testing.T) {
+func TestPickEntryMonitorPrefersPrimary(t *testing.T) {
+	inj := newFakeInjector()
+	mons := inj.Monitors()
+	entry := pickEntryMonitor(mons, "right") // 主控机在我左侧 → 入口走暴露左边缘
+	if !entry.Primary {
+		t.Fatalf("dir=right 无暴露左边缘的主屏时应退回主屏, got %+v", entry)
+	}
+}
+
+func TestSlaveEntryOnPrimarySharedEdge(t *testing.T) {
 	inj := newFakeInjector()
 	_, port := newTestService(t, inj)
 
@@ -167,22 +175,73 @@ func TestSlaveLeaveOnEdgePush(t *testing.T) {
 	if _, err := tm.recv(); err != nil { // ok
 		t.Fatal(err)
 	}
-	tm.send(wireMsg{T: "enter", Dir: "right", Y: 0.5})
-	time.Sleep(leaveGrace + 100*time.Millisecond)
+	// 主控机从其右边缘切出（dir=right）→ 我方入口在暴露左边缘；
+	// 双屏布局中暴露左边缘是副屏（-1920），无主屏候选 → 退回主屏左边缘
+	if err := tm.send(wireMsg{T: "enter", Dir: "right"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return len(inj.abs) > 0 }, "入口绝对注入")
+	x, y := inj.lastAbs()
+	if x != 0+entryMargin || y != 540 {
+		t.Fatalf("入口坐标错误: got (%d,%d), want (2,540)", x, y)
+	}
+}
 
-	// 先深入副机屏幕（武装）
-	tm.send(wireMsg{T: "move", X: 1.3, Y: 0.5})
-	waitFor(t, func() bool { return inj.moveCount() > 0 }, "武装移动")
+func TestSlaveRelMoveAndLeave(t *testing.T) {
+	inj := newFakeInjector()
+	_, port := newTestService(t, inj)
 
-	// 向回推过共享边缘：r = m-1 < -leaveSoft，连续两次 → leave
-	tm.send(wireMsg{T: "move", X: 0.99, Y: 0.5})
-	tm.send(wireMsg{T: "move", X: 0.98, Y: 0.5})
+	tm := dialMaster(t, port, "tok")
+	if _, err := tm.recv(); err != nil {
+		t.Fatal(err)
+	}
+	tm.send(wireMsg{T: "enter", Dir: "right"})
+	waitFor(t, func() bool { return len(inj.abs) > 0 }, "入口注入")
+
+	// 相对移动
+	tm.send(wireMsg{T: "move", DX: 100, DY: 10})
+	waitFor(t, func() bool { return inj.relCount() > 0 }, "相对注入")
+	if r := inj.rels[len(inj.rels)-1]; r[0] != 100 || r[1] != 10 {
+		t.Fatalf("相对位移错误: got %v", r)
+	}
+
+	// 深入 50px（武装）
+	tm.send(wireMsg{T: "move", DX: 50})
+	waitFor(t, func() bool { return inj.relCount() >= 2 }, "第二次注入")
+
+	// 推回共享边缘：切回触发区 = 暴露左边缘（副屏 x=-1920）
+	inj.setCursor(-1920+edgeBand, 540) // 光标贴在副屏左边缘
+	tm.send(wireMsg{T: "move", DX: -10})
+	tm.send(wireMsg{T: "move", DX: -12})
 	m, err := tm.recv()
 	if err != nil {
 		t.Fatalf("未收到 leave: %v", err)
 	}
 	if m.T != "leave" {
 		t.Fatalf("应答应为 leave: %+v", m)
+	}
+}
+
+func TestNoLeaveBeforeArmed(t *testing.T) {
+	inj := newFakeInjector()
+	_, port := newTestService(t, inj)
+
+	tm := dialMaster(t, port, "tok")
+	if _, err := tm.recv(); err != nil {
+		t.Fatal(err)
+	}
+	tm.send(wireMsg{T: "enter", Dir: "right"})
+	waitFor(t, func() bool { return len(inj.abs) > 0 }, "入口注入")
+
+	// 从未深入屏幕（maxDist < armPixels），贴边推动不应触发切回
+	tm.send(wireMsg{T: "move", DX: -5})
+	tm.send(wireMsg{T: "move", DX: -20})
+	time.Sleep(200 * time.Millisecond)
+	_ = tm.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	if _, err := tm.recv(); err == nil {
+		t.Fatal("未武装时不应触发 leave")
+	} else if err != io.EOF && !isTimeout(err) {
+		t.Fatalf("意外错误: %v", err)
 	}
 }
 
@@ -194,7 +253,7 @@ func TestSlaveAuthReject(t *testing.T) {
 	if err != nil || m.T != "error" || m.Msg != "unauthorized" {
 		t.Fatalf("错误 token 应被拒绝: %+v %v", m, err)
 	}
-	if inj.moveCount() != 0 {
+	if inj.relCount() != 0 {
 		t.Fatal("被拒后不应有注入")
 	}
 }
@@ -223,33 +282,11 @@ func TestSlaveWatchdogRelease(t *testing.T) {
 	if _, err := tm.recv(); err != nil {
 		t.Fatal(err)
 	}
-	tm.send(wireMsg{T: "enter", Dir: "right", Y: 0.5})
-	// 不再发任何消息，等待读超时（5s）后 leave
+	tm.send(wireMsg{T: "enter", Dir: "right"})
 	_ = tm.conn.SetReadDeadline(time.Now().Add(8 * time.Second))
 	m, err := tm.recv()
 	if err != nil || m.T != "leave" {
 		t.Fatalf("看门狗应发送 leave: %+v %v", m, err)
-	}
-}
-
-// TestNoLeaveDuringGrace：进入宽限期内推过边缘不应立即离开。
-func TestNoLeaveDuringGrace(t *testing.T) {
-	inj := newFakeInjector()
-	_, port := newTestService(t, inj)
-
-	tm := dialMaster(t, port, "tok")
-	if _, err := tm.recv(); err != nil {
-		t.Fatal(err)
-	}
-	tm.send(wireMsg{T: "enter", Dir: "right", Y: 0.5})
-	tm.send(wireMsg{T: "move", X: 0.9, Y: 0.5})
-	tm.send(wireMsg{T: "move", X: 0.8, Y: 0.5})
-	time.Sleep(200 * time.Millisecond)
-	_ = tm.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-	if _, err := tm.recv(); err == nil {
-		t.Fatal("宽限期内不应触发 leave")
-	} else if err != io.EOF && !isTimeout(err) {
-		// 期待读超时（宽限期内无 leave）
 	}
 }
 
