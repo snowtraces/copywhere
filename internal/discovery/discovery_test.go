@@ -100,6 +100,30 @@ func TestMultiIPDedupAndPreference(t *testing.T) {
 }
 
 // 同一指纹的节点会话变化（重启）时应触发回调。
+// 双网段场景：本机同时在 ZeroTier 和局域网，对端两个地址都"同网段"，
+// 但 192.168（真实局域网）必须恒优先于 10.*（虚拟网段）。
+func TestPreferredLANOverVirtualSubnet(t *testing.T) {
+	store := NewStore("self")
+	_, ztNet, _ := net.ParseCIDR("10.147.17.0/24")
+	store.SetLocalSubnets([]*net.IPNet{ztNet})
+
+	store.Upsert("peer-1", "PC", "10.147.17.171", 47831, "s1")
+	store.Upsert("peer-1", "PC", "192.168.0.93", 47831, "s1")
+	// 让 ZeroTier 地址"更新"，验证 192.168 仍然优先
+	store.Upsert("peer-1", "PC", "10.147.17.171", 47831, "s1")
+
+	peers := store.Alive(time.Minute)
+	if len(peers) != 1 {
+		t.Fatalf("应合并为一个节点, got %d", len(peers))
+	}
+	if peers[0].Primary() != "192.168.0.93" {
+		t.Fatalf("应恒优先 192.168 网段, got %v", peers[0].IPs)
+	}
+	if peers[0].IPs[1] != "10.147.17.171" {
+		t.Fatalf("备选应为 ZeroTier 地址, got %v", peers[0].IPs)
+	}
+}
+
 func TestRestartCallbackFires(t *testing.T) {
 	store := NewStore("self")
 	fired := make(chan string, 1)

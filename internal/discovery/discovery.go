@@ -21,6 +21,7 @@ import (
 	"log"
 	"net"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -131,9 +132,9 @@ func (s *Store) Upsert(id, name, ip string, port int, session string) {
 	s.mu.Unlock()
 }
 
-type ipAt struct {
-	ip string
-	t  time.Time
+// isPreferredLAN 是否为真实局域网网段（192.168.*），恒优先于虚拟/中继网段（如 ZeroTier 的 10.*）。
+func isPreferredLAN(ip string) bool {
+	return strings.HasPrefix(ip, "192.168.")
 }
 
 // Alive 返回 TTL 内仍然在线的节点，按名称排序。
@@ -166,25 +167,33 @@ func (s *Store) Alive(ttl time.Duration) []Peer {
 			continue
 		}
 
-		// 排序：同网段直连地址优先，各组内按最近活跃倒序
-		var lan, other []ipAt
+		// 排序：按优先级评分降序，同分按最近活跃倒序。
+		// 评分：192.168.* = 3（真实局域网，恒优先于虚拟网段），
+		//       与本机同网段 = 2，其余 = 0。
+		type scoredIP struct {
+			ip    string
+			t     time.Time
+			score int
+		}
+		var list []scoredIP
 		for ip, t := range e.ips {
+			score := 0
 			if s.inLocalSubnet(ip) {
-				lan = append(lan, ipAt{ip, t})
-			} else {
-				other = append(other, ipAt{ip, t})
+				score = 2
 			}
+			if isPreferredLAN(ip) {
+				score = 3
+			}
+			list = append(list, scoredIP{ip, t, score})
 		}
-		byRecent := func(list []ipAt) {
-			sort.Slice(list, func(i, j int) bool { return list[i].t.After(list[j].t) })
-		}
-		byRecent(lan)
-		byRecent(other)
-		ips := make([]string, 0, len(lan)+len(other))
-		for _, x := range lan {
-			ips = append(ips, x.ip)
-		}
-		for _, x := range other {
+		sort.Slice(list, func(i, j int) bool {
+			if list[i].score != list[j].score {
+				return list[i].score > list[j].score
+			}
+			return list[i].t.After(list[j].t)
+		})
+		ips := make([]string, 0, len(list))
+		for _, x := range list {
 			ips = append(ips, x.ip)
 		}
 
