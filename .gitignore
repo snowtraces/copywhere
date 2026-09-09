@@ -1,0 +1,10 @@
+# 构建产物
+copywhere.exe
+*.exe~
+
+# 本地测试与临时文件
+smoke/
+*.log
+
+# 运行时目录（不应出现在仓库内）
+.copywhere/
