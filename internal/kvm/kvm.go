@@ -146,6 +146,7 @@ type Service struct {
 	pushLast         time.Time
 	modsDown         map[uint32]bool // 控制期间跟踪的修饰键（归一化后的）状态
 	unconfigLogUntil time.Time       // 未配置邻居提示的节流
+	firstMoveLogged  bool            // 首次收到鼠标原始输入时打一条连通日志
 
 	// 显示器布局缓存：由后台协程定期刷新。钩子线程只读缓存，
 	// 绝不能在持有 s.mu 时做可能阻塞的事情（曾因此死锁拖垮全系统鼠标）。
@@ -637,6 +638,10 @@ func (s *Service) setCooldown(d time.Duration) {
 func (s *Service) OnMouseMove(dx, dy int) {
 	defer func() { _ = recover() }() // 钩子线程绝不能 panic（会带崩整个进程）
 	s.mu.Lock()
+	if !s.firstMoveLogged {
+		s.firstMoveLogged = true
+		log.Printf("KVM：鼠标原始输入链路已连通")
+	}
 	if m := s.master; m != nil {
 		m.virtX += float64(dx)
 		m.virtY += float64(dy)

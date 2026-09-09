@@ -453,11 +453,8 @@ func handleRawInput(lParam uintptr) {
 	if h.dwType != 0 { // 只处理鼠标
 		return
 	}
-	if h.hDevice == 0 {
-		// SendInput 注入的事件没有设备句柄——它们不是真人的物理输入，
-		// 必须排除，否则远端控制/本机注入的位移会被误当成边缘推动
-		return
-	}
+	// 注意：不要按 hDevice==0 过滤注入事件——部分物理鼠标（蓝牙/合成设备）
+	// 的 Raw Input 同样没有设备句柄，过滤会导致边缘检测完全失效。
 	m := (*rawmouse)(unsafe.Pointer(&buf[unsafe.Sizeof(rawinputHeader{})]))
 	if m.usFlags&1 != 0 { // MOUSE_MOVE_ABSOLUTE，忽略
 		return
