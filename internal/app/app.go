@@ -23,6 +23,8 @@ import (
 	"copywhere/internal/clip"
 	"copywhere/internal/config"
 	"copywhere/internal/discovery"
+	"copywhere/internal/input"
+	"copywhere/internal/kvm"
 	"copywhere/internal/monitor"
 	"copywhere/internal/transport"
 	"copywhere/internal/ui"
@@ -203,6 +205,25 @@ func Run(ctx context.Context, cfg *config.Config, opts Options) error {
 	go a.flushLoop(runCtx)
 
 	printBanner(cfg)
+	if cfg.KVMOn() {
+		ks := kvm.NewService(
+			kvm.Config{Port: cfg.KVMPort, Left: cfg.KVMLeft, Right: cfg.KVMRight},
+			cfg.NodeName, cfg.Token, a.store, a.ttl(), input.DefaultInjector{})
+		if err := ks.Start(runCtx); err != nil {
+			log.Printf("KVM 服务启动失败: %v", err)
+		} else {
+			if err := input.Start(input.Callbacks{
+				OnMouseMove:   ks.OnMouseMove,
+				OnMouseButton: ks.OnMouseButton,
+				OnWheel:       ks.OnWheel,
+				OnKey:         ks.OnKey,
+			}); err != nil {
+				log.Printf("输入钩子启动失败: %v", err)
+			}
+			log.Printf("KVM 跨屏已启用：左邻 %q，右邻 %q，端口 %d/tcp（Ctrl+Alt+Shift+X 紧急退出）",
+				cfg.KVMLeft, cfg.KVMRight, cfg.KVMPort)
+		}
+	}
 	if opts.Interactive {
 		go monitor.Run(runCtx, monitor.Guard{OwnSeq: &a.ownSeq, LastReceivedAt: &a.lastRecv},
 			cfg.Threshold(), cfg.TextSync, a)

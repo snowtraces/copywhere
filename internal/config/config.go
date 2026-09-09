@@ -21,6 +21,10 @@ type Config struct {
 	TextSync      bool   `json:"text_sync"`             // 同步剪贴板文本
 	AnnounceSec   int    `json:"announce_interval_sec"` // 广播间隔（秒）
 	PeerTTLSec    int    `json:"peer_ttl_sec"`          // 节点存活时长（秒）
+	KVMEnabled    *bool  `json:"kvm_enabled,omitempty"` // 鼠标键盘跨屏开关（缺省开启）
+	KVMPort       int    `json:"kvm_port"`              // KVM 监听端口
+	KVMLeft       string `json:"kvm_left"`              // 左边缘邻居节点名（光标推向左边缘时控制它）
+	KVMRight      string `json:"kvm_right"`             // 右边缘邻居节点名
 }
 
 // Default 返回默认配置。
@@ -48,6 +52,7 @@ func Default() (*Config, error) {
 		TextSync:      true,
 		AnnounceSec:   2,
 		PeerTTLSec:    12,
+		KVMPort:       47832,
 	}, nil
 }
 
@@ -109,7 +114,15 @@ func Load(path string) (*Config, error) {
 	if cfg.PeerTTLSec <= 0 {
 		cfg.PeerTTLSec = 12
 	}
+	if cfg.KVMPort <= 0 {
+		cfg.KVMPort = 47832
+	}
 	return &cfg, nil
+}
+
+// KVMOn 返回 KVM 是否启用（字段缺省即启用）。
+func (c *Config) KVMOn() bool {
+	return c.KVMEnabled == nil || *c.KVMEnabled
 }
 
 // Save 将配置写入指定路径（0600 权限）。

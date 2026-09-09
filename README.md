@@ -22,6 +22,8 @@
   传输失败时对端日志会记录具体原因
 - **token 不一致不重试**：对端拒绝（token 不同）后提示一次即暂停向该节点发送，
   不会高频重试；对端修正 token 并重启后自动恢复
+- **鼠标键盘跨屏（实验性）**：光标推向屏幕边缘即可控制相邻机器，键盘/滚轮同步；
+  复用同一套发现与鉴权，`Ctrl+Alt+Shift+X` 紧急退出
 - **防回环**：剪贴板序号 + 接收冷却期双重防护，不会自己同步自己
 - **临时不可达重试**：对端短暂离线时，内容暂存 60 秒自动重试
 - **鉴权**：所有节点需配置相同 token，token 不一致无法传输
@@ -114,6 +116,33 @@ copywhere version    # 查看版本号
 | `text_sync` | true | 同步剪贴板文本 |
 | `announce_interval_sec` | 2 | 广播间隔 |
 | `peer_ttl_sec` | 12 | 节点存活判定时长（约为广播间隔的 5~6 倍） |
+| `kvm_enabled` | true | 鼠标键盘跨屏开关 |
+| `kvm_port` | 47832 | KVM 监听端口 |
+| `kvm_left` | 空 | 左边缘邻居的**节点名**（`node_name`，与对端配置互为镜像） |
+| `kvm_right` | 空 | 右边缘邻居的节点名 |
+
+## 鼠标键盘跨屏（KVM，实验性）
+
+在两台互为邻居的机器上分别配置（A 在左、B 在右）：
+
+```jsonc
+// A（左边机器）
+{ "kvm_right": "B的node_name" }
+// B（右边机器）
+{ "kvm_left": "A的node_name" }
+```
+
+重启 `run` 后即可使用：
+
+- 在 A 上把光标推向**右边缘并继续推**（累计约 24px）→ 控制权切到 B，键盘/滚轮同步转发
+- 在 B 上把光标推回**左边缘并继续推** → 控制权交还 A
+- 紧急退出：`Ctrl+Alt+Shift+X`
+- 主控机失联 5 秒，副机自动释放控制
+
+当前限制（MVP）：每台机器按单屏处理（多屏以其虚拟桌面整体为一块）；对 UAC/锁屏等
+安全桌面无法注入输入；按键按 VK 码转发，中文输入依赖对端输入法（跨机传文字建议
+直接用剪贴板同步）；跨 ZeroTier 中继时延迟取决于链路质量。协议细节见
+[docs/protocol.md](docs/protocol.md)。
 
 ## 节点指纹与多网卡地址
 
@@ -143,6 +172,8 @@ internal/config/      配置
 internal/discovery/   UDP 广播发现与节点表（指纹、会话、多 IP 合并与优选）
 internal/monitor/     剪贴板轮询监控与防回环
 internal/transport/   TCP 传输协议（服务端/客户端）
+internal/kvm/         鼠标键盘跨屏（软 KVM）
+internal/input/       全局输入捕获（钩子+Raw Input）与 SendInput 注入
 internal/ui/          三页终端界面（日志/在线节点/文件记录）
 internal/bytesize/    字节数格式化
 docs/protocol.md      协议与设计说明
