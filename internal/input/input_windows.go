@@ -158,26 +158,45 @@ func InjectMoveRel(dx, dy int) {
 	sendMouse(mouseEventfMove, int32(dx), int32(dy), 0)
 }
 
+// 枚举回调必须进程内只创建一次：windows.NewCallback 的回调表是进程级配额
+// （只增不减），每次调用都新建会触发
+// "fatal error: too many callback functions"。
+var (
+	enumMu     sync.Mutex
+	enumOut    []Rect
+	enumCbOnce sync.Once
+	enumCb     uintptr
+)
+
+func enumMonitorsProc(hMon, hdc, lprect, lparam uintptr) uintptr {
+	var mi monitorinfo
+	mi.cbSize = uint32(unsafe.Sizeof(mi))
+	if r, _, _ := procGetMonitorInfoW.Call(hMon, uintptr(unsafe.Pointer(&mi))); r != 0 {
+		enumMu.Lock()
+		enumOut = append(enumOut, Rect{
+			X: int(mi.rcMonitor.left), Y: int(mi.rcMonitor.top),
+			W:       int(mi.rcMonitor.right - mi.rcMonitor.left),
+			H:       int(mi.rcMonitor.bottom - mi.rcMonitor.top),
+			Primary: mi.dwFlags&1 != 0, // MONITORINFOF_PRIMARY
+		})
+		enumMu.Unlock()
+	}
+	return 1 // 继续枚举
+}
+
 // Monitors 枚举所有显示器的虚拟桌面矩形。
 func Monitors() []Rect {
-	var out []Rect
-	var mu sync.Mutex
-	cb := windows.NewCallback(func(hMon, hdc, lprect, lparam uintptr) uintptr {
-		var mi monitorinfo
-		mi.cbSize = uint32(unsafe.Sizeof(mi))
-		if r, _, _ := procGetMonitorInfoW.Call(hMon, uintptr(unsafe.Pointer(&mi))); r != 0 {
-			mu.Lock()
-			out = append(out, Rect{
-				X: int(mi.rcMonitor.left), Y: int(mi.rcMonitor.top),
-				W:       int(mi.rcMonitor.right - mi.rcMonitor.left),
-				H:       int(mi.rcMonitor.bottom - mi.rcMonitor.top),
-				Primary: mi.dwFlags&1 != 0, // MONITORINFOF_PRIMARY
-			})
-			mu.Unlock()
-		}
-		return 1 // 继续枚举
+	enumCbOnce.Do(func() {
+		enumCb = windows.NewCallback(enumMonitorsProc)
 	})
-	procEnumDisplayMonitors.Call(0, 0, cb, 0)
+	enumMu.Lock()
+	enumOut = nil
+	enumMu.Unlock()
+	procEnumDisplayMonitors.Call(0, 0, enumCb, 0)
+	enumMu.Lock()
+	out := enumOut
+	enumOut = nil
+	enumMu.Unlock()
 	return out
 }
 
