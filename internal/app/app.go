@@ -207,7 +207,12 @@ func Run(ctx context.Context, cfg *config.Config, opts Options) error {
 	printBanner(cfg)
 	if cfg.KVMOn() {
 		ks := kvm.NewService(
-			kvm.Config{Port: cfg.KVMPort, Left: cfg.KVMLeft, Right: cfg.KVMRight},
+			kvm.Config{
+				Port:         cfg.KVMPort,
+				Left:         cfg.KVMLeft,
+				Right:        cfg.KVMRight,
+				EntryMonitor: cfg.KVMEntryMonitorIdx(),
+			},
 			cfg.NodeName, cfg.Token, a.store, a.ttl(), input.DefaultInjector{})
 		if err := ks.Start(runCtx); err != nil {
 			log.Printf("KVM 服务启动失败: %v", err)

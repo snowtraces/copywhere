@@ -18,6 +18,7 @@ import (
 	"log"
 	"math"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -42,9 +43,10 @@ const (
 
 // Config 是 KVM 的配置（来自 config.json）。
 type Config struct {
-	Port  int    // 监听端口（默认 47832）
-	Left  string // 光标从本机暴露的左边缘离开时控制的节点名
-	Right string // 光标从本机暴露的右边缘离开时控制的节点名
+	Port         int    // 监听端口（默认 47832）
+	Left         string // 光标从本机暴露的左边缘离开时控制的节点名
+	Right        string // 光标从本机暴露的右边缘离开时控制的节点名
+	EntryMonitor int    // 被控入口显示器索引（-1=主显示器，默认）
 }
 
 // Injector 是输入注入接口（生产环境为 input.DefaultInjector，测试用假实现）。
@@ -68,20 +70,21 @@ type Callbacks interface {
 }
 
 type wireMsg struct {
-	T     string `json:"t"`
-	Token string `json:"token,omitempty"`
-	Name  string `json:"name,omitempty"`
-	Dir   string `json:"dir,omitempty"`
-	DX    int    `json:"dx,omitempty"`
-	DY    int    `json:"dy,omitempty"`
-	B     int    `json:"b,omitempty"`
-	D     int    `json:"d,omitempty"`
-	Down  bool   `json:"down,omitempty"`
-	H     bool   `json:"h,omitempty"`
-	VK    uint32 `json:"vk,omitempty"`
-	Scan  uint32 `json:"scan,omitempty"`
-	Ext   bool   `json:"ext,omitempty"`
-	Msg   string `json:"msg,omitempty"`
+	T     string  `json:"t"`
+	Token string  `json:"token,omitempty"`
+	Name  string  `json:"name,omitempty"`
+	Dir   string  `json:"dir,omitempty"`
+	Y     float64 `json:"y,omitempty"` // 主控机光标的垂直比例（用于入口位置）
+	DX    int     `json:"dx,omitempty"`
+	DY    int     `json:"dy,omitempty"`
+	B     int     `json:"b,omitempty"`
+	D     int     `json:"d,omitempty"`
+	Down  bool    `json:"down,omitempty"`
+	H     bool    `json:"h,omitempty"`
+	VK    uint32  `json:"vk,omitempty"`
+	Scan  uint32  `json:"scan,omitempty"`
+	Ext   bool    `json:"ext,omitempty"`
+	Msg   string  `json:"msg,omitempty"`
 }
 
 type masterSession struct {
@@ -174,6 +177,17 @@ func (s *Service) Start(ctx context.Context) error {
 	}
 	log.Printf("KVM 被控端已监听 :%d/tcp", s.cfg.Port)
 	s.refreshMonitors()
+	if mons := s.currentMonitors(); len(mons) > 0 {
+		parts := make([]string, len(mons))
+		for i, m := range mons {
+			p := ""
+			if m.Primary {
+				p = " 主屏"
+			}
+			parts[i] = fmt.Sprintf("(%d,%d %dx%d%s)", m.X, m.Y, m.W, m.H, p)
+		}
+		log.Printf("KVM 显示器布局: %s", strings.Join(parts, " "))
+	}
 	go func() {
 		t := time.NewTicker(3 * time.Second)
 		defer t.Stop()
@@ -268,9 +282,13 @@ func abs(v int) int {
 	return v
 }
 
-// pickEntryMonitor 返回被控入口显示器：恒为主显示器（primary）——
-// 用户主工作屏，位置可预期；不做"暴露候选"回退（那会把入口送到副屏）。
-func pickEntryMonitor(mons []input.Rect) input.Rect {
+// pickEntryMonitor 返回被控入口显示器：
+// entryIdx >= 0 时使用配置指定的显示器（Monitors() 列表下标）；
+// 否则恒为主显示器（primary）——用户主工作屏，位置可预期。
+func pickEntryMonitor(mons []input.Rect, entryIdx int) input.Rect {
+	if entryIdx >= 0 && entryIdx < len(mons) {
+		return mons[entryIdx]
+	}
 	for _, m := range mons {
 		if m.Primary {
 			return m
@@ -347,18 +365,19 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 			s.mu.Unlock()
 
 			mons := s.injector.Monitors()
-			sess.entry = pickEntryMonitor(mons)
+			sess.entry = pickEntryMonitor(mons, s.cfg.EntryMonitor)
 			sess.leaveEdges = leaveEdgesFor(mons, m.Dir)
-			// 入口：入口显示器的共享边缘、垂直居中
+			// 入口：入口显示器的共享边缘；垂直位置跟随主控机光标离开时的高度
 			ex := sess.entry.X + entryMargin
 			if m.Dir == "left" {
 				ex = sess.entry.X + sess.entry.W - 1 - entryMargin
 			}
+			ey := sess.entry.Y + int(clamp01(m.Y)*float64(sess.entry.H))
 			sess.entryX = ex
-			s.injector.MoveAbs(ex, sess.entry.Y+sess.entry.H/2)
+			s.injector.MoveAbs(ex, ey)
 			log.Printf("KVM：入口显示器 (%d,%d %dx%d 主屏=%v)，光标注入到 (%d,%d)",
 				sess.entry.X, sess.entry.Y, sess.entry.W, sess.entry.H,
-				sess.entry.Primary, ex, sess.entry.Y+sess.entry.H/2)
+				sess.entry.Primary, ex, ey)
 		case "move":
 			if sess.dir == "" {
 				continue
@@ -426,9 +445,6 @@ func (s *Service) detectLeave(sess *slaveSession, dx int) bool {
 	if sess.dir == "left" && dx > 0 {
 		outward = dx
 	}
-	if outward < 1 {
-		outward = 1 // 每次推动事件至少计 1px
-	}
 	sess.pushAccum += outward
 	sess.pushLast = now
 	return sess.pushAccum >= leavePushPixels
@@ -486,8 +502,14 @@ func (s *Service) trySwitch(dir string) {
 	sess.virtX = float64(cx)
 	sess.virtY = float64(cy)
 	sess.lastX, sess.lastY = sess.virtX, sess.virtY
+	// 入口垂直比例：主控机光标在自身虚拟桌面中的高度，副机按此映射
+	_, _, _, mvh := s.injector.ScreenBounds()
+	ny := 0.5
+	if mvh > 0 {
+		ny = clamp01(sess.virtY / float64(mvh))
+	}
 	select {
-	case sess.sendCh <- wireMsg{T: "enter", Dir: dir}:
+	case sess.sendCh <- wireMsg{T: "enter", Dir: dir, Y: ny}:
 	default:
 	}
 	log.Printf("KVM：开始控制 %q（向%s），Ctrl+Alt+Shift+X 紧急退出", peer.Name, dir)
@@ -588,7 +610,7 @@ func (s *Service) endMasterSession(sess *masterSession, sendLeave bool, reason s
 			s.master = nil
 		}
 		s.mu.Unlock()
-		s.setCooldown(time.Second)
+		s.setCooldown(1500 * time.Millisecond)
 		log.Printf("KVM：控制结束（%s）", reason)
 	})
 }
@@ -664,6 +686,12 @@ func (s *Service) OnMouseMove(dx, dy int) {
 		}
 	}
 	if dir == "" {
+		// 反向移动立即清零累积（防误触）；离开边缘由超时规则清理
+		if s.pushAccum > 0 {
+			if (s.pushDir == "right" && dx < 0) || (s.pushDir == "left" && dx > 0) {
+				s.pushDir, s.pushAccum = "", 0
+			}
+		}
 		if s.pushAccum > 0 && now.Sub(s.pushLast) > pushGapReset {
 			s.pushDir, s.pushAccum = "", 0
 		}
@@ -674,10 +702,6 @@ func (s *Service) OnMouseMove(dx, dy int) {
 	if dir != s.pushDir {
 		s.pushDir = dir
 		s.pushAccum = 0
-	}
-	// 每次推动事件至少计 1px：低速微动也能累积，避免"推了没反应"
-	if push < 1 {
-		push = 1
 	}
 	s.pushAccum += push
 	s.pushLast = now

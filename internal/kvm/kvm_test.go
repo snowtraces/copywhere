@@ -99,7 +99,7 @@ func newTestService(t *testing.T, inj Injector) (*Service, int) {
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
 	store := discovery.NewStore("self")
-	svc := NewService(Config{Port: port}, "SLAVE", "tok", store, 12*time.Second, inj)
+	svc := NewService(Config{Port: port, EntryMonitor: -1}, "SLAVE", "tok", store, 12*time.Second, inj)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	if err := svc.Start(ctx); err != nil {
@@ -158,13 +158,20 @@ func TestExposedEdgesDualMonitor(t *testing.T) {
 	}
 }
 
-// 回归：入口显示器恒为主屏，即使副屏占据了暴露的共享边缘侧。
-func TestPickEntryMonitorAlwaysPrimary(t *testing.T) {
+// 回归：入口显示器默认恒为主屏，即使副屏占据了暴露的共享边缘侧；
+// 显式配置 kvm_entry_monitor 时使用指定下标。
+func TestPickEntryMonitor(t *testing.T) {
 	inj := newFakeInjector()
 	mons := inj.Monitors() // 副屏(-1920)在主屏左侧，暴露左边缘只有副屏
-	entry := pickEntryMonitor(mons)
+
+	entry := pickEntryMonitor(mons, -1)
 	if !entry.Primary || entry.X != 0 {
-		t.Fatalf("入口应恒为主屏, got %+v", entry)
+		t.Fatalf("默认入口应恒为主屏, got %+v", entry)
+	}
+
+	entry = pickEntryMonitor(mons, 0) // 显式指定第 0 块（副屏）
+	if entry.X != -1920 {
+		t.Fatalf("显式指定下标应返回对应显示器, got %+v", entry)
 	}
 }
 
@@ -176,9 +183,9 @@ func TestSlaveEntryOnPrimarySharedEdge(t *testing.T) {
 	if _, err := tm.recv(); err != nil { // ok
 		t.Fatal(err)
 	}
-	// 主控机从其右边缘切出（dir=right）→ 我方入口在暴露左边缘；
-	// 双屏布局中暴露左边缘是副屏（-1920），无主屏候选 → 退回主屏左边缘
-	if err := tm.send(wireMsg{T: "enter", Dir: "right"}); err != nil {
+	// 主控机从其右边缘切出（dir=right）→ 我方入口在其主显示器左边缘；
+	// 垂直位置跟随主控机光标高度比例（0.5 → 居中）
+	if err := tm.send(wireMsg{T: "enter", Dir: "right", Y: 0.5}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, func() bool { return len(inj.abs) > 0 }, "入口绝对注入")

@@ -11,20 +11,29 @@ import (
 
 // Config 是 copywhere 的持久化配置。
 type Config struct {
-	NodeName      string `json:"node_name"`             // 本节点显示名，默认主机名
-	Token         string `json:"token"`                 // 传输鉴权令牌，所有节点必须一致
-	DiscoveryPort int    `json:"discovery_port"`        // UDP 发现端口
-	TransferPort  int    `json:"transfer_port"`         // TCP 传输端口
-	MaxAutoCopyMB int64  `json:"max_auto_copy_mb"`      // 剪贴板自动同步的容量阈值（MB），0 表示不限制
-	ReceiveDir    string `json:"receive_dir"`           // 接收文件保存目录
-	AutoPaste     bool   `json:"auto_paste"`            // 收到文件后自动写入本机剪贴板
-	TextSync      bool   `json:"text_sync"`             // 同步剪贴板文本
-	AnnounceSec   int    `json:"announce_interval_sec"` // 广播间隔（秒）
-	PeerTTLSec    int    `json:"peer_ttl_sec"`          // 节点存活时长（秒）
-	KVMEnabled    *bool  `json:"kvm_enabled,omitempty"` // 鼠标键盘跨屏开关（缺省开启）
-	KVMPort       int    `json:"kvm_port"`              // KVM 监听端口
-	KVMLeft       string `json:"kvm_left"`              // 左边缘邻居节点名（光标推向左边缘时控制它）
-	KVMRight      string `json:"kvm_right"`             // 右边缘邻居节点名
+	NodeName      string `json:"node_name"`                   // 本节点显示名，默认主机名
+	Token         string `json:"token"`                       // 传输鉴权令牌，所有节点必须一致
+	DiscoveryPort int    `json:"discovery_port"`              // UDP 发现端口
+	TransferPort  int    `json:"transfer_port"`               // TCP 传输端口
+	MaxAutoCopyMB int64  `json:"max_auto_copy_mb"`            // 剪贴板自动同步的容量阈值（MB），0 表示不限制
+	ReceiveDir    string `json:"receive_dir"`                 // 接收文件保存目录
+	AutoPaste     bool   `json:"auto_paste"`                  // 收到文件后自动写入本机剪贴板
+	TextSync      bool   `json:"text_sync"`                   // 同步剪贴板文本
+	AnnounceSec   int    `json:"announce_interval_sec"`       // 广播间隔（秒）
+	PeerTTLSec    int    `json:"peer_ttl_sec"`                // 节点存活时长（秒）
+	KVMEnabled    *bool  `json:"kvm_enabled,omitempty"`       // 鼠标键盘跨屏开关（缺省开启）
+	KVMPort       int    `json:"kvm_port"`                    // KVM 监听端口
+	KVMLeft       string `json:"kvm_left"`                    // 左边缘邻居节点名（光标推向左边缘时控制它）
+	KVMRight      string `json:"kvm_right"`                   // 右边缘邻居节点名
+	KVMEntryMon   *int   `json:"kvm_entry_monitor,omitempty"` // 被控入口显示器下标（缺省 -1=主显示器）
+}
+
+// KVMEntryMonitorIdx 返回被控入口显示器下标（未配置 → -1 = 主显示器）。
+func (c *Config) KVMEntryMonitorIdx() int {
+	if c.KVMEntryMon == nil {
+		return -1
+	}
+	return *c.KVMEntryMon
 }
 
 // Default 返回默认配置。
