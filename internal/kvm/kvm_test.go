@@ -158,12 +158,13 @@ func TestExposedEdgesDualMonitor(t *testing.T) {
 	}
 }
 
-func TestPickEntryMonitorPrefersPrimary(t *testing.T) {
+// 回归：入口显示器恒为主屏，即使副屏占据了暴露的共享边缘侧。
+func TestPickEntryMonitorAlwaysPrimary(t *testing.T) {
 	inj := newFakeInjector()
-	mons := inj.Monitors()
-	entry := pickEntryMonitor(mons, "right") // 主控机在我左侧 → 入口走暴露左边缘
-	if !entry.Primary {
-		t.Fatalf("dir=right 无暴露左边缘的主屏时应退回主屏, got %+v", entry)
+	mons := inj.Monitors() // 副屏(-1920)在主屏左侧，暴露左边缘只有副屏
+	entry := pickEntryMonitor(mons)
+	if !entry.Primary || entry.X != 0 {
+		t.Fatalf("入口应恒为主屏, got %+v", entry)
 	}
 }
 

@@ -186,8 +186,11 @@ func (s *Service) acceptLoop(ctx context.Context, ln net.Listener) {
 			if ctx.Err() != nil {
 				return
 			}
-			log.Printf("KVM accept 失败: %v", err)
-			return
+			// 瞬时错误（如对端在 accept 前重置连接）绝不能终止监听，
+			// 否则监听 socket 残留、连接能建立却无人应答（表现为握手超时）
+			log.Printf("KVM accept 暂时失败: %v", err)
+			time.Sleep(100 * time.Millisecond)
+			continue
 		}
 		go s.handleSlaveConn(conn)
 	}
@@ -250,48 +253,18 @@ func abs(v int) int {
 	return v
 }
 
-// pickEntryMonitor 选择被控入口显示器：主控方向上暴露边缘的显示器优先，
-// 其中主显示器最优先；无暴露候选时退回主显示器。
-func pickEntryMonitor(mons []input.Rect, dir string) input.Rect {
-	leftExp, rightExp := exposedEdges(mons)
-	candidates := rightExp
-	if dir == "left" {
-		candidates = leftExp
-	}
-	primary := input.Rect{}
-	hasPrimary := false
+// pickEntryMonitor 返回被控入口显示器：恒为主显示器（primary）——
+// 用户主工作屏，位置可预期；不做"暴露候选"回退（那会把入口送到副屏）。
+func pickEntryMonitor(mons []input.Rect) input.Rect {
 	for _, m := range mons {
 		if m.Primary {
-			primary = m
-			hasPrimary = true
-			break
-		}
-	}
-	for _, m := range candidates {
-		if hasPrimary && m == primary {
 			return m
 		}
-	}
-	if len(candidates) > 0 {
-		// 取最靠主控方向的那个
-		best := candidates[0]
-		for _, m := range candidates[1:] {
-			if dir == "right" && m.X < best.X {
-				best = m
-			}
-			if dir == "left" && m.X+m.W > best.X+best.W {
-				best = m
-			}
-		}
-		return best
-	}
-	if hasPrimary {
-		return primary
 	}
 	if len(mons) > 0 {
 		return mons[0]
 	}
-	return input.Rect{X: 0, Y: 0, W: 1920, H: 1080}
+	return input.Rect{X: 0, Y: 0, W: 1920, H: 1080, Primary: true}
 }
 
 // leaveEdgesFor 返回切回触发边缘：主控方向上暴露的显示器边缘集合。
@@ -361,7 +334,7 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 			s.mu.Unlock()
 
 			mons := s.injector.Monitors()
-			sess.entry = pickEntryMonitor(mons, m.Dir)
+			sess.entry = pickEntryMonitor(mons)
 			sess.leaveEdges = leaveEdgesFor(mons, m.Dir)
 			// 入口：入口显示器的共享边缘、垂直居中
 			ex := sess.entry.X + entryMargin
@@ -370,8 +343,9 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 			}
 			sess.entryX = ex
 			s.injector.MoveAbs(ex, sess.entry.Y+sess.entry.H/2)
-			log.Printf("KVM：入口显示器 (%d,%d %dx%d)，光标置于共享边缘",
-				sess.entry.X, sess.entry.Y, sess.entry.W, sess.entry.H)
+			log.Printf("KVM：入口显示器 (%d,%d %dx%d 主屏=%v)，光标注入到 (%d,%d)",
+				sess.entry.X, sess.entry.Y, sess.entry.W, sess.entry.H,
+				sess.entry.Primary, ex, sess.entry.Y+sess.entry.H/2)
 		case "move":
 			if sess.dir == "" {
 				continue
@@ -624,6 +598,7 @@ func (s *Service) setCooldown(d time.Duration) {
 
 // OnMouseMove 实现 input.Callbacks。
 func (s *Service) OnMouseMove(dx, dy int) {
+	defer func() { _ = recover() }() // 钩子线程绝不能 panic（会带崩整个进程）
 	s.mu.Lock()
 	if m := s.master; m != nil {
 		m.virtX += float64(dx)
@@ -709,6 +684,7 @@ func (s *Service) OnMouseMove(dx, dy int) {
 
 // OnMouseButton 实现 input.Callbacks。
 func (s *Service) OnMouseButton(down bool, button int, x, y int) {
+	defer func() { _ = recover() }()
 	s.mu.Lock()
 	m := s.master
 	s.mu.Unlock()
@@ -723,6 +699,7 @@ func (s *Service) OnMouseButton(down bool, button int, x, y int) {
 
 // OnWheel 实现 input.Callbacks。
 func (s *Service) OnWheel(delta int32, horizontal bool) {
+	defer func() { _ = recover() }()
 	s.mu.Lock()
 	m := s.master
 	s.mu.Unlock()
@@ -737,6 +714,7 @@ func (s *Service) OnWheel(delta int32, horizontal bool) {
 
 // OnKey 实现 input.Callbacks。控制期间转发按键并监视紧急退出热键。
 func (s *Service) OnKey(vk, scan uint32, down, ext bool) {
+	defer func() { _ = recover() }()
 	s.mu.Lock()
 	m := s.master
 	s.mu.Unlock()

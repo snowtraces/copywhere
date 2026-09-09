@@ -115,13 +115,19 @@ var (
 // SetSuppress 控制是否吞掉本地输入事件。
 func SetSuppress(b bool) { suppress.Store(b) }
 
+// 必须在任何显示器枚举/坐标查询之前声明 DPI 感知，否则拿到的是 DPI 虚拟化
+// 坐标（缩小过的），而 SendInput/GetCursorPos 随后是物理坐标——两套体系混用
+// 会导致注入位置系统性漂移（入口跑到屏幕角落）。
+func init() {
+	procSetProcessDPIAware.Call()
+}
+
 // Start 安装全局输入钩子与 Raw Input 监听（进程级一次）。
 func Start(cb Callbacks) error {
 	if !started.CompareAndSwap(false, true) {
 		return nil
 	}
 	cbs = cb
-	procSetProcessDPIAware.Call() // 光标坐标与屏幕度量使用物理像素
 	go hookThread()
 	return nil
 }
@@ -409,6 +415,7 @@ func wndProc(hwnd, uMsg, wParam, lParam uintptr) uintptr {
 }
 
 func handleRawInput(lParam uintptr) {
+	defer func() { _ = recover() }() // 钩子线程绝不能 panic（会带崩整个进程）
 	if cbs.OnMouseMove == nil {
 		return
 	}
@@ -432,6 +439,7 @@ func handleRawInput(lParam uintptr) {
 }
 
 func mouseHookProc(nCode int, wParam, lParam uintptr) uintptr {
+	defer func() { _ = recover() }()
 	if nCode >= 0 {
 		ms := (*msllhookstruct)(unsafe.Pointer(lParam))
 		deliver := !suppress.Load() || ms.flags&llmhfInjected != 0
@@ -468,6 +476,7 @@ func mouseHookProc(nCode int, wParam, lParam uintptr) uintptr {
 }
 
 func keyHookProc(nCode int, wParam, lParam uintptr) uintptr {
+	defer func() { _ = recover() }()
 	if nCode >= 0 {
 		kb := (*kbdllhookstruct)(unsafe.Pointer(lParam))
 		if cbs.OnKey != nil {
