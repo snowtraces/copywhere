@@ -363,6 +363,31 @@ func TestSlavePongKeepsAlive(t *testing.T) {
 	}
 }
 
+// 回归：连接建立时设置的写截止时间过期后，pong 仍应能写出
+// （曾因 SetDeadline 同时设置写截止时间，5s 后所有写入立刻 i/o timeout）。
+func TestPongAfterInitialWriteDeadlineExpired(t *testing.T) {
+	inj := newFakeInjector()
+	_, port := newTestService(t, inj)
+
+	tm := dialMaster(t, port, "tok")
+	if _, err := tm.recv(); err != nil {
+		t.Fatal(err)
+	}
+	tm.send(wireMsg{T: "enter", Dir: "right"})
+	waitFor(t, func() bool { return len(inj.abs) > 0 }, "入口注入")
+
+	// 期间持续 ping 保活（真实场景主控 1s 一次），越过最初的 5s 截止窗口
+	for i := 0; i < 4; i++ {
+		time.Sleep(2 * time.Second)
+		tm.send(wireMsg{T: "ping"})
+		_ = tm.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		m, err := tm.recv()
+		if err != nil || m.T != "pong" {
+			t.Fatalf("第 %d 次 ping 应得到 pong: %+v %v", i+1, m, err)
+		}
+	}
+}
+
 func waitFor(t *testing.T, cond func() bool, what string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

@@ -314,7 +314,10 @@ func leaveEdgesFor(mons []input.Rect, dir string) []input.Rect {
 
 func (s *Service) handleSlaveConn(conn net.Conn) {
 	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(readTimeout))
+	conn.SetReadDeadline(time.Now().Add(readTimeout))
+	// 只设置读截止时间；写截止时间若随 SetDeadline 一起设置，会在 5s 后过期，
+	// 导致后续所有 pong/leave 写入立刻 i/o timeout
+	conn.SetWriteDeadline(time.Time{})
 	br := bufio.NewReaderSize(conn, 16*1024)
 	bw := bufio.NewWriter(conn)
 
@@ -396,10 +399,12 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 			s.injector.Key(m.VK, m.Scan, m.Down, m.Ext)
 		case "ping":
 			// 保活：必须回应，否则主控端读超时会误判连接断开
+			conn.SetWriteDeadline(time.Now().Add(time.Second))
 			if err := writeMsg(bw, wireMsg{T: "pong"}); err != nil {
 				sess.end(false, "回应 ping 失败: "+err.Error())
 				return
 			}
+			conn.SetWriteDeadline(time.Time{})
 		default:
 			// 未知消息忽略
 		}
