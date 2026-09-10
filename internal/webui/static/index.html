@@ -506,6 +506,7 @@ const fmtBytes = n => n == null ? "-" :
 let state = { paused: false, peer_count: 0 };
 const feed = [];            // 传输记录（旧 → 新）
 const xfers = new Map();    // 进行中传输 peer|name → 元素引用
+let pendingUpload = null;   // 面板上传刚完成、等待被发送进度接管的那条进度条
 
 // ---------- 视图切换 ----------
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
@@ -561,7 +562,8 @@ function applyState(st) {
   $("feedSub").textContent = st.peer_count > 0
     ? `${st.peer_count} 个节点在线 · 复制即同步` : "暂无在线节点";
   const sw = $("syncSwitch");
-  if (sw.checked !== st.paused) sw.checked = !st.paused;
+  const desired = !st.paused; // 勾选 = 自动同步运行中
+  if (sw.checked !== desired) sw.checked = desired;
   const ke = $("kvmEnabled");
   if (ke.checked !== !!st.kvm_enabled) ke.checked = !!st.kvm_enabled;
   renderLayout();
@@ -623,15 +625,33 @@ function applyProgress(p) {
   let x = xfers.get(key);
   if (p.sent < 0) { // 失败终态
     if (x) { x.el.remove(); xfers.delete(key); }
+    else if (pendingUpload) { // 上传条还没被接管，发送就失败了：一并收起
+      clearTimeout(pendingUpload.timer);
+      xfers.delete(pendingUpload.key);
+      pendingUpload.el.remove();
+      pendingUpload = null;
+    }
     toast(`${p.name} → ${p.peer} 发送失败`, true);
     return;
   }
   if (!x) {
-    const el = document.createElement("div");
-    el.className = "xfer";
-    el.innerHTML = `<div class="cap"><b>${esc(p.name)}</b><span>→ ${esc(p.peer)} · <span class="pct"></span> · <span class="amt"></span></span></div>
-      <div class="bar"><i></i></div>`;
-    $("xferStrip").appendChild(el);
+    let el;
+    if (pendingUpload) {
+      // 面板上传后紧接着的发送：让发送进度接管刚完成的上传条，
+      // 避免先显示"上传文件"、再显示"发送文件"两条进度条先后出现。
+      clearTimeout(pendingUpload.timer);
+      xfers.delete(pendingUpload.key);
+      el = pendingUpload.el;
+      pendingUpload = null;
+      el.querySelector(".cap").innerHTML =
+        `<b>${esc(p.name)}</b><span>→ ${esc(p.peer)} · <span class="pct"></span> · <span class="amt"></span></span>`;
+    } else {
+      el = document.createElement("div");
+      el.className = "xfer";
+      el.innerHTML = `<div class="cap"><b>${esc(p.name)}</b><span>→ ${esc(p.peer)} · <span class="pct"></span> · <span class="amt"></span></span></div>
+        <div class="bar"><i></i></div>`;
+      $("xferStrip").appendChild(el);
+    }
     x = { el, bar: el.querySelector("i"), pct: el.querySelector(".pct"), amt: el.querySelector(".amt") };
     xfers.set(key, x);
   }
@@ -876,11 +896,12 @@ async function checkPendingPair() {
 
 // ---------- 暂停开关 ----------
 $("syncSwitch").addEventListener("change", async e => {
-  const paused = e.target.checked;
+  const paused = !e.target.checked; // 开关勾选 = 自动同步运行中（与 applyState 一致）
   try {
     const r = await api("/api/pause", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paused }) });
     state.paused = r.paused;
+    renderPeers(lastPeers); // 立即刷新本节点卡片上的"自动同步运行中/已暂停"
     toast(paused ? "自动同步已暂停（手动发送不受影响）" : "自动同步已恢复");
   } catch (err) {
     e.target.checked = !paused;
@@ -944,7 +965,15 @@ function upload(files) {
       x.bar.style.width = "100%";
       x.pct.textContent = "已上传";
       x.amt.textContent = "正在发送到在线节点";
-      setTimeout(() => { x.el.remove(); xfers.delete(key); }, 1800);
+      // 不再定时收起：等待发送进度接管同一条进度条（见 applyProgress）；
+      // 若始终没有发送进度（如节点均未配对被跳过），兜底 15s 后收起。
+      if (pendingUpload) { // 上一条还没被接管（罕见）：先清掉，避免残留
+        clearTimeout(pendingUpload.timer);
+        xfers.delete(pendingUpload.key);
+        pendingUpload.el.remove();
+      }
+      pendingUpload = { key, el: x.el,
+        timer: setTimeout(() => { x.el.remove(); xfers.delete(key); pendingUpload = null; }, 15000) };
       toast("上传完成，已开始发送");
     } else {
       x.el.remove(); xfers.delete(key);

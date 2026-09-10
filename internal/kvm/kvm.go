@@ -383,28 +383,32 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 		}
 		switch m.T {
 		case "enter":
+			mons := s.injector.Monitors()
+			entry := pickEntryMonitor(mons, s.cfg.EntryMonitor)
+			leaveEdges := leaveEdgesFor(mons, m.Dir)
+			// 入口：入口显示器的共享边缘；垂直位置按主控比例映射到入口显示器
+			// 同比例高度（m.Y 已是主控"离场所属屏"内的比例，见 entryRatio）。
+			ex := entry.X + entryMargin
+			if m.Dir == "left" {
+				ex = entry.X + entry.W - 1 - entryMargin
+			}
+			ey := entry.Y + int(clamp01(m.Y)*float64(entry.H))
+			if ey >= entry.Y+entry.H { // 比例=1 时防越界一行
+				ey = entry.Y + entry.H - 1
+			}
+			// 会话字段一次性在锁内写入：detectLeave 在锁内读取
+			// entryX/leaveEdges/entry 等，分两批写存在数据竞争。
 			s.mu.Lock()
 			sess.dir = m.Dir
+			sess.entry = entry
+			sess.leaveEdges = leaveEdges
+			sess.entryX = ex
 			sess.entryTime = time.Now()
 			sess.armed = false
 			sess.maxDist = 0
 			sess.pushAccum = 0
+			sess.pushLast = time.Time{}
 			s.mu.Unlock()
-
-			mons := s.injector.Monitors()
-			sess.entry = pickEntryMonitor(mons, s.cfg.EntryMonitor)
-			sess.leaveEdges = leaveEdgesFor(mons, m.Dir)
-			// 入口：入口显示器的共享边缘；垂直位置按主控比例映射到入口显示器
-			// 同比例高度（m.Y 已是主控"离场所属屏"内的比例，见 entryRatio）。
-			ex := sess.entry.X + entryMargin
-			if m.Dir == "left" {
-				ex = sess.entry.X + sess.entry.W - 1 - entryMargin
-			}
-			ey := sess.entry.Y + int(clamp01(m.Y)*float64(sess.entry.H))
-			if ey >= sess.entry.Y+sess.entry.H { // 比例=1 时防越界一行
-				ey = sess.entry.Y + sess.entry.H - 1
-			}
-			sess.entryX = ex
 			s.injector.MoveAbs(ex, ey)
 			log.Printf("KVM：入口显示器 (%d,%d %dx%d 主屏=%v)，光标注入到 (%d,%d)",
 				sess.entry.X, sess.entry.Y, sess.entry.W, sess.entry.H,
@@ -475,14 +479,18 @@ func (s *Service) detectLeave(sess *slaveSession, dx int) bool {
 		sess.pushLast = now
 		return false
 	}
-	outward := 0
-	if sess.dir == "right" && dx < 0 {
-		outward = -dx
+	// 向外推为正、向内推为负：双向都作用于同一累积值，贴边微抖只会
+	// 相互抵消，不会出现"向内一抖就整笔清零"或"只增不减导致误触"。
+	delta := 0
+	if sess.dir == "right" {
+		delta = -dx // dir=right：主控在左侧，向外=向左推
+	} else {
+		delta = dx
 	}
-	if sess.dir == "left" && dx > 0 {
-		outward = dx
+	sess.pushAccum += delta
+	if sess.pushAccum < 0 {
+		sess.pushAccum = 0
 	}
-	sess.pushAccum += outward
 	sess.pushLast = now
 	return sess.pushAccum >= leavePushPixels
 }
@@ -492,6 +500,12 @@ func (s *Service) detectLeave(sess *slaveSession, dx int) bool {
 // trySwitch 尝试把控制权切到 dir 方向的邻居（"left"/"right"，按节点名匹配）。
 func (s *Service) trySwitch(dir string) {
 	s.mu.Lock()
+	// 已在控制/被控或已有切换在进行中：直接放弃（触发窗口过后
+	// 重复推动可能并发进入这里，避免建立第二个主控会话）。
+	if s.master != nil || s.serving != nil {
+		s.mu.Unlock()
+		return
+	}
 	left, right := s.cfg.Left, s.cfg.Right
 	s.mu.Unlock()
 	var peer *discovery.Peer
@@ -742,7 +756,7 @@ func (s *Service) OnMouseMove(dx, dy int) {
 		s.mu.Unlock()
 		return
 	}
-	if s.serving != nil || time.Now().Before(s.attemptUntil) {
+	if s.serving != nil || time.Now().Before(s.attemptUntil) || time.Now().Before(s.cooldownUntil) {
 		s.mu.Unlock()
 		return
 	}
@@ -769,10 +783,15 @@ func (s *Service) OnMouseMove(dx, dy int) {
 		}
 	}
 	if dir == "" {
-		// 反向移动立即清零累积（防误触）；离开边缘由超时规则清理
+		// 反向移动抵消累积（下限 0）而非整笔清零：高回报率鼠标贴边斜推时
+		// dx 常在 ±1 间抖动，整笔清零会让累积永远到不了阈值——表现为
+		// "贴边有时能触发、有时怎么推都没反应"。
 		if s.pushAccum > 0 {
 			if (s.pushDir == "right" && dx < 0) || (s.pushDir == "left" && dx > 0) {
-				s.pushDir, s.pushAccum = "", 0
+				s.pushAccum -= abs(dx)
+				if s.pushAccum < 0 {
+					s.pushAccum = 0
+				}
 			}
 		}
 		if s.pushAccum > 0 && now.Sub(s.pushLast) > pushGapReset {
@@ -810,7 +829,9 @@ func (s *Service) OnMouseMove(dx, dy int) {
 		s.mu.Unlock()
 		return
 	}
-	s.attemptUntil = now.Add(3 * time.Second)
+	// 触发窗口与失败/释放冷却一致（1.5s）：切换失败后尽快允许重试，
+	// 不再锁死 3 秒；切换进行中的重复触发由 trySwitch 入口守卫兜底。
+	s.attemptUntil = now.Add(1500 * time.Millisecond)
 	s.mu.Unlock()
 	go s.trySwitch(dir)
 }

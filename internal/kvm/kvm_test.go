@@ -79,6 +79,11 @@ func (f *fakeInjector) relCount() int {
 	defer f.mu.Unlock()
 	return len(f.rels)
 }
+func (f *fakeInjector) absCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.abs)
+}
 func (f *fakeInjector) lastAbs() (int, int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -192,7 +197,7 @@ func TestSlaveEntryOnPrimarySharedEdge(t *testing.T) {
 	if err := tm.send(wireMsg{T: "enter", Dir: "right", Y: 0.5}); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, func() bool { return len(inj.abs) > 0 }, "入口绝对注入")
+	waitFor(t, func() bool { return inj.absCount() > 0 }, "入口绝对注入")
 	x, y := inj.lastAbs()
 	if x != 0+entryMargin || y != 540 {
 		t.Fatalf("入口坐标错误: got (%d,%d), want (2,540)", x, y)
@@ -220,7 +225,7 @@ func TestSlaveEntryFollowsProportionalHeight(t *testing.T) {
 		if err := tm.send(wireMsg{T: "enter", Dir: "right", Y: c.y}); err != nil {
 			t.Fatal(err)
 		}
-		waitFor(t, func() bool { return len(inj.abs) > 0 }, "入口绝对注入")
+		waitFor(t, func() bool { return inj.absCount() > 0 }, "入口绝对注入")
 		x, y := inj.lastAbs()
 		if x != 0+entryMargin || y != c.want {
 			t.Fatalf("比例 %.2f：入口坐标 got (%d,%d), want (%d,%d)",
@@ -253,7 +258,7 @@ func TestSlaveRelMoveAndLeave(t *testing.T) {
 		t.Fatal(err)
 	}
 	tm.send(wireMsg{T: "enter", Dir: "right"})
-	waitFor(t, func() bool { return len(inj.abs) > 0 }, "入口注入")
+	waitFor(t, func() bool { return inj.absCount() > 0 }, "入口注入")
 
 	// 相对移动
 	tm.send(wireMsg{T: "move", DX: 100, DY: 10})
@@ -288,7 +293,7 @@ func TestNoLeaveBeforeArmed(t *testing.T) {
 		t.Fatal(err)
 	}
 	tm.send(wireMsg{T: "enter", Dir: "right"})
-	waitFor(t, func() bool { return len(inj.abs) > 0 }, "入口注入")
+	waitFor(t, func() bool { return inj.absCount() > 0 }, "入口注入")
 
 	// 从未深入屏幕（maxDist < armPixels），贴边推动不应触发切回
 	tm.send(wireMsg{T: "move", DX: -5})
@@ -383,7 +388,7 @@ func TestLocalActivityEndsSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	tm.send(wireMsg{T: "enter", Dir: "right"})
-	waitFor(t, func() bool { return len(inj.abs) > 0 }, "入口注入")
+	waitFor(t, func() bool { return inj.absCount() > 0 }, "入口注入")
 
 	svc.OnLocalActivity() // 本机物理输入
 	m, err := tm.recv()
@@ -402,7 +407,7 @@ func TestSlavePongKeepsAlive(t *testing.T) {
 		t.Fatal(err)
 	}
 	tm.send(wireMsg{T: "enter", Dir: "right"})
-	waitFor(t, func() bool { return len(inj.abs) > 0 }, "入口注入")
+	waitFor(t, func() bool { return inj.absCount() > 0 }, "入口注入")
 
 	tm.send(wireMsg{T: "ping"})
 	_ = tm.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -423,7 +428,7 @@ func TestPongAfterInitialWriteDeadlineExpired(t *testing.T) {
 		t.Fatal(err)
 	}
 	tm.send(wireMsg{T: "enter", Dir: "right"})
-	waitFor(t, func() bool { return len(inj.abs) > 0 }, "入口注入")
+	waitFor(t, func() bool { return inj.absCount() > 0 }, "入口注入")
 
 	// 期间持续 ping 保活（真实场景主控 1s 一次），越过最初的 5s 截止窗口
 	for i := 0; i < 4; i++ {
@@ -434,6 +439,51 @@ func TestPongAfterInitialWriteDeadlineExpired(t *testing.T) {
 		if err != nil || m.T != "pong" {
 			t.Fatalf("第 %d 次 ping 应得到 pong: %+v %v", i+1, m, err)
 		}
+	}
+}
+
+// 回归：贴边推动时的事件级抖动（±px 交替）不允许把累积整笔清零——
+// 高回报率鼠标贴边斜推时曾被"反向一笔清零"卡住，表现为边缘时灵时不灵。
+func TestEdgePushSurvivesJitter(t *testing.T) {
+	inj := newFakeInjector()
+	svc := NewService(Config{Port: 47899, Right: "GHOST", SelfID: "S-ID"},
+		"S", discovery.NewStore("self"), 12*time.Second, inj)
+	// 主屏右边缘暴露：光标贴在 (1918,540)，以 +4/-1 交替抖动持续向外推
+	inj.setCursor(1918, 540)
+	for i := 0; i < 8; i++ {
+		svc.OnMouseMove(4, 0)
+		svc.OnMouseMove(-1, 0)
+	}
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	if !time.Now().Before(svc.attemptUntil) {
+		t.Fatalf("净推动 16px（含抖动抵消）应触发切换尝试, accum=%d", svc.pushAccum)
+	}
+}
+
+// 回归：触发一次后的冷却/尝试窗口内不应立刻重复触发；
+// 失败后的重试锁定与冷却一致（1.5s），不再锁死 3 秒。
+func TestEdgePushCooldownGate(t *testing.T) {
+	inj := newFakeInjector()
+	svc := NewService(Config{Port: 47899, Right: "GHOST", SelfID: "S-ID"},
+		"S", discovery.NewStore("self"), 12*time.Second, inj)
+	inj.setCursor(1918, 540)
+	svc.OnMouseMove(20, 0) // 一次推满阈值，触发尝试窗口
+	svc.mu.Lock()
+	until := svc.attemptUntil
+	svc.mu.Unlock()
+	if !time.Now().Before(until) {
+		t.Fatal("触发后应进入尝试窗口")
+	}
+	if d := time.Until(until); d > 1600*time.Millisecond {
+		t.Fatalf("尝试窗口应为 1.5s 量级, got %v", d)
+	}
+	svc.OnMouseMove(20, 0) // 窗口内的再次推动应被忽略
+	svc.mu.Lock()
+	until2 := svc.attemptUntil
+	svc.mu.Unlock()
+	if !until2.Equal(until) {
+		t.Fatal("尝试窗口内的推动不应重置窗口")
 	}
 }
 
