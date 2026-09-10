@@ -99,7 +99,11 @@ func newTestService(t *testing.T, inj Injector) (*Service, int) {
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
 	store := discovery.NewStore("self")
-	svc := NewService(Config{Port: port, EntryMonitor: -1}, "SLAVE", "tok", store, 12*time.Second, inj)
+	svc := NewService(Config{
+		Port: port, EntryMonitor: -1, SelfID: "SLAVE-ID",
+		// 测试约定：主控机指纹 MASTER-ID 的配对令牌为 "tok"
+		PairTokenFor: func(id string) (string, bool) { return "tok", id == "MASTER-ID" },
+	}, "SLAVE", store, 12*time.Second, inj)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	if err := svc.Start(ctx); err != nil {
@@ -121,7 +125,7 @@ func dialMaster(t *testing.T, port int, token string) *testMaster {
 	}
 	t.Cleanup(func() { conn.Close() })
 	bw := bufio.NewWriter(conn)
-	b, _ := json.Marshal(wireMsg{T: "hello", Token: token, Name: "MASTER"})
+	b, _ := json.Marshal(wireMsg{T: "hello", Token: token, ID: "MASTER-ID", Name: "MASTER"})
 	bw.Write(append(b, '\n'))
 	bw.Flush()
 	return &testMaster{conn: conn, r: bufio.NewReader(conn)}
@@ -304,7 +308,7 @@ func TestSlaveAuthReject(t *testing.T) {
 	tm := dialMaster(t, port, "WRONG")
 	m, err := tm.recv()
 	if err != nil || m.T != "error" || m.Msg != "unauthorized" {
-		t.Fatalf("错误 token 应被拒绝: %+v %v", m, err)
+		t.Fatalf("错误令牌应被拒绝: %+v %v", m, err)
 	}
 	if inj.relCount() != 0 {
 		t.Fatal("被拒后不应有注入")
@@ -348,7 +352,7 @@ func TestSlaveWatchdogRelease(t *testing.T) {
 func TestOnMouseMoveLocalNoDeadlock(t *testing.T) {
 	inj := newFakeInjector()
 	store := discovery.NewStore("self")
-	svc := NewService(Config{Port: 47899, Right: "GHOST"}, "S", "tok", store, 12*time.Second, inj)
+	svc := NewService(Config{Port: 47899, Right: "GHOST", SelfID: "S-ID"}, "S", store, 12*time.Second, inj)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if err := svc.Start(ctx); err != nil {

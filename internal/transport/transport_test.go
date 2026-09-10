@@ -17,6 +17,9 @@ import (
 	"copywhere/internal/config"
 )
 
+// testToken 是测试约定的有效配对令牌.
+const testToken = "test-pair-token"
+
 func freePort(t *testing.T) int {
 	t.Helper()
 	l, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -43,7 +46,10 @@ func startServer(t *testing.T, cfg *config.Config) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
-		_ = Server(ctx, cfg, nil, nil)
+		_ = Server(ctx, cfg, Handlers{
+			// 测试用鉴权：令牌 == testToken（生产中由 app 提供配对令牌校验）
+			Authorize: func(hdr Header) bool { return hdr.Token == testToken },
+		})
 	}()
 	// 等端口就绪
 	for i := 0; i < 50; i++ {
@@ -69,7 +75,7 @@ func TestFileTransfer(t *testing.T) {
 	sum := sha256.Sum256(content)
 
 	send := func() (Response, error) {
-		hdr := Header{V: 1, Token: cfg.Token, Type: "file", Name: "hello.txt",
+		hdr := Header{V: 1, Token: testToken, Type: "file", Name: "hello.txt",
 			Size: int64(len(content)), SHA256: hex.EncodeToString(sum[:]), Sender: "tester"}
 		return Send("127.0.0.1", cfg.TransferPort, hdr, func(w io.Writer) error {
 			_, err := w.Write(content)
@@ -108,7 +114,7 @@ func TestTextTransfer(t *testing.T) {
 
 	text := "你好，copywhere"
 	sum := sha256.Sum256([]byte(text))
-	hdr := Header{V: 1, Token: cfg.Token, Type: "text", Name: "text",
+	hdr := Header{V: 1, Token: testToken, Type: "text", Name: "text",
 		Size: int64(len(text)), SHA256: hex.EncodeToString(sum[:]), Sender: "tester"}
 	resp, err := Send("127.0.0.1", cfg.TransferPort, hdr, func(w io.Writer) error {
 		_, err := w.Write([]byte(text))
@@ -141,7 +147,7 @@ func TestShaMismatchRejected(t *testing.T) {
 	cfg := testConfig(t)
 	startServer(t, cfg)
 
-	hdr := Header{V: 1, Token: cfg.Token, Type: "text", Name: "text",
+	hdr := Header{V: 1, Token: testToken, Type: "text", Name: "text",
 		Size: 3, SHA256: hex.EncodeToString([]byte("bad")), Sender: "tester"}
 	_, err := Send("127.0.0.1", cfg.TransferPort, hdr, func(w io.Writer) error {
 		_, err := w.Write([]byte("abc"))

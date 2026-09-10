@@ -1,0 +1,1131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=0.2.0">
+<link rel="icon" type="image/png" sizes="192x192" href="/favicon.png?v=0.2.0">
+<link rel="alternate icon" href="/favicon.ico?v=0.2.0" type="image/x-icon">
+<link rel="apple-touch-icon" href="/favicon.png?v=0.2.0">
+<title>copywhere 控制面板</title>
+<style>
+:root {
+  --bg: #f3f6fb; --card: #ffffff; --card-hover: #f8fafc; --border: #e1e7f2;
+  --text: #0d1527; --dim: #5b6b86;
+  --accent: #1e48fa; --accent-hover: #153ad8; --accent-weak: #edf3ff;
+  --cyan: #00b4c2; --cyan-weak: #e0f8fa;
+  --grad: linear-gradient(135deg, #1e48fa 0%, #0284c7 62%, #00dfe8 100%);
+  --in: #059669; --in-weak: #ecfdf5; --err: #e11d48; --err-weak: #fff1f2; --warn: #d97706;
+  --track: #e4ecf7; --shadow: 0 1px 3px rgba(14,35,80,.05), 0 4px 14px rgba(14,35,80,.07);
+  --mono: Consolas, "Cascadia Mono", monospace;
+}
+:root[data-theme="dark"] {
+  --bg: #080c16; --card: #0f172a; --card-hover: #15223c; --border: #1d2942;
+  --text: #f1f5fc; --dim: #8496b4;
+  --accent: #388bfd; --accent-hover: #58a6ff; --accent-weak: #12213d;
+  --cyan: #00dfe8; --cyan-weak: #072b38;
+  --grad: linear-gradient(135deg, #1e48fa 0%, #0284c7 50%, #00dfe8 100%);
+  --in: #10b981; --in-weak: #062e22; --err: #f43f5e; --err-weak: #35121a; --warn: #fbbf24;
+  --track: #17233a; --shadow: 0 2px 6px rgba(0,0,0,.5), 0 8px 24px rgba(0,15,45,.7);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --bg: #080c16; --card: #0f172a; --card-hover: #15223c; --border: #1d2942;
+    --text: #f1f5fc; --dim: #8496b4;
+    --accent: #388bfd; --accent-hover: #58a6ff; --accent-weak: #12213d;
+    --cyan: #00dfe8; --cyan-weak: #072b38;
+    --grad: linear-gradient(135deg, #1e48fa 0%, #0284c7 50%, #00dfe8 100%);
+    --in: #10b981; --in-weak: #062e22; --err: #f43f5e; --err-weak: #35121a; --warn: #fbbf24;
+    --track: #17233a; --shadow: 0 2px 6px rgba(0,0,0,.5), 0 8px 24px rgba(0,15,45,.7);
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.5 "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei", sans-serif; }
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+svg { display: block; }
+.ic { width: 18px; height: 18px; stroke: currentColor; stroke-width: 1.8; fill: none;
+  stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---------- 布局 ---------- */
+.app { display: flex; height: 100vh; }
+.side { width: 228px; flex: none; display: flex; flex-direction: column; gap: 6px;
+  padding: 16px 12px; background: var(--card); border-right: 1px solid var(--border); }
+.side .grow { flex: 1; }
+.brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px 14px; }
+.brand .mark { width: 32px; height: 32px; border-radius: 9px; background: var(--grad);
+  display: grid; place-items: center; color: #fff; box-shadow: 0 4px 12px rgba(30,72,250,.32); }
+.brand .mark svg { width: 18px; height: 18px; }
+.brand b { font-size: 15px; letter-spacing: .2px; }
+.brand .ver { font-size: 11px; color: var(--dim); }
+nav { display: flex; flex-direction: column; gap: 2px; }
+nav button { display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+  border-radius: 9px; color: var(--dim); font-weight: 500; text-align: left; }
+nav button:hover { background: var(--track); color: var(--text); }
+nav button.active { background: var(--accent-weak); color: var(--accent); }
+.side-status { padding: 12px; border: 1px solid var(--border); border-radius: 12px;
+  display: flex; flex-direction: column; gap: 10px; }
+.status-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--err); flex: none; }
+.dot.on { background: var(--in); }
+.status-row b { color: var(--text); font-weight: 600; }
+.switch { display: flex; align-items: center; justify-content: space-between;
+  font-size: 13px; color: var(--dim); cursor: pointer; user-select: none; }
+.switch input { display: none; }
+.switch .knob { width: 34px; height: 20px; border-radius: 10px; background: var(--track);
+  position: relative; transition: background .15s; flex: none; }
+.switch .knob::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px;
+  height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25);
+  transition: left .15s; }
+.switch input:checked + .knob { background: var(--accent); }
+.switch input:checked + .knob::after { left: 16px; }
+.side-btns { display: flex; flex-direction: column; gap: 6px; }
+.btn { display: flex; align-items: center; justify-content: center; gap: 8px;
+  height: 38px; padding: 0 16px; border-radius: 9px; border: 1px solid var(--border);
+  background: var(--card); font-weight: 500;
+  transition: border-color .12s, background .12s, box-shadow .12s; }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn.primary { background: var(--grad) no-repeat; border: none; color: #fff;
+  box-shadow: 0 2px 8px rgba(30,72,250,.28); }
+.btn.primary:hover { filter: brightness(1.08); box-shadow: 0 4px 14px rgba(30,72,250,.42); color: #fff; }
+.side-foot { display: flex; align-items: center; gap: 4px; padding: 8px 4px 0; }
+.iconbtn { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
+  color: var(--dim); position: relative; }
+.iconbtn:hover { background: var(--track); color: var(--text); }
+.iconbtn .badge { position: absolute; top: 2px; right: 2px; min-width: 15px; height: 15px;
+  border-radius: 8px; background: var(--err); color: #fff; font-size: 10px; line-height: 15px;
+  text-align: center; padding: 0 3px; }
+.side-foot .self { flex: 1; min-width: 0; text-align: right; font-size: 11px;
+  color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+.viewhead { padding: 20px 28px 12px; display: flex; align-items: baseline; gap: 12px; }
+.viewhead h1 { margin: 0; font-size: 20px; font-weight: 650; }
+.viewhead .sub { color: var(--dim); font-size: 13px; }
+.viewbody { flex: 1; overflow-y: auto; padding: 4px 28px 40px; }
+.view { display: none; height: 100%; flex-direction: column; }
+.view.active { display: flex; }
+
+/* ---------- 动态流 ---------- */
+.xfer-strip { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.xfer { background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  padding: 10px 14px; box-shadow: var(--shadow); }
+.xfer .cap { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px;
+  color: var(--dim); margin-bottom: 6px; }
+.xfer .cap b { color: var(--text); font-weight: 550; }
+.bar { height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
+.bar > i { display: block; height: 100%; width: 0; border-radius: 3px;
+  background: var(--grad); transition: width .25s; }
+.feed { display: flex; flex-direction: column; gap: 8px; max-width: 860px; }
+.item { display: flex; align-items: center; gap: 12px; background: var(--card);
+  border: 1px solid var(--border); border-radius: 12px; padding: 11px 14px;
+  box-shadow: var(--shadow); }
+.item .ico { width: 38px; height: 38px; border-radius: 11px; display: grid;
+  place-items: center; flex: none; }
+.item .ico.in { background: var(--in-weak); color: var(--in); }
+.item .ico.out { background: var(--accent-weak); color: var(--accent); }
+.item .body { flex: 1; min-width: 0; }
+.item .title { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item .sub { font-size: 12.5px; color: var(--dim); display: flex; gap: 6px; flex-wrap: wrap; }
+.item .sub .sep::before { content: "·"; }
+.item .acts { display: flex; gap: 6px; flex: none; }
+.chipbtn { font-size: 12.5px; padding: 5px 11px; border-radius: 8px;
+  border: 1px solid var(--border); color: var(--dim); }
+.chipbtn:hover { border-color: var(--accent); color: var(--accent); }
+.pill { font-size: 12px; padding: 2px 9px; border-radius: 9px; flex: none; }
+.pill.ok { background: var(--in-weak); color: var(--in); }
+.pill.fail { background: var(--err-weak); color: var(--err); }
+.pill.out { background: var(--accent-weak); color: var(--accent); }
+.pill.in { background: var(--in-weak); color: var(--in); }
+.empty { text-align: center; color: var(--dim); padding: 60px 20px; }
+.empty .art { width: 64px; height: 64px; margin: 0 auto 14px; border-radius: 18px;
+  background: var(--card); border: 1px solid var(--border); display: grid;
+  place-items: center; color: var(--accent); box-shadow: var(--shadow); }
+.empty .art svg { width: 28px; height: 28px; }
+.empty b { display: block; color: var(--text); margin-bottom: 4px; font-weight: 600; }
+
+/* ---------- 节点 ---------- */
+.peer-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px; max-width: 960px; }
+.peer-card { background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+  padding: 16px; box-shadow: var(--shadow); }
+.peer-card.self { border-color: transparent; outline: 2px solid var(--accent); }
+.peer-card .head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.peer-card .head .hact { margin-left: auto; }
+.avatar { width: 38px; height: 38px; border-radius: 11px; background: var(--grad);
+  color: #fff; display: grid; place-items: center; font-weight: 650; font-size: 16px; flex: none; }
+.peer-card .name { font-weight: 650; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+.peer-card .tag { font-size: 11px; padding: 1px 8px; border-radius: 8px;
+  background: var(--accent-weak); color: var(--accent); font-weight: 500; }
+.peer-card .tag.ok { background: var(--in-weak); color: var(--in); }
+.peer-card .tag.warn { background: var(--err-weak); color: var(--err); }
+.peer-card .id { font-size: 11.5px; color: var(--dim); font-family: var(--mono); }
+.ip-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+.ip-chip { font-family: var(--mono); font-size: 12px; padding: 4px 9px; border-radius: 7px;
+  background: var(--track); color: var(--dim); }
+.ip-chip.primary { background: var(--accent-weak); color: var(--accent); font-weight: 550; }
+.peer-card .foot { font-size: 12.5px; color: var(--dim); display: flex; gap: 6px; }
+.peer-card .foot .sep::before { content: "·"; }
+
+/* ---------- 屏幕布局（KVM） ---------- */
+.layout-canvas { background: var(--track); border: 1px solid var(--border); border-radius: 14px;
+  padding: 34px 20px 26px; display: flex; justify-content: center; align-items: flex-end;
+  gap: 22px; flex-wrap: wrap; max-width: 960px; }
+.screen { width: 148px; user-select: none; }
+.screen .bezel { position: relative; height: 92px; border: 2.5px solid var(--border);
+  border-radius: 9px; background: var(--card); box-shadow: var(--shadow);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 4px; padding: 8px; text-align: center; }
+.screen .stand { width: 30px; height: 12px; background: var(--track); margin: 0 auto;
+  border-radius: 0 0 5px 5px; }
+.screen .base { width: 74px; height: 5px; background: var(--border); margin: 0 auto;
+  border-radius: 3px; }
+.screen .scr-name { font-weight: 600; font-size: 13px; max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.screen .scr-sub { font-size: 11px; color: var(--dim); max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.screen .side-label { position: absolute; top: -22px; left: 50%; transform: translateX(-50%);
+  font-size: 11.5px; color: var(--dim); background: var(--card); border: 1px solid var(--border);
+  border-radius: 8px; padding: 1px 9px; white-space: nowrap; }
+.screen.self .bezel { border-color: var(--accent); }
+.screen.self .initial { background: var(--grad); }
+.screen .initial { width: 30px; height: 30px; border-radius: 8px; background: var(--track);
+  color: var(--dim); display: grid; place-items: center; font-weight: 650; font-size: 15px; }
+.screen.empty .bezel { border-style: dashed; box-shadow: none; background: transparent;
+  color: var(--dim); }
+.screen.offline .bezel { opacity: .55; }
+.screen.drag-hot .bezel { border-color: var(--accent); outline: 2px dashed var(--accent);
+  outline-offset: 3px; }
+.screen .scr-x { position: absolute; top: 5px; right: 5px; width: 20px; height: 20px;
+  border-radius: 6px; display: grid; place-items: center; color: var(--dim); font-size: 11px; }
+.screen .scr-x:hover { background: var(--err-weak); color: var(--err); }
+.screen[draggable=true] .bezel { cursor: grab; }
+.sect { margin: 18px 0 10px; font-size: 13px; font-weight: 600; color: var(--dim); }
+.tray { display: flex; flex-wrap: wrap; gap: 10px; max-width: 960px; }
+.tray .dev { display: flex; align-items: center; gap: 9px; background: var(--card);
+  border: 1px solid var(--border); border-radius: 11px; padding: 8px 12px;
+  box-shadow: var(--shadow); cursor: grab; }
+.tray .dev.dragging { opacity: .45; }
+.tray .dev .initial { width: 26px; height: 26px; border-radius: 7px; background: var(--track);
+  color: var(--dim); display: grid; place-items: center; font-weight: 650; font-size: 13px; }
+.tray .dev .nm { font-weight: 550; }
+.tray .dev .ip { font-size: 11.5px; color: var(--dim); font-family: var(--mono); }
+.tray .dev.selected { border-color: var(--accent); }
+.tray .dev .quick { display: none; gap: 4px; }
+.tray .dev.selected .quick { display: flex; }
+.kvm-bar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  margin-top: 16px; max-width: 960px; }
+
+/* ---------- 控制台抽屉 ---------- */
+.console { position: fixed; left: 0; right: 0; bottom: 0; height: 44vh; z-index: 40;
+  background: #060a12; color: #cad5e6; display: flex; flex-direction: column;
+  border-top: 1px solid #1a253a; transform: translateY(100%); transition: transform .22s ease;
+  box-shadow: 0 -8px 30px rgba(0,0,0,.45); }
+.console.open { transform: translateY(0); }
+.console .chead { display: flex; align-items: center; gap: 12px; padding: 8px 16px;
+  border-bottom: 1px solid #1a253a; font-size: 12.5px; color: #8496b4; }
+.console .chead .ttl { display: flex; align-items: center; gap: 8px; font-weight: 550;
+  color: #f1f5fc; }
+.console pre { flex: 1; overflow-y: auto; margin: 0; padding: 10px 16px;
+  font: 12px/1.65 var(--mono); white-space: pre-wrap; word-break: break-all; }
+.console .chead label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.console .chead button { color: #8496b4; padding: 3px 9px; border-radius: 7px; }
+.console .chead button:hover { background: #1a253a; color: #f1f5fc; }
+
+/* ---------- 侧滑设置 / 弹层 ---------- */
+.scrim { position: fixed; inset: 0; background: rgba(10,12,16,.45); z-index: 50;
+  opacity: 0; pointer-events: none; transition: opacity .18s; }
+.scrim.show { opacity: 1; pointer-events: auto; }
+.panel { position: fixed; top: 0; right: 0; bottom: 0; width: 420px; max-width: 92vw;
+  background: var(--card); z-index: 51; box-shadow: -12px 0 40px rgba(0,0,0,.18);
+  transform: translateX(100%); transition: transform .22s ease; display: flex;
+  flex-direction: column; }
+.panel.open { transform: translateX(0); }
+.panel .phead { display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid var(--border); font-weight: 650; font-size: 16px; }
+.panel .pbody { flex: 1; overflow-y: auto; padding: 8px 20px 20px; }
+.group { margin: 16px 0; }
+.group h4 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--dim);
+  text-transform: uppercase; letter-spacing: .6px; }
+.field { margin: 10px 0; }
+.field label { display: block; font-size: 12.5px; color: var(--dim); margin-bottom: 5px; }
+.field input[type=text], .field input[type=number] { width: 100%; padding: 9px 11px;
+  border: 1px solid var(--border); border-radius: 9px; background: var(--bg);
+  color: var(--text); font: inherit; }
+.field input:focus { outline: none; border-color: var(--accent); }
+.check { display: flex; align-items: center; gap: 9px; padding: 9px 0; cursor: pointer; }
+.check input { width: 16px; height: 16px; accent-color: var(--accent); }
+.hint { font-size: 12px; color: var(--dim); }
+.msg { min-height: 20px; font-size: 13px; margin-top: 10px; }
+.msg.ok { color: var(--in); } .msg.err { color: var(--err); } .msg.warn { color: var(--warn); }
+
+/* 发送文本弹窗 */
+.modal { position: fixed; inset: 0; z-index: 60; display: none; place-items: center; }
+.modal.show { display: grid; }
+.modal .box { width: 480px; max-width: 92vw; background: var(--card); border-radius: 16px;
+  padding: 20px; box-shadow: 0 20px 60px rgba(0,0,0,.3); border: 1px solid var(--border); }
+.modal h3 { margin: 0 0 12px; font-size: 16px; }
+.modal textarea { width: 100%; min-height: 110px; resize: vertical; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--bg);
+  color: var(--text); font: inherit; }
+.modal textarea:focus { outline: none; border-color: var(--accent); }
+.modal .row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+
+/* 拖拽遮罩 */
+.dropzone { position: fixed; inset: 0; z-index: 70; display: none; place-items: center;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  backdrop-filter: blur(3px); }
+.dropzone.show { display: grid; }
+.dropzone .inner { border: 2.5px dashed var(--accent); border-radius: 22px; padding: 48px 72px;
+  background: var(--card); text-align: center; box-shadow: var(--shadow); }
+.dropzone .inner .ic { width: 40px; height: 40px; margin: 0 auto 12px; color: var(--accent); }
+.dropzone b { font-size: 17px; display: block; margin-bottom: 4px; }
+.dropzone .hint { color: var(--dim); }
+
+/* Toast */
+.toasts { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  display: flex; flex-direction: column; gap: 8px; z-index: 80; align-items: center; }
+.toast { background: var(--card); border: 1px solid var(--border); border-radius: 11px;
+  padding: 9px 18px; box-shadow: 0 6px 24px rgba(0,0,0,.16); font-size: 13.5px;
+  animation: pop .18s ease; max-width: 70vw; }
+.toast.err { border-color: var(--err); color: var(--err); }
+@keyframes pop { from { opacity: 0; transform: translateY(8px); } }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--track); border-radius: 5px; border: 2px solid var(--bg); }
+
+@media (max-width: 760px) {
+  .app { flex-direction: column; }
+  .side { width: 100%; flex-direction: row; align-items: center; flex-wrap: wrap;
+    border-right: none; border-bottom: 1px solid var(--border); padding: 10px 14px; }
+  .brand { padding: 0 8px 0 0; }
+  nav { flex-direction: row; }
+  .side .grow, .side-status { display: none; }
+  .side-btns { flex-direction: row; }
+  .viewhead, .viewbody { padding-left: 16px; padding-right: 16px; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <div class="mark">
+        <svg viewBox="0 0 24 24" width="18" height="18">
+          <path d="M21 3L4 11l8 1z" fill="#ffffff"/>
+          <path d="M21 3L12 12l1 8z" fill="#00dfe8"/>
+          <line x1="8.5" y1="15.5" x2="6.5" y2="17.5" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div><b>copywhere</b><div class="ver" id="ver"></div></div>
+    </div>
+    <nav>
+      <button data-view="feed" class="active">
+        <svg class="ic" viewBox="0 0 24 24">
+          <path d="M21 3L11 8.5l3 1.5z" fill="currentColor" fill-opacity="0.22"/>
+          <path d="M21 3l-7 4.5 1.5 5.5z"/>
+          <path d="M3 17l5-4.5 3 2.5 4-4"/>
+        </svg>传输动态</button>
+      <button data-view="layout">
+        <svg class="ic" viewBox="0 0 24 24">
+          <rect x="2.5" y="5" width="10" height="11" rx="1.8"/>
+          <rect x="15" y="7" width="6.5" height="9" rx="1.5"/>
+          <path d="M10 10.5l4-1.5-1.5 3.5-1-1z" fill="currentColor" fill-opacity="0.25"/>
+        </svg>屏幕布局</button>
+      <button data-view="peers">
+        <svg class="ic" viewBox="0 0 24 24">
+          <rect x="2.5" y="4" width="12" height="9" rx="1.8"/>
+          <path d="M5.5 16h6M8.5 13v3"/>
+          <rect x="15.5" y="8" width="6" height="11" rx="1.5"/>
+          <path d="M10.5 7.5l3.5 2-3.5 2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>在线节点</button>
+    </nav>
+    <div class="grow"></div>
+    <div class="side-status">
+      <div class="status-row"><span class="dot" id="dot"></span><span>在线 <b id="peerCount">0</b> 个节点</span></div>
+      <label class="switch"><span>自动同步</span><input type="checkbox" id="syncSwitch"><span class="knob"></span></label>
+    </div>
+    <div class="side-btns">
+      <button class="btn primary" id="sendFileBtn">
+        <svg class="ic" viewBox="0 0 24 24">
+          <path d="M21 3L5 11.5l7 2z" fill="currentColor" fill-opacity="0.3"/>
+          <path d="M21 3l-9 7.5 2 7.5z"/>
+          <line x1="12" y1="13.5" x2="21" y2="3"/>
+          <line x1="6.5" y1="18.5" x2="9" y2="16" stroke-linecap="round" stroke-width="2"/>
+        </svg>发送文件</button>
+      <button class="btn" id="sendTextBtn">
+        <svg class="ic" viewBox="0 0 24 24">
+          <path d="M14 3H5.5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2V9.5L14 3z"/>
+          <path d="M14 3v6.5h6.5"/>
+          <path d="M7 13.5h10M7 17h6" stroke-linecap="round"/>
+        </svg>发送文本</button>
+    </div>
+    <div class="side-foot">
+      <button class="iconbtn" id="consoleBtn" title="运行日志">
+        <svg class="ic" viewBox="0 0 24 24">
+          <rect x="2.5" y="4" width="19" height="16" rx="2.5"/>
+          <path d="m6.5 8.5 4 3.5-4 3.5M13.5 15.5h4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="badge" id="consoleBadge" hidden></span></button>
+      <button class="iconbtn" id="themeBtn" title="切换主题"></button>
+      <button class="iconbtn" id="settingsBtn" title="设置">
+        <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/>
+          <path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2-1.2L14.2 3h-4l-.4 2.7a7 7 0 0 0-2 1.2l-2.3-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 2 1.2l.4 2.7h4l.4-2.7a7 7 0 0 0 2-1.2l2.3 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2Z"/></svg></button>
+      <div class="self" id="selfInfo"></div>
+    </div>
+  </aside>
+
+  <main>
+    <section class="view active" id="view-feed">
+      <div class="viewhead"><h1>传输动态</h1><span class="sub" id="feedSub"></span></div>
+      <div class="viewbody">
+        <div class="xfer-strip" id="xferStrip"></div>
+        <div class="feed" id="feed"></div>
+      </div>
+    </section>
+    <section class="view" id="view-peers">
+      <div class="viewhead"><h1>在线节点</h1><span class="sub">通过 UDP 广播自动发现</span></div>
+      <div class="viewbody"><div class="peer-grid" id="peerGrid"></div></div>
+    </section>
+    <section class="view" id="view-layout">
+      <div class="viewhead"><h1>屏幕布局</h1><span class="sub">仿多显示器排列：把设备拖到本机左右两侧，配置鼠标键盘跨屏（KVM，实验性）</span></div>
+      <div class="viewbody">
+        <div class="layout-canvas" id="layoutCanvas"></div>
+        <div class="kvm-bar">
+          <label class="check" style="padding:0"><input type="checkbox" id="kvmEnabled"> 启用鼠标键盘跨屏</label>
+          <span class="hint">邻居配置<b>即时生效</b>并自动同步到对端 · 启用/停用跨屏需重启 · 被控时按 <b>Ctrl+Alt+Shift+X</b> 紧急退出</span>
+        </div>
+        <div class="sect">在线设备（拖到上方空位，或点选后使用快捷按钮）</div>
+        <div class="tray" id="deviceTray"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- 控制台抽屉 -->
+<div class="console" id="console">
+  <div class="chead">
+    <span class="ttl">
+      <svg class="ic" viewBox="0 0 24 24" style="width:15px;height:15px"><rect x="2.5" y="4" width="19" height="16" rx="2.5"/><path d="m6.5 8.5 4 3.5-4 3.5M13.5 15.5h4" stroke-linecap="round"/></svg>运行日志</span>
+    <span id="consoleCount"></span>
+    <span class="grow" style="flex:1"></span>
+    <label><input type="checkbox" id="autoscroll" checked> 自动滚动</label>
+    <button id="consoleClear">清空</button>
+    <button id="consoleClose">收起 ✕</button>
+  </div>
+  <pre id="consoleBody"></pre>
+</div>
+
+<!-- 设置侧滑 -->
+<div class="scrim" id="scrim"></div>
+<aside class="panel" id="settings">
+  <div class="phead">设置
+    <button class="iconbtn" id="settingsClose">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12" stroke-linecap="round"/></svg></button></div>
+  <div class="pbody">
+    <div class="group"><h4>身份</h4>
+      <div class="field"><label>节点名（重启后生效）</label>
+        <input type="text" id="cfg_node_name"></div>
+      <p class="hint">认证采用配对制：在「在线节点」页配对后即可互通，无需配置 token。</p>
+    </div>
+    <div class="group"><h4>自动同步</h4>
+      <div class="field"><label>容量阈值 MB（0 = 不限制，立即生效）</label>
+        <input type="number" id="cfg_max_auto_copy_mb" min="0"></div>
+      <label class="check"><input type="checkbox" id="cfg_auto_paste">收到文件后自动写入剪贴板</label>
+      <label class="check"><input type="checkbox" id="cfg_text_sync">同步剪贴板文本</label>
+    </div>
+    <div class="group"><h4>存储</h4>
+      <div class="field"><label>接收目录（立即生效）</label>
+        <input type="text" id="cfg_receive_dir" spellcheck="false"></div>
+      <button class="chipbtn" onclick="openPath({dir:'receive'})">打开接收目录</button>
+    </div>
+    <div class="group"><h4>已配对设备</h4>
+      <div id="pairedList" class="hint">加载中…</div>
+    </div>
+    <div class="msg" id="cfgMsg"></div>
+    <button class="btn primary" style="width:100%" onclick="saveCfg()">保存配置</button>
+    <p class="hint" id="cfgPath" style="margin-top:10px"></p>
+  </div>
+</aside>
+
+<!-- 发送文本弹窗 -->
+<div class="modal" id="textModal">
+  <div class="box">
+    <h3>发送文本到所有在线节点</h3>
+    <textarea id="sendTextArea" placeholder="输入要发送的文本，对端 Ctrl+V 即可粘贴…"></textarea>
+    <div class="row">
+      <button class="btn" onclick="closeTextModal()">取消</button>
+      <button class="btn primary" onclick="sendText()">发送</button>
+    </div>
+  </div>
+</div>
+
+<!-- 配对请求确认框 -->
+<div class="modal" id="pairModal">
+  <div class="box">
+    <h3>配对请求</h3>
+    <p style="margin:0 0 4px">节点 <b id="pairName"></b> 请求与本机配对。</p>
+    <p class="hint" id="pairFp"></p>
+    <p class="hint">接受后双方交换独立配对令牌，此后可互相同步剪贴板与文件；<br>可随时在「设置 → 已配对设备」中解除配对。</p>
+    <div class="row">
+      <button class="btn" onclick="respondPair(false)">拒绝</button>
+      <button class="btn primary" onclick="respondPair(true)">接受配对</button>
+    </div>
+  </div>
+</div>
+
+<!-- 拖拽遮罩 -->
+<div class="dropzone" id="dropzone">
+  <div class="inner">
+    <svg class="ic" viewBox="0 0 24 24" style="width:48px;height:48px;margin:0 auto 12px">
+      <path d="M21 3L4 11l8 1z" fill="currentColor" fill-opacity="0.25"/>
+      <path d="M21 3L12 12l1 8z"/>
+      <line x1="8.5" y1="15.5" x2="6.5" y2="17.5" stroke-linecap="round" stroke-width="2"/>
+      <line x1="12" y1="12" x2="21" y2="3"/>
+    </svg>
+    <b id="dropTitle">松开鼠标，投送至局域网节点</b>
+    <div class="hint" id="dropHint">无界极速投送 · 不受大小阈值限制 · 多文件自动打包</div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+<input type="file" id="pick" multiple hidden>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const fmtBytes = n => n == null ? "-" :
+  n >= (1 << 20) ? (n / (1 << 20)).toFixed(1) + " MB" :
+  n >= (1 << 10) ? (n / (1 << 10)).toFixed(1) + " KB" : n + " B";
+
+let state = { paused: false, peer_count: 0 };
+const feed = [];            // 传输记录（旧 → 新）
+const xfers = new Map();    // 进行中传输 peer|name → 元素引用
+
+// ---------- 视图切换 ----------
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("active", x === b));
+  document.querySelectorAll(".view").forEach(x => x.classList.remove("active"));
+  $("view-" + b.dataset.view).classList.add("active");
+});
+
+// ---------- Toast ----------
+function toast(msg, err) {
+  const t = document.createElement("div");
+  t.className = "toast" + (err ? " err" : "");
+  t.textContent = msg;
+  $("toasts").appendChild(t);
+  setTimeout(() => t.remove(), 3200);
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error((await r.text().catch(() => "")) || r.status);
+  return r.json();
+}
+
+// ---------- 初始加载 ----------
+async function load() {
+  const [st, rc] = await Promise.all([api("/api/state"), api("/api/records")]);
+  applyState(st);
+  rc.records.forEach(addFeed);
+  renderFeed();
+}
+
+// ---------- SSE ----------
+function connect() {
+  const es = new EventSource("/api/events");
+  es.onmessage = e => {
+    const ev = JSON.parse(e.data);
+    if (ev.type === "log") pushLog(ev.data.line);
+    else if (ev.type === "file") { addFeed(ev.data); renderFeed(); }
+    else if (ev.type === "progress") applyProgress(ev.data);
+    else if (ev.type === "peers") renderPeers(ev.data);
+    else if (ev.type === "state") applyState(ev.data);
+    else if (ev.type === "pair_request") showPairModal(ev.data.id, ev.data.name);
+  };
+  es.onerror = () => { es.close(); setTimeout(connect, 2000); };
+}
+
+// ---------- 状态 ----------
+function applyState(st) {
+  state = st;
+  $("dot").classList.toggle("on", st.peer_count > 0);
+  $("peerCount").textContent = st.peer_count;
+  $("selfInfo").textContent = st.node_name + " · " + st.self_ip;
+  $("feedSub").textContent = st.peer_count > 0
+    ? `${st.peer_count} 个节点在线 · 复制即同步` : "暂无在线节点";
+  const sw = $("syncSwitch");
+  if (sw.checked !== st.paused) sw.checked = !st.paused;
+  const ke = $("kvmEnabled");
+  if (ke.checked !== !!st.kvm_enabled) ke.checked = !!st.kvm_enabled;
+  renderLayout();
+}
+
+// ---------- 动态流 ----------
+const ICON_UP = '<svg class="ic" viewBox="0 0 24 24"><path d="M20 4L6 10.5l5.5 1.5z" fill="currentColor" fill-opacity="0.25"/><path d="M20 4l-8.5 8 1.5 6z"/><line x1="11.5" y1="12" x2="20" y2="4"/></svg>';
+const ICON_DOWN = '<svg class="ic" viewBox="0 0 24 24"><path d="M4 20l14-6.5-5.5-1.5z" fill="currentColor" fill-opacity="0.25"/><path d="M4 20l8.5-8-1.5-6z"/><line x1="12.5" y1="12" x2="4" y2="20"/></svg>';
+
+function addFeed(r) { feed.push(r); if (feed.length > 300) feed.shift(); }
+
+function renderFeed() {
+  const el = $("feed");
+  el.innerHTML = "";
+  if (!feed.length) {
+    el.innerHTML = `<div class="empty">
+      <div class="art"><svg class="ic" viewBox="0 0 24 24" style="width:28px;height:28px"><path d="M20 4L5 11l6.5 2z" fill="currentColor" fill-opacity="0.25"/><path d="M20 4l-8.5 9 2 6z"/><line x1="11.5" y1="13" x2="20" y2="4"/><line x1="6" y1="18.5" x2="8.5" y2="16" stroke-linecap="round" stroke-width="2"/></svg></div>
+      <b>还没有传输记录</b>在本机 Ctrl+C 复制文件或文本，会自动同步到所有在线节点；<br>也可以把文件直接拖进本窗口发送。
+    </div>`;
+    return;
+  }
+  for (let i = feed.length - 1; i >= 0; i--) {
+    const r = feed[i];
+    const div = document.createElement("div");
+    div.className = "item";
+    const dir = r.in ? "in" : "out";
+    div.innerHTML = `
+      <div class="ico ${dir}">${r.in ? ICON_DOWN : ICON_UP}</div>
+      <div class="body">
+        <div class="title">${esc(r.name)}</div>
+        <div class="sub"><span>${r.in ? "来自" : "发往"} <b style="font-weight:550">${esc(r.peer)}</b></span>
+          <span class="sep"></span><span>${esc(r.time)}</span>
+          <span class="sep"></span><span>${fmtBytes(r.size)}</span></div>
+      </div>`;
+    const tail = document.createElement("div");
+    tail.className = "acts";
+    const failed = r.status.includes("失败");
+    tail.innerHTML = `<span class="pill ${failed ? "fail" : dir}">${esc(r.status)}</span>`;
+    if (r.in && r.detail) {
+      tail.appendChild(mkBtn("打开", () => openPath({ path: r.detail })));
+      tail.appendChild(mkBtn("所在目录", () => openPath({ path: r.detail, select: true })));
+    }
+    div.appendChild(tail);
+    el.appendChild(div);
+  }
+}
+
+function mkBtn(text, fn) {
+  const b = document.createElement("button");
+  b.className = "chipbtn";
+  b.textContent = text;
+  b.onclick = fn;
+  return b;
+}
+
+// ---------- 进行中传输 ----------
+function applyProgress(p) {
+  const key = p.peer + "|" + p.name;
+  let x = xfers.get(key);
+  if (p.sent < 0) { // 失败终态
+    if (x) { x.el.remove(); xfers.delete(key); }
+    toast(`${p.name} → ${p.peer} 发送失败`, true);
+    return;
+  }
+  if (!x) {
+    const el = document.createElement("div");
+    el.className = "xfer";
+    el.innerHTML = `<div class="cap"><b>${esc(p.name)}</b><span>→ ${esc(p.peer)} · <span class="pct"></span> · <span class="amt"></span></span></div>
+      <div class="bar"><i></i></div>`;
+    $("xferStrip").appendChild(el);
+    x = { el, bar: el.querySelector("i"), pct: el.querySelector(".pct"), amt: el.querySelector(".amt") };
+    xfers.set(key, x);
+  }
+  const pct = p.total > 0 ? Math.min(100, p.sent / p.total * 100) : 100;
+  x.bar.style.width = pct + "%";
+  x.pct.textContent = pct.toFixed(0) + "%";
+  x.amt.textContent = `${fmtBytes(p.sent)} / ${fmtBytes(p.total)}`;
+  if (p.total > 0 && p.sent >= p.total) {
+    setTimeout(() => { x.el.remove(); xfers.delete(key); }, 2500);
+  }
+}
+
+// ---------- 节点 ----------
+let lastPeers = [];
+function renderPeers(peers) {
+  lastPeers = peers;
+  const grid = $("peerGrid");
+  grid.innerHTML = "";
+  // 本机卡片
+  const self = document.createElement("div");
+  self.className = "peer-card self";
+  self.innerHTML = `
+    <div class="head"><div class="avatar">${esc((state.node_name || "?")[0].toUpperCase())}</div>
+      <div><div class="name">${esc(state.node_name || "")}<span class="tag">本机</span></div>
+      <div class="id">本节点 · 自动同步${state.paused ? "已暂停" : "运行中"}</div></div></div>
+    <div class="ip-chips"><span class="ip-chip primary">${esc(state.self_ip || "")}</span></div>
+    <div class="foot"><span>面板与传输服务运行中</span></div>`;
+  grid.appendChild(self);
+
+  if (!peers.length) {
+    grid.insertAdjacentHTML("beforeend", `<div class="peer-card" style="grid-column:1/-1">
+      <div class="empty" style="padding:28px 16px"><b>暂无在线节点</b>
+      正在等待 UDP 广播发现…请确认对端已运行 copywhere、且防火墙已放行。</div></div>`);
+    return;
+  }
+  for (const p of peers) {
+    const card = document.createElement("div");
+    card.className = "peer-card";
+    const chips = p.ips.map((ip, i) =>
+      `<span class="ip-chip ${i === 0 ? "primary" : ""}">${esc(ip)}</span>`).join("");
+    const stateTag = p.blocked
+      ? `<span class="tag warn">已被拒</span>`
+      : (p.paired ? `<span class="tag ok">已配对</span>` : "");
+    const hact = p.paired ? "" : `<div class="hact"><button class="btn primary" data-pair>配对</button></div>`;
+    card.innerHTML = `
+      <div class="head"><div class="avatar">${esc((p.name || "?")[0].toUpperCase())}</div>
+        <div><div class="name">${esc(p.name)}${stateTag}</div>
+        <div class="id">${esc(p.id.slice(0, 8))}</div></div>${hact}</div>
+      <div class="ip-chips">${chips}</div>
+      <div class="foot"><span>${p.tcp_port}/tcp</span><span class="sep"></span>
+        <span>${esc(p.idle)}前活跃</span></div>`;
+    const pb = card.querySelector("[data-pair]");
+    if (pb) pb.onclick = () => pairWith(p.id, p.name);
+    grid.appendChild(card);
+  }
+  renderLayout();
+}
+
+// ---------- 屏幕布局（KVM，仿多显示器排列） ----------
+let layoutSelected = "";
+let layoutSig = "";
+
+function findPeerByName(name) { return lastPeers.find(p => p.name === name); }
+
+function screenTile(opt) {
+  // opt: {side:"left"|"right"|null, name, self}
+  const div = document.createElement("div");
+  div.className = "screen";
+  let inner = "", sub = "", offline = false;
+  if (opt.self) {
+    div.classList.add("self");
+    sub = esc(state.self_ip || "");
+  } else if (opt.name) {
+    const p = findPeerByName(opt.name);
+    offline = !p;
+    if (offline) div.classList.add("offline");
+    sub = p ? esc(p.ips[0] || "") : "离线 / 未发现";
+  } else {
+    div.classList.add("empty");
+  }
+  const label = opt.side
+    ? `<span class="side-label">${opt.side === "left" ? "左邻（推向左边缘控制）" : "右邻（推向右边缘控制）"}</span>` : "";
+  const clear = opt.name && opt.side
+    ? `<button class="scr-x" title="取消该侧配置">✕</button>` : "";
+  if (opt.empty) {
+    inner = `${label}<div class="bezel"><span style="font-size:20px">＋</span><span class="scr-sub">拖动设备到这${opt.side === "left" ? "左" : "右"}侧</span></div>
+      <div class="stand"></div><div class="base"></div>`;
+  } else {
+    const nm = opt.self ? state.node_name : opt.name;
+    inner = `${label}<div class="bezel">${clear}
+        <span class="initial">${esc((nm || "?")[0].toUpperCase())}</span>
+        <span class="scr-name">${esc(nm || "")}</span>
+        <span class="scr-sub">${sub}</span></div>
+      <div class="stand"></div><div class="base"></div>`;
+  }
+  div.innerHTML = inner;
+  const xb = div.querySelector(".scr-x");
+  if (xb) xb.onclick = () => saveKvm(
+    opt.side === "left" ? "" : (state.kvm_left || ""),
+    opt.side === "right" ? "" : (state.kvm_right || ""),
+    !!state.kvm_enabled);
+  return div;
+}
+
+function renderLayout() {
+  const left = state.kvm_left || "", right = state.kvm_right || "";
+  // 内容签名：无变化不重绘，避免周期快照打断进行中的拖拽
+  const sig = JSON.stringify([left, right, state.kvm_enabled, state.node_name,
+    lastPeers.map(p => p.name + "@" + p.ips.join(","))]);
+  if (sig === layoutSig) return;
+  layoutSig = sig;
+
+  const canvas = $("layoutCanvas");
+  canvas.innerHTML = "";
+  const mk = (side, assigned) => {
+    const t = screenTile({
+      side, name: assigned, empty: !assigned && side !== null,
+      self: side === null,
+    });
+    if (side && !assigned) {
+      t.addEventListener("dragover", e => {
+        e.preventDefault(); e.dataTransfer.dropEffect = "copy";
+        t.classList.add("drag-hot");
+      });
+      t.addEventListener("dragleave", () => t.classList.remove("drag-hot"));
+      t.addEventListener("drop", e => {
+        e.preventDefault(); t.classList.remove("drag-hot");
+        let name = e.dataTransfer.getData("text/plain");
+        try { name = JSON.parse(name).name || name; } catch (_) {}
+        if (name) assignSide(side, name);
+      });
+    }
+    return t;
+  };
+  canvas.appendChild(mk("left", left));
+  canvas.appendChild(mk(null, state.node_name)); // 本机，固定居中
+  canvas.appendChild(mk("right", right));
+
+  // 可用设备托盘：未配置到任何一侧的在线设备
+  const tray = $("deviceTray");
+  tray.innerHTML = "";
+  const avail = lastPeers.filter(p => p.name !== left && p.name !== right);
+  if (!avail.length) {
+    tray.innerHTML = `<span class="hint">暂无未配置的在线设备。邻居设备离线时也会显示在画布上（灰色）。</span>`;
+  }
+  for (const p of avail) {
+    const chip = document.createElement("div");
+    chip.className = "dev" + (layoutSelected === p.name ? " selected" : "");
+    chip.draggable = true;
+    chip.innerHTML = `<span class="initial">${esc((p.name || "?")[0].toUpperCase())}</span>
+      <div><div class="nm">${esc(p.name)}</div><div class="ip">${esc(p.ips[0] || "")}</div></div>
+      <div class="quick">
+        <button class="chipbtn" data-side="left">设为左邻</button>
+        <button class="chipbtn" data-side="right">设为右邻</button>
+      </div>`;
+    chip.addEventListener("dragstart", e => {
+      e.dataTransfer.setData("text/plain", p.name);
+      e.dataTransfer.effectAllowed = "copy";
+      chip.classList.add("dragging");
+    });
+    chip.addEventListener("dragend", () => chip.classList.remove("dragging"));
+    chip.addEventListener("click", e => {
+      if (e.target.closest("button")) return; // 快捷按钮自行处理
+      layoutSelected = layoutSelected === p.name ? "" : p.name;
+      renderLayout();
+    });
+    chip.querySelectorAll("[data-side]").forEach(b => b.onclick = () => {
+      assignSide(b.dataset.side, p.name);
+    });
+    tray.appendChild(chip);
+  }
+}
+
+function assignSide(side, name) {
+  let left = state.kvm_left || "", right = state.kvm_right || "";
+  if (side === "left") {
+    if (right === name) right = left; // 已在另一侧：交换位置
+    left = name;
+  } else {
+    if (left === name) left = right;
+    right = name;
+  }
+  saveKvm(left, right, !!state.kvm_enabled);
+}
+
+async function saveKvm(left, right, enabled) {
+  // 邻居配置即时热生效；只有启用/停用跨屏（kvm_enabled）需要重启
+  const enableChanged = enabled !== !!state.kvm_enabled;
+  const body = { kvm_left: left, kvm_right: right };
+  if (enableChanged) body.kvm_enabled = enabled;
+  try {
+    await api("/api/config", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    state.kvm_left = left; state.kvm_right = right;
+    if (enableChanged) state.kvm_enabled = enabled;
+    layoutSig = ""; // 强制重绘
+    renderLayout();
+    const sw = $("kvmEnabled");
+    if (sw.checked !== enabled) sw.checked = enabled;
+    toast(enableChanged ? "布局已保存（启用/停用跨屏重启后生效）" : "布局已保存，已即时生效并同步到对端");
+  } catch (e) { toast("保存失败: " + e.message, true); }
+}
+
+$("kvmEnabled").addEventListener("change", e => {
+  saveKvm(state.kvm_left || "", state.kvm_right || "", e.target.checked);
+});
+
+// ---------- 配对 ----------
+async function pairWith(id, name) {
+  try {
+    await api("/api/pair", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+    toast(`已与「${name}」完成配对`);
+  } catch (e) { toast("配对失败: " + e.message, true); }
+}
+
+let pairPendingId = "";
+function showPairModal(id, name) {
+  pairPendingId = id;
+  $("pairName").textContent = name || id;
+  $("pairFp").textContent = "节点指纹: " + id.slice(0, 16) + "…";
+  $("pairModal").classList.add("show");
+}
+
+async function respondPair(accept) {
+  try {
+    await api("/api/pair/respond", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ accept }) });
+    toast(accept ? "已接受配对，双方现在可以互相同步" : "已拒绝配对请求");
+  } catch (e) { toast("操作失败: " + e.message, true); }
+  $("pairModal").classList.remove("show");
+}
+
+async function checkPendingPair() {
+  try {
+    const r = await api("/api/pair/pending");
+    if (r.pending && !$("pairModal").classList.contains("show")) {
+      showPairModal(r.pending.id, r.pending.name);
+    }
+  } catch (e) { /* 忽略：SSE 也会推送 */ }
+}
+
+// ---------- 暂停开关 ----------
+$("syncSwitch").addEventListener("change", async e => {
+  const paused = e.target.checked;
+  try {
+    const r = await api("/api/pause", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paused }) });
+    state.paused = r.paused;
+    toast(paused ? "自动同步已暂停（手动发送不受影响）" : "自动同步已恢复");
+  } catch (err) {
+    e.target.checked = !paused;
+    toast("操作失败: " + err.message, true);
+  }
+});
+
+// ---------- 发送文件（选择 + 全局拖拽） ----------
+$("sendFileBtn").onclick = () => $("pick").click();
+$("pick").onchange = e => { if (e.target.files.length) upload(e.target.files); e.target.value = ""; };
+
+let dragDepth = 0;
+window.addEventListener("dragenter", e => {
+  if (![...e.dataTransfer.types].includes("Files")) return;
+  e.preventDefault();
+  if (++dragDepth === 1) {
+    $("dropTitle").textContent = state.peer_count > 0
+      ? `松开鼠标，发送到 ${state.peer_count} 个在线节点` : "松开鼠标上传（当前无在线节点）";
+    $("dropzone").classList.add("show");
+  }
+});
+window.addEventListener("dragover", e => e.preventDefault());
+window.addEventListener("dragleave", e => {
+  e.preventDefault();
+  if (--dragDepth <= 0) { dragDepth = 0; $("dropzone").classList.remove("show"); }
+});
+window.addEventListener("drop", e => {
+  e.preventDefault();
+  dragDepth = 0;
+  $("dropzone").classList.remove("show");
+  if (e.dataTransfer.files.length) upload(e.dataTransfer.files);
+});
+
+function upload(files) {
+  if (!state.peer_count) { toast("当前无在线节点，无法发送", true); return; }
+  const fd = new FormData();
+  let total = 0;
+  for (const f of files) { fd.append("files", f, f.name); total += f.size; }
+  const key = "upload|" + files[0].name + (files.length > 1 ? ` 等${files.length}个` : "");
+  let x = xfers.get(key);
+  if (!x) {
+    const el = document.createElement("div");
+    el.className = "xfer";
+    el.innerHTML = `<div class="cap"><b>上传 ${esc(files.length)} 个文件</b><span><span class="pct"></span> · <span class="amt"></span></span></div>
+      <div class="bar"><i></i></div>`;
+    $("xferStrip").appendChild(el);
+    x = { el, bar: el.querySelector("i"), pct: el.querySelector(".pct"), amt: el.querySelector(".amt") };
+    xfers.set(key, x);
+  }
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", "/api/upload");
+  xhr.upload.onprogress = e => {
+    if (!e.lengthComputable) return;
+    const pct = e.loaded / total * 100;
+    x.bar.style.width = pct + "%";
+    x.pct.textContent = pct.toFixed(0) + "%";
+    x.amt.textContent = `${fmtBytes(e.loaded)} / ${fmtBytes(total)}`;
+  };
+  xhr.onload = () => {
+    if (xhr.status === 200) {
+      x.bar.style.width = "100%";
+      x.pct.textContent = "已上传";
+      x.amt.textContent = "正在发送到在线节点";
+      setTimeout(() => { x.el.remove(); xfers.delete(key); }, 1800);
+      toast("上传完成，已开始发送");
+    } else {
+      x.el.remove(); xfers.delete(key);
+      toast("上传失败: " + (xhr.responseText || xhr.status), true);
+    }
+  };
+  xhr.onerror = () => { x.el.remove(); xfers.delete(key); toast("上传失败（网络错误）", true); };
+  xhr.send(fd);
+}
+
+// ---------- 发送文本 ----------
+$("sendTextBtn").onclick = () => { $("textModal").classList.add("show"); $("sendTextArea").focus(); };
+$("textModal").addEventListener("click", e => { if (e.target === $("textModal")) closeTextModal(); });
+function closeTextModal() { $("textModal").classList.remove("show"); $("sendTextArea").value = ""; }
+
+async function sendText() {
+  const text = $("sendTextArea").value;
+  if (!text.trim()) return;
+  try {
+    await api("/api/send-text", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+    closeTextModal();
+    toast("文本已开始发送");
+  } catch (e) { toast("发送失败: " + e.message, true); }
+}
+
+// ---------- 打开路径 ----------
+async function openPath(body) {
+  try { await api("/api/open", { method: "POST",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); }
+  catch (e) { toast("打开失败: " + e.message, true); }
+}
+
+// ---------- 控制台抽屉 ----------
+let unread = 0;
+const logs = [];
+function pushLog(line) {
+  logs.push(line);
+  if (logs.length > 1000) logs.shift();
+  const box = $("consoleBody");
+  box.textContent = logs.join("\n");
+  $("consoleCount").textContent = `${logs.length} 行`;
+  if ($("console").classList.contains("open") && $("autoscroll").checked) {
+    box.scrollTop = box.scrollHeight;
+  } else {
+    unread++;
+    const b = $("consoleBadge");
+    b.hidden = false;
+    b.textContent = unread > 99 ? "99+" : unread;
+  }
+}
+$("consoleBtn").onclick = () => {
+  $("console").classList.toggle("open");
+  unread = 0;
+  $("consoleBadge").hidden = true;
+  if ($("console").classList.contains("open")) $("consoleBody").scrollTop = $("consoleBody").scrollHeight;
+};
+$("consoleClose").onclick = () => $("console").classList.remove("open");
+$("consoleClear").onclick = () => { logs.length = 0; $("consoleBody").textContent = ""; };
+
+// ---------- 设置面板 ----------
+$("settingsBtn").onclick = () => { openSettings(); loadPaired(); $("scrim").classList.add("show"); $("settings").classList.add("open"); };
+$("settingsClose").onclick = closePanels;
+$("scrim").onclick = closePanels;
+function closePanels() {
+  $("scrim").classList.remove("show");
+  $("settings").classList.remove("open");
+}
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") {
+    closePanels(); closeTextModal();
+    $("pairModal").classList.remove("show");
+    $("dropzone").classList.remove("show"); dragDepth = 0;
+  }
+});
+
+let cfgLoaded = false;
+async function openSettings() {
+  $("cfgMsg").textContent = "";
+  $("cfgMsg").className = "msg";
+  try {
+    const r = await api("/api/config");
+    const c = r.config;
+    $("cfg_node_name").value = c.node_name || "";
+    $("cfg_max_auto_copy_mb").value = c.max_auto_copy_mb ?? 10;
+    $("cfg_receive_dir").value = c.receive_dir || "";
+    $("cfg_auto_paste").checked = !!c.auto_paste;
+    $("cfg_text_sync").checked = !!c.text_sync;
+    $("cfgPath").textContent = "配置文件: " + r.path;
+    cfgLoaded = true;
+  } catch (e) {
+    $("cfgMsg").className = "msg err";
+    $("cfgMsg").textContent = "读取配置失败: " + e.message;
+  }
+}
+
+async function saveCfg() {
+  const m = $("cfgMsg");
+  const body = {
+    node_name: $("cfg_node_name").value.trim(),
+    max_auto_copy_mb: Number($("cfg_max_auto_copy_mb").value || 0),
+    receive_dir: $("cfg_receive_dir").value.trim(),
+    auto_paste: $("cfg_auto_paste").checked,
+    text_sync: $("cfg_text_sync").checked,
+  };
+  try {
+    const r = await api("/api/config", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    m.className = "msg ok";
+    m.textContent = r.restart_required?.length
+      ? `已保存；节点名等需重启生效（${r.restart_required.join(", ")}）` : "已保存，立即生效";
+    toast("配置已保存");
+  } catch (e) {
+    m.className = "msg err";
+    m.textContent = "保存失败: " + e.message;
+  }
+}
+
+// ---------- 已配对设备 ----------
+async function loadPaired() {
+  const el = $("pairedList");
+  try {
+    const r = await api("/api/paired");
+    if (!r.paired.length) {
+      el.textContent = "暂无配对设备：在「在线节点」页点击「配对」，对端确认后即完成。";
+      return;
+    }
+    el.innerHTML = "";
+    for (const d of r.paired) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border)";
+      row.innerHTML = `<div style="flex:1;min-width:0">
+          <div style="font-weight:550">${esc(d.name || "未命名节点")}</div>
+          <div class="hint" style="font-family:var(--mono)">${esc(d.id.slice(0, 12))}… · ${esc(d.paired_at)}</div>
+        </div>`;
+      const b = document.createElement("button");
+      b.className = "chipbtn";
+      b.textContent = "解除配对";
+      b.onclick = async () => {
+        if (!confirm(`解除与「${d.name || d.id.slice(0, 8)}」的配对？双方将无法再互相同步。`)) return;
+        try {
+          await api("/api/unpair", { method: "POST",
+            headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: d.id }) });
+          toast("已解除配对");
+          loadPaired();
+        } catch (e) { toast("解除失败: " + e.message, true); }
+      };
+      row.appendChild(b);
+      el.appendChild(row);
+    }
+  } catch (e) {
+    el.textContent = "读取配对列表失败: " + e.message;
+  }
+}
+
+// ---------- 主题 ----------
+const THEMES = ["auto", "light", "dark"];
+const THEME_ICON = {
+  auto: '<svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 4v16a8 8 0 0 0 0-16z" fill="currentColor" fill-opacity="0.3"/></svg>',
+  light: '<svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M2.5 12H5M19 12h2.5M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/></svg>',
+  dark: '<svg class="ic" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" fill="currentColor" fill-opacity="0.2"/><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>'
+};
+function applyTheme() {
+  const t = localStorage.getItem("cw-theme") || "auto";
+  if (t === "auto") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.dataset.theme = t;
+  $("themeBtn").innerHTML = THEME_ICON[t];
+  $("themeBtn").title = "主题: " + ({ auto: "跟随系统", light: "浅色", dark: "深色" }[t]);
+}
+$("themeBtn").onclick = () => {
+  const cur = localStorage.getItem("cw-theme") || "auto";
+  localStorage.setItem("cw-theme", THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length]);
+  applyTheme();
+};
+applyTheme();
+
+// ---------- 启动 ----------
+fetch("/api/state").then(r => r.json()).then(st => {
+  $("ver").textContent = "面板 v" + (st.version || "1");
+}).catch(() => {});
+load().then(() => { connect(); checkPendingPair(); }).catch(e => {
+  toast("面板加载失败: " + e.message, true);
+  connect();
+});
+</script>
+</body>
+</html>

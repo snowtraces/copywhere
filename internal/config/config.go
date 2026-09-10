@@ -10,9 +10,9 @@ import (
 )
 
 // Config 是 copywhere 的持久化配置。
+// 注意：已无共享 token 字段——传输鉴权只认配对令牌（peers.json）。
 type Config struct {
 	NodeName      string `json:"node_name"`                   // 本节点显示名，默认主机名
-	Token         string `json:"token"`                       // 传输鉴权令牌，所有节点必须一致
 	DiscoveryPort int    `json:"discovery_port"`              // UDP 发现端口
 	TransferPort  int    `json:"transfer_port"`               // TCP 传输端口
 	MaxAutoCopyMB int64  `json:"max_auto_copy_mb"`            // 剪贴板自动同步的容量阈值（MB），0 表示不限制
@@ -26,6 +26,8 @@ type Config struct {
 	KVMLeft       string `json:"kvm_left"`                    // 左边缘邻居节点名（光标推向左边缘时控制它）
 	KVMRight      string `json:"kvm_right"`                   // 右边缘邻居节点名
 	KVMEntryMon   *int   `json:"kvm_entry_monitor,omitempty"` // 被控入口显示器下标（缺省 -1=主显示器）
+	WebPort       int    `json:"web_port"`                    // GUI 面板端口（gui 命令；0=默认，负数=随机）
+	Path          string `json:"-"`                           // 配置文件实际路径（Load 时填充；信任库/面板地址等派生文件放在同目录）
 }
 
 // KVMEntryMonitorIdx 返回被控入口显示器下标（未配置 → -1 = 主显示器）。
@@ -46,13 +48,8 @@ func Default() (*Config, error) {
 	if err != nil {
 		home = "."
 	}
-	token, err := RandomHex(16)
-	if err != nil {
-		return nil, err
-	}
 	return &Config{
 		NodeName:      host,
-		Token:         token,
 		DiscoveryPort: 47830,
 		TransferPort:  47831,
 		MaxAutoCopyMB: 10,
@@ -62,6 +59,7 @@ func Default() (*Config, error) {
 		AnnounceSec:   2,
 		PeerTTLSec:    12,
 		KVMPort:       47832,
+		WebPort:       47890,
 	}, nil
 }
 
@@ -85,6 +83,7 @@ func Load(path string) (*Config, error) {
 		if derr != nil {
 			return nil, derr
 		}
+		cfg.Path = path
 		if serr := cfg.Save(path); serr != nil {
 			return nil, fmt.Errorf("写入默认配置失败: %w", serr)
 		}
@@ -97,13 +96,7 @@ func Load(path string) (*Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("解析配置 %s 失败: %w", path, err)
 	}
-	if cfg.Token == "" {
-		t, terr := RandomHex(16)
-		if terr != nil {
-			return nil, terr
-		}
-		cfg.Token = t
-	}
+	cfg.Path = path
 	if cfg.DiscoveryPort <= 0 {
 		cfg.DiscoveryPort = 47830
 	}
@@ -125,6 +118,11 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.KVMPort <= 0 {
 		cfg.KVMPort = 47832
+	}
+	if cfg.WebPort < 0 {
+		cfg.WebPort = 0 // 负数 = 随机端口
+	} else if cfg.WebPort == 0 {
+		cfg.WebPort = 47890
 	}
 	return &cfg, nil
 }

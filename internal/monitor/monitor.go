@@ -19,10 +19,11 @@ import (
 	"copywhere/internal/clip"
 )
 
-// Guard 提供防回环状态。
+// Guard 提供防回环状态与暂停开关。
 type Guard struct {
 	OwnSeq         *atomic.Uint32 // 本进程最近一次写剪贴板后的序号
 	LastReceivedAt *atomic.Int64  // 最近一次收到远端内容的 unix nano
+	Paused         *atomic.Bool   // 非 nil 且为 true 时跳过自动同步（内容不累积，恢复后不补发）
 }
 
 // Sender 是监控器触发的发送接口（由 app 实现）。
@@ -34,12 +35,13 @@ type Sender interface {
 const pollInterval = 400 * time.Millisecond
 
 // Run 阻塞运行剪贴板监控，直到 ctx 结束。
-func Run(ctx context.Context, guard Guard, threshold int64, textSync bool, sender Sender) {
+// threshold/textSync 通过 getter 每次轮询读取，使面板修改配置后即时生效。
+func Run(ctx context.Context, guard Guard, threshold func() int64, textSync func() bool, sender Sender) {
 	lastSeq := clip.Seq() // 忽略启动时剪贴板里的既有内容
 	var lastFP, lastText string
 
 	log.Printf("剪贴板监控已启动（每 %s 轮询，自动同步阈值 %s）",
-		pollInterval, thresholdLabel(threshold))
+		pollInterval, thresholdLabel(threshold()))
 	t := time.NewTicker(pollInterval)
 	defer t.Stop()
 
@@ -56,6 +58,9 @@ func Run(ctx context.Context, guard Guard, threshold int64, textSync bool, sende
 		}
 		lastSeq = seq
 
+		if guard.Paused != nil && guard.Paused.Load() {
+			continue // 自动同步已暂停：跳过当前内容，恢复后不补发
+		}
 		if guard.OwnSeq != nil && seq == guard.OwnSeq.Load() {
 			continue // 本进程自己写入的
 		}
@@ -75,9 +80,9 @@ func Run(ctx context.Context, guard Guard, threshold int64, textSync bool, sende
 				continue // 同一批文件，避免重复发送
 			}
 			lastFP = fp
-			if threshold > 0 && total > threshold {
-				log.Printf("剪贴板文件共 %s，超过自动同步阈值 %s，已跳过（可用 send 命令手动发送）",
-					bytesize.Human(total), bytesize.Human(threshold))
+			if th := threshold(); th > 0 && total > th {
+				log.Printf("剪贴板文件共 %s，超过自动同步阈值 %s，已跳过（可在面板或用 send 命令手动发送）",
+					bytesize.Human(total), bytesize.Human(th))
 				continue
 			}
 			log.Printf("检测到剪贴板文件 %d 个，共 %s，开始同步", len(files), bytesize.Human(total))
@@ -86,7 +91,7 @@ func Run(ctx context.Context, guard Guard, threshold int64, textSync bool, sende
 		}
 
 		// 再处理文本
-		if !textSync {
+		if !textSync() {
 			continue
 		}
 		if text, err := clip.ReadText(); err == nil && text != "" {

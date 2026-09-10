@@ -47,6 +47,13 @@ type Config struct {
 	Left         string // 光标从本机暴露的左边缘离开时控制的节点名
 	Right        string // 光标从本机暴露的右边缘离开时控制的节点名
 	EntryMonitor int    // 被控入口显示器索引（-1=主显示器，默认）
+	SelfID       string // 本机节点指纹（配对令牌校验随 hello 发给对端）
+	// TokenForPeer 返回对端签发给本机的配对令牌（本机作为主控连接它时使用）；
+	// 未配对返回 false，回退共享 token。
+	TokenForPeer func(id string) (string, bool)
+	// PairTokenFor 返回本机签发给指定节点的配对令牌（被控端校验对端 hello 用）；
+	// 未配对返回 false，回退共享 token。
+	PairTokenFor func(id string) (string, bool)
 }
 
 // Injector 是输入注入接口（生产环境为 input.DefaultInjector，测试用假实现）。
@@ -72,6 +79,7 @@ type Callbacks interface {
 type wireMsg struct {
 	T     string  `json:"t"`
 	Token string  `json:"token,omitempty"`
+	ID    string  `json:"id,omitempty"` // 主控机节点指纹（被控端据此查配对令牌）
 	Name  string  `json:"name,omitempty"`
 	Dir   string  `json:"dir,omitempty"`
 	Y     float64 `json:"y,omitempty"` // 主控机光标的垂直比例（用于入口位置）
@@ -131,7 +139,6 @@ func (sess *slaveSession) end(writeLeave bool, reason string) {
 type Service struct {
 	cfg      Config
 	nodeName string
-	token    string
 	store    *discovery.Store
 	ttl      time.Duration
 	injector Injector
@@ -154,17 +161,26 @@ type Service struct {
 	mons   []input.Rect
 }
 
-// NewService 创建 KVM 服务。
-func NewService(cfg Config, nodeName, token string, store *discovery.Store,
+// NewService 创建 KVM 服务。鉴权只认配对令牌（Config.PairTokenFor / TokenForPeer）。
+func NewService(cfg Config, nodeName string, store *discovery.Store,
 	ttl time.Duration, injector Injector) *Service {
 	if cfg.Port <= 0 {
 		cfg.Port = 47832
 	}
 	return &Service{
-		cfg: cfg, nodeName: nodeName, token: token,
+		cfg: cfg, nodeName: nodeName,
 		store: store, ttl: ttl, injector: injector,
 		modsDown: map[uint32]bool{},
 	}
+}
+
+// UpdateNeighbors 热更新左右邻居配置（无需重启，下一次切换即生效）。
+func (s *Service) UpdateNeighbors(left, right string) {
+	s.mu.Lock()
+	s.cfg.Left = left
+	s.cfg.Right = right
+	s.mu.Unlock()
+	log.Printf("KVM 邻居已更新：左邻 %q，右邻 %q", left, right)
 }
 
 // inputSetSuppress 包一层避免各处直接依赖 input 包细节。
@@ -325,8 +341,15 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 	if err := readMsg(br, &hello); err != nil || hello.T != "hello" {
 		return
 	}
-	if subtle.ConstantTimeCompare([]byte(hello.Token), []byte(s.token)) != 1 {
-		log.Printf("KVM 拒绝来自 %s 的连接（token 不一致）", conn.RemoteAddr())
+	// 只认配对令牌：按主控机指纹查本机签发的令牌比对
+	if hello.ID == "" || s.cfg.PairTokenFor == nil {
+		log.Printf("KVM 拒绝来自 %s 的连接（主控机未配对）", conn.RemoteAddr())
+		writeMsg(bw, wireMsg{T: "error", Msg: "unauthorized"})
+		return
+	}
+	expected, ok := s.cfg.PairTokenFor(hello.ID)
+	if !ok || subtle.ConstantTimeCompare([]byte(hello.Token), []byte(expected)) != 1 {
+		log.Printf("KVM 拒绝来自 %s 的连接（未配对或令牌无效）", conn.RemoteAddr())
 		writeMsg(bw, wireMsg{T: "error", Msg: "unauthorized"})
 		return
 	}
@@ -468,10 +491,13 @@ func (s *Service) detectLeave(sess *slaveSession, dx int) bool {
 
 // trySwitch 尝试把控制权切到 dir 方向的邻居（"left"/"right"，按节点名匹配）。
 func (s *Service) trySwitch(dir string) {
+	s.mu.Lock()
+	left, right := s.cfg.Left, s.cfg.Right
+	s.mu.Unlock()
 	var peer *discovery.Peer
 	for _, p := range s.store.Alive(s.ttl) {
-		if (dir == "right" && p.Name == s.cfg.Right) ||
-			(dir == "left" && p.Name == s.cfg.Left) {
+		if (dir == "right" && p.Name == right) ||
+			(dir == "left" && p.Name == left) {
 			pp := p
 			peer = &pp
 			break
@@ -479,7 +505,18 @@ func (s *Service) trySwitch(dir string) {
 	}
 	if peer == nil {
 		log.Printf("KVM：%s 方向的邻居 %q 不在线", dir,
-			map[bool]string{true: s.cfg.Right, false: s.cfg.Left}[dir == "right"])
+			map[bool]string{true: right, false: left}[dir == "right"])
+		s.setCooldown(1500 * time.Millisecond)
+		return
+	}
+	// 只与已配对的节点跨屏
+	if s.cfg.TokenForPeer == nil {
+		log.Printf("KVM：跳过 %q（未配对）", peer.Name)
+		s.setCooldown(1500 * time.Millisecond)
+		return
+	}
+	if _, ok := s.cfg.TokenForPeer(peer.ID); !ok {
+		log.Printf("KVM：跳过 %q（未配对，请先在面板中配对）", peer.Name)
 		s.setCooldown(1500 * time.Millisecond)
 		return
 	}
@@ -500,7 +537,7 @@ func (s *Service) trySwitch(dir string) {
 		return
 	}
 
-	sess, err := s.masterHandshake(conn)
+	sess, err := s.masterHandshake(conn, peer.ID)
 	if err != nil {
 		conn.Close()
 		log.Printf("KVM：与 %q 握手失败: %v", peer.Name, err)
@@ -551,11 +588,19 @@ func (s *Service) entryRatio(x, y float64) float64 {
 	return 0.5
 }
 
-func (s *Service) masterHandshake(conn net.Conn) (*masterSession, error) {
+func (s *Service) masterHandshake(conn net.Conn, peerID string) (*masterSession, error) {
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
 	br := bufio.NewReaderSize(conn, 16*1024)
 	bw := bufio.NewWriter(conn)
-	if err := writeMsg(bw, wireMsg{T: "hello", Token: s.token, Name: s.nodeName}); err != nil {
+	// 只认配对令牌：对端签发给本机的令牌
+	if peerID == "" || s.cfg.TokenForPeer == nil {
+		return nil, fmt.Errorf("未配对")
+	}
+	token, ok := s.cfg.TokenForPeer(peerID)
+	if !ok {
+		return nil, fmt.Errorf("未配对")
+	}
+	if err := writeMsg(bw, wireMsg{T: "hello", Token: token, ID: s.cfg.SelfID, Name: s.nodeName}); err != nil {
 		return nil, err
 	}
 	var resp wireMsg

@@ -8,3 +8,6 @@ smoke/
 
 # 运行时目录（不应出现在仓库内）
 .copywhere/
+
+# 代码审查报告（本地留存，不入库）
+.review_report/

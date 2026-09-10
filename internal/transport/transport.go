@@ -10,7 +10,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -42,13 +41,38 @@ func TimeoutFor(size int64) time.Duration {
 
 // Header 是每次传输的 JSON 头。
 type Header struct {
-	V      int    `json:"v"`      // 协议版本
-	Token  string `json:"token"`  // 鉴权令牌
-	Type   string `json:"type"`   // "file" | "text"
-	Name   string `json:"name"`   // 文件名（text 时为 "text"）
-	Size   int64  `json:"size"`   // 负载字节数
-	SHA256 string `json:"sha256"` // 负载 sha256
-	Sender string `json:"sender"` // 发送方节点名
+	V        int    `json:"v"`                   // 协议版本
+	Token    string `json:"token"`               // 鉴权令牌（对方签发给本节点的配对令牌）
+	Type     string `json:"type"`                // "file" | "text" | "pair" | "kvm"
+	Name     string `json:"name"`                // 文件名（text/kvm 时为固定标识）
+	Size     int64  `json:"size"`                // 负载字节数
+	SHA256   string `json:"sha256"`              // 负载 sha256
+	Sender   string `json:"sender"`              // 发送方节点名
+	SenderID string `json:"sender_id,omitempty"` // 发送方节点指纹（配对令牌校验依赖它）
+}
+
+// PairOffer 是配对请求负载：发起方出示自己的身份与签发给对端的令牌。
+type PairOffer struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Token string `json:"token"`
+}
+
+// PairDecision 是被控方对配对请求的裁决。
+// 接受时 Token 为被控方新签发给发起方的令牌，发起方之后发送内容须携带它。
+type PairDecision struct {
+	Accepted bool
+	Token    string
+	ID       string
+	Name     string
+}
+
+// KVMSync 是 KVM 布局同步负载：发送方告知接收方
+// "把我放到你的 Side 侧"（Side 为接收方视角的 left/right）。
+type KVMSync struct {
+	PeerID   string `json:"peer_id"`
+	PeerName string `json:"peer_name"`
+	Side     string `json:"side"` // "left" | "right"
 }
 
 // Response 是接收方的 JSON 应答。
@@ -57,12 +81,28 @@ type Response struct {
 	Error     string `json:"error,omitempty"`
 	Path      string `json:"path,omitempty"`      // 接收后的最终路径
 	Duplicate bool   `json:"duplicate,omitempty"` // 内容已存在
+	Token     string `json:"token,omitempty"`     // 配对接受时：对端签发的令牌
+	PeerID    string `json:"peer_id,omitempty"`   // 配对接受时：对端节点指纹
+	PeerName  string `json:"peer_name,omitempty"` // 配对接受时：对端节点名
+}
+
+// Handlers 是传输服务的回调集合。
+type Handlers struct {
+	// OnFile 收到文件（已落盘校验通过）。
+	OnFile func(sender, path string, dup bool)
+	// OnText 收到文本。
+	OnText func(sender, text string)
+	// Authorize 鉴权回调（必填）：校验配对令牌，返回 false 即拒绝。
+	Authorize func(hdr Header) bool
+	// OnPair 处理配对请求：校验并等待本机用户裁决（可阻塞），
+	// 接受时返回已签发的 PairDecision，拒绝时返回 Accepted=false。
+	OnPair func(offer PairOffer) PairDecision
+	// OnKVM 处理布局同步：把发送方登记为指定侧的 KVM 邻居并即时生效。
+	OnKVM func(sync KVMSync) error
 }
 
 // Server 启动 TCP 传输服务，直到 ctx 结束。
-func Server(ctx context.Context, cfg *config.Config,
-	onFile func(sender, path string, dup bool),
-	onText func(sender, text string)) error {
+func Server(ctx context.Context, cfg *config.Config, h Handlers) error {
 
 	ln, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", cfg.TransferPort))
 	if err != nil {
@@ -79,13 +119,11 @@ func Server(ctx context.Context, cfg *config.Config,
 			}
 			return err
 		}
-		go handle(conn, cfg, onFile, onText)
+		go handle(conn, cfg, h)
 	}
 }
 
-func handle(conn net.Conn, cfg *config.Config,
-	onFile func(sender, path string, dup bool),
-	onText func(sender, text string)) {
+func handle(conn net.Conn, cfg *config.Config, h Handlers) {
 
 	defer conn.Close()
 	peer := conn.RemoteAddr().String()
@@ -103,19 +141,102 @@ func handle(conn net.Conn, cfg *config.Config,
 		writeResp(conn, Response{Error: "bad header"})
 		return
 	}
-	if hdr.V != 1 || subtle.ConstantTimeCompare([]byte(hdr.Token), []byte(cfg.Token)) != 1 {
-		log.Printf("拒绝 %s 的连接（token 不匹配，请检查两侧 config.json 的 token 是否一致）", peer)
+	if hdr.V != 1 {
+		writeResp(conn, Response{Error: "unsupported version"})
+		return
+	}
+	// 配对请求自成一类：鉴权由配对流程本身（人工确认）完成
+	if hdr.Type == "pair" {
+		handlePair(conn, br, hdr, h, peer)
+		return
+	}
+	authorized := false
+	if h.Authorize != nil {
+		authorized = h.Authorize(hdr)
+	}
+	if !authorized {
+		log.Printf("拒绝 %s 的连接（未配对或令牌无效）", peer)
 		writeResp(conn, Response{Error: "unauthorized"})
 		return
 	}
 	switch hdr.Type {
 	case "file":
-		recvFile(conn, br, hdr, cfg, onFile, peer)
+		recvFile(conn, br, hdr, cfg, h.OnFile, peer)
 	case "text":
-		recvText(conn, br, hdr, onText, peer)
+		recvText(conn, br, hdr, h.OnText, peer)
+	case "kvm":
+		handleKVM(conn, br, hdr, h, peer)
 	default:
 		writeResp(conn, Response{Error: "unknown type"})
 	}
+}
+
+// handleKVM 处理布局同步：负载为 KVMSync（已在鉴权通过后到达）。
+func handleKVM(conn net.Conn, br *bufio.Reader, hdr Header, h Handlers, peer string) {
+	if h.OnKVM == nil {
+		writeResp(conn, Response{Error: "kvm sync unsupported"})
+		return
+	}
+	if hdr.Size <= 0 || hdr.Size > 64*1024 {
+		writeResp(conn, Response{Error: "size out of range"})
+		return
+	}
+	b, err := io.ReadAll(io.LimitReader(br, hdr.Size))
+	if err != nil || int64(len(b)) != hdr.Size {
+		writeResp(conn, Response{Error: "transfer incomplete"})
+		return
+	}
+	var kv KVMSync
+	if json.Unmarshal(b, &kv) != nil || kv.PeerID == "" || kv.PeerName == "" {
+		writeResp(conn, Response{Error: "bad kvm sync"})
+		return
+	}
+	if err := h.OnKVM(kv); err != nil {
+		writeResp(conn, Response{Error: err.Error()})
+		return
+	}
+	writeResp(conn, Response{OK: true})
+}
+
+// handlePair 处理配对请求：读取负载（发起方出示的身份与令牌），
+// 交给 OnPair 等待本机用户裁决，再沿原连接应答（应答无法被第三方伪造）。
+func handlePair(conn net.Conn, br *bufio.Reader, hdr Header, h Handlers, peer string) {
+	if h.OnPair == nil {
+		writeResp(conn, Response{Error: "pair unsupported"})
+		return
+	}
+	if hdr.Size <= 0 || hdr.Size > 64*1024 {
+		writeResp(conn, Response{Error: "size out of range"})
+		return
+	}
+	// 配对需要人工确认，放宽读取截止时间
+	conn.SetDeadline(time.Now().Add(3 * time.Minute))
+	b, err := io.ReadAll(io.LimitReader(br, hdr.Size))
+	if err != nil || int64(len(b)) != hdr.Size {
+		writeResp(conn, Response{Error: "transfer incomplete"})
+		return
+	}
+	var offer PairOffer
+	if json.Unmarshal(b, &offer) != nil || offer.ID == "" || offer.Token == "" {
+		writeResp(conn, Response{Error: "bad pair offer"})
+		return
+	}
+	log.Printf("收到节点 %q（指纹 %s…）的配对请求", offer.Name, shortID(offer.ID))
+	d := h.OnPair(offer)
+	if !d.Accepted {
+		log.Printf("已拒绝节点 %q 的配对请求", offer.Name)
+		writeResp(conn, Response{Error: "pair rejected"})
+		return
+	}
+	log.Printf("已接受节点 %q 的配对请求", d.Name)
+	writeResp(conn, Response{OK: true, Token: d.Token, PeerID: d.ID, PeerName: d.Name})
+}
+
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }
 
 func recvFile(conn net.Conn, br *bufio.Reader, hdr Header, cfg *config.Config,
@@ -199,9 +320,9 @@ func recvText(conn net.Conn, br *bufio.Reader, hdr Header, onText func(sender, t
 	}
 }
 
-// ErrUnauthorized 表示对端因 token 不一致拒绝了传输。
-// 发送方收到此错误后应停止向该节点重试（改 token 需对端重启才生效）。
-var ErrUnauthorized = errors.New("对端拒绝传输（token 不一致）：请把两侧 config.json 的 token 改成相同值后重启对端")
+// ErrUnauthorized 表示对端拒绝传输（未配对、配对已解除或 token 不一致）。
+// 发送方收到此错误后应停止向该节点重试，提示用户在面板中重新配对。
+var ErrUnauthorized = errors.New("对端拒绝传输（未配对或 token 不一致）：请在面板中重新配对，或将两侧 config.json 的 token 改成相同值")
 
 // Send 连接对端并完成一次传输。
 func Send(ip string, port int, hdr Header, payload func(w io.Writer) error, timeout time.Duration) (Response, error) {
