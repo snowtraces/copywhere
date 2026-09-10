@@ -1,9 +1,12 @@
 package app
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"net"
+	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
@@ -86,6 +89,136 @@ func TestProgressWriterThrottle(t *testing.T) {
 	}
 	if s.lastProg.Sent != 933888 {
 		t.Fatalf("最后一次上报应在 933888 字节处，实际 %d", s.lastProg.Sent)
+	}
+}
+
+// buildTestZip 生成测试用 zip：一个含子目录的文件夹 + 一个顶层文件。
+func buildTestZip(t *testing.T, path string, entries map[string]string) {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	zw := zip.NewWriter(f)
+	for name, content := range entries {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestUnpackZip 验证合成 zip 的自动解包：解到所在目录、zip 本体删除、
+// 返回顶层条目，且目录/多文件两类 bundle 都能正确还原。
+func TestUnpackZip(t *testing.T) {
+	t.Run("文件夹包", func(t *testing.T) {
+		dir := t.TempDir()
+		zipPath := filepath.Join(dir, "copywhere-bundle-0102-150405.zip")
+		buildTestZip(t, zipPath, map[string]string{
+			"MyProject/src/main.go":  "package main",
+			"MyProject/README.md":    "hello",
+			"MyProject/docs/api.txt": "api",
+		})
+		tops, err := unpackZip(zipPath)
+		if err != nil {
+			t.Fatalf("解包失败: %v", err)
+		}
+		if _, err := os.Stat(zipPath); !os.IsNotExist(err) {
+			t.Fatal("解包成功后 zip 本体应被删除")
+		}
+		if len(tops) != 1 || filepath.Base(tops[0]) != "MyProject" {
+			t.Fatalf("文件夹包应解出单个顶层目录: %v", tops)
+		}
+		got, err := os.ReadFile(filepath.Join(tops[0], "src", "main.go"))
+		if err != nil || string(got) != "package main" {
+			t.Fatalf("解包内容不一致: %v", err)
+		}
+	})
+
+	t.Run("多文件包", func(t *testing.T) {
+		dir := t.TempDir()
+		zipPath := filepath.Join(dir, "copywhere-bundle-0102-150406.zip")
+		buildTestZip(t, zipPath, map[string]string{
+			"b.txt":      "B",
+			"sub/c.txt":  "C",
+			"notes .txt": "N",
+		})
+		tops, err := unpackZip(zipPath)
+		if err != nil {
+			t.Fatalf("解包失败: %v", err)
+		}
+		if len(tops) != 3 {
+			t.Fatalf("多文件包应解出 3 个顶层条目（含保留的子目录）: %v", tops)
+		}
+		if _, err := os.ReadFile(filepath.Join(dir, "b.txt")); err != nil {
+			t.Fatalf("顶层文件应解到接收子目录根: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "sub", "c.txt")); err != nil {
+			t.Fatalf("子目录结构应保留: %v", err)
+		}
+	})
+
+	t.Run("拒绝伪装路径穿越", func(t *testing.T) {
+		dir := t.TempDir()
+		zipPath := filepath.Join(dir, "evil2.zip")
+		buildTestZip(t, zipPath, map[string]string{
+			"../escape.txt": "bad",
+			".. /evil.txt":  "bad", // 尾部空格伪装
+			".../evil2.txt": "bad", // 多点伪装
+			" . /evil3.txt": "bad", // 点空格混合伪装
+		})
+		if _, err := unpackZip(zipPath); err == nil {
+			t.Fatal("含伪装 .. 的 zip 条目应被拒绝")
+		}
+		parent := filepath.Dir(dir)
+		for _, leak := range []string{"escape.txt", "evil.txt", "evil2.txt", "evil3.txt"} {
+			if _, err := os.Stat(filepath.Join(parent, leak)); err == nil {
+				t.Fatalf("不应解包到目录之外: %s", leak)
+			}
+		}
+	})
+
+	t.Run("保留前导点文件名", func(t *testing.T) {
+		dir := t.TempDir()
+		zipPath := filepath.Join(dir, "dot.zip")
+		buildTestZip(t, zipPath, map[string]string{
+			"MyProject/.gitignore": "build/",
+			"MyProject/pkg.a.":     "trailing dot",
+		})
+		tops, err := unpackZip(zipPath)
+		if err != nil {
+			t.Fatalf("解包失败: %v", err)
+		}
+		if _, err := os.ReadFile(filepath.Join(tops[0], ".gitignore")); err != nil {
+			t.Fatalf("前导点文件名应保留: %v", err)
+		}
+		// Windows 非法的尾部点被剥掉，文件仍解出且不会改名成 (n)
+		if _, err := os.Stat(filepath.Join(tops[0], "pkg.a")); err != nil {
+			t.Fatalf("尾部点应被剥掉后正常解出: %v", err)
+		}
+	})
+}
+
+// TestBundleRecordPath 验证解包后记录映射：文件夹包指向解出的目录本身，
+// 多文件包指向接收子目录——都不应指向已被删除的 zip。
+func TestBundleRecordPath(t *testing.T) {
+	if got := bundleRecordPath([]string{`D:\recv\20260910-120000-A\MyProject`}); filepath.Base(got) != "MyProject" {
+		t.Fatalf("单目标应指向目标本身: %q", got)
+	}
+	dir := `D:\recv\20260910-120001-A`
+	got := bundleRecordPath([]string{filepath.Join(dir, "a.txt"), filepath.Join(dir, "b.txt")})
+	if got != dir {
+		t.Fatalf("多目标应指向接收子目录: %q", got)
+	}
+	if got := bundleRecordPath(nil); got != "" {
+		t.Fatalf("空目标应返回空串: %q", got)
 	}
 }
 

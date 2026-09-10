@@ -1,7 +1,8 @@
 // Package transport 实现节点间的 TCP 传输协议（服务端 + 客户端）。
 //
 // 协议：单行 JSON 头（\n 结尾）+ 原始负载 + 单行 JSON 应答。
-// 文件先落盘为临时文件，校验 sha256 后再改名；同名同内容视为重复。
+// 文件先落盘为临时文件，校验 sha256 后再改名；每次接收落在独立的
+// 子目录（时间戳 + 发送方命名），文件保留原始文件名，不做重命名。
 package transport
 
 import (
@@ -49,6 +50,9 @@ type Header struct {
 	SHA256   string `json:"sha256"`              // 负载 sha256
 	Sender   string `json:"sender"`              // 发送方节点名
 	SenderID string `json:"sender_id,omitempty"` // 发送方节点指纹（配对令牌校验依赖它）
+	// Bundle 为 true 表示负载是发送端因多文件/目录而临时打包的合成 zip，
+	// 接收端可自动解包；用户亲手发送的单个 zip 文件不置位，原样保留。
+	Bundle bool `json:"bundle,omitempty"`
 }
 
 // PairOffer 是配对请求负载：发起方出示自己的身份与签发给对端的令牌。
@@ -88,8 +92,8 @@ type Response struct {
 
 // Handlers 是传输服务的回调集合。
 type Handlers struct {
-	// OnFile 收到文件（已落盘校验通过）。
-	OnFile func(sender, path string, dup bool)
+	// OnFile 收到文件（已落盘校验通过）。bundle 表示该文件是发送端的合成 zip。
+	OnFile func(sender, path string, dup bool, bundle bool)
 	// OnText 收到文本。
 	OnText func(sender, text string)
 	// Authorize 鉴权回调（必填）：校验配对令牌，返回 false 即拒绝。
@@ -240,14 +244,20 @@ func shortID(id string) string {
 }
 
 func recvFile(conn net.Conn, br *bufio.Reader, hdr Header, cfg *config.Config,
-	onFile func(sender, path string, dup bool), peer string) {
+	onFile func(sender, path string, dup bool, bundle bool), peer string) {
 
 	if hdr.Size < 0 || hdr.Size > maxFileBytes {
 		writeResp(conn, Response{Error: "size out of range"})
 		return
 	}
-	dir := cfg.ReceiveDir
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// 每次接收独占一个子目录（时间戳 + 发送方），文件保留原始文件名，
+	// 不再对重名文件追加 " (n)" 之类的改名。
+	if err := os.MkdirAll(cfg.ReceiveDir, 0o755); err != nil {
+		writeResp(conn, Response{Error: "mkdir: " + err.Error()})
+		return
+	}
+	dir, err := newTransferDir(cfg.ReceiveDir, hdr.Sender)
+	if err != nil {
 		writeResp(conn, Response{Error: "mkdir: " + err.Error()})
 		return
 	}
@@ -256,6 +266,7 @@ func recvFile(conn net.Conn, br *bufio.Reader, hdr Header, cfg *config.Config,
 	tmp := filepath.Join(dir, ".cw-partial-"+randHex(6))
 	out, err := os.Create(tmp)
 	if err != nil {
+		removeDirIfEmpty(dir)
 		writeResp(conn, Response{Error: "create temp: " + err.Error()})
 		return
 	}
@@ -265,6 +276,7 @@ func recvFile(conn net.Conn, br *bufio.Reader, hdr Header, cfg *config.Config,
 
 	if cerr != nil || n != hdr.Size {
 		os.Remove(tmp)
+		removeDirIfEmpty(dir)
 		log.Printf("接收 %s 的文件 %q 不完整: got %d/%d bytes, err=%v（多为链路过慢触发超时或对端中断）",
 			peer, hdr.Name, n, hdr.Size, cerr)
 		writeResp(conn, Response{Error: fmt.Sprintf("transfer incomplete: got %d/%d bytes", n, hdr.Size)})
@@ -273,6 +285,7 @@ func recvFile(conn net.Conn, br *bufio.Reader, hdr Header, cfg *config.Config,
 	sum := hex.EncodeToString(h.Sum(nil))
 	if sum != hdr.SHA256 {
 		os.Remove(tmp)
+		removeDirIfEmpty(dir)
 		log.Printf("接收 %s 的文件 %q 校验失败（sha256 不匹配，文件可能在发送途中被修改）", peer, hdr.Name)
 		writeResp(conn, Response{Error: "sha256 mismatch"})
 		return
@@ -281,6 +294,7 @@ func recvFile(conn net.Conn, br *bufio.Reader, hdr Header, cfg *config.Config,
 	final, dup, err := resolvePath(dir, sanitizeName(hdr.Name), sum, hdr.Size)
 	if err != nil {
 		os.Remove(tmp)
+		removeDirIfEmpty(dir)
 		writeResp(conn, Response{Error: err.Error()})
 		return
 	}
@@ -288,13 +302,40 @@ func recvFile(conn net.Conn, br *bufio.Reader, hdr Header, cfg *config.Config,
 		os.Remove(tmp)
 	} else if err := os.Rename(tmp, final); err != nil {
 		os.Remove(tmp)
+		removeDirIfEmpty(dir)
 		writeResp(conn, Response{Error: "rename: " + err.Error()})
 		return
 	}
 	writeResp(conn, Response{OK: true, Path: final, Duplicate: dup})
 	if onFile != nil {
-		onFile(hdr.Sender, final, dup)
+		onFile(hdr.Sender, final, dup, hdr.Bundle)
 	}
+}
+
+// newTransferDir 在 receiveDir 下创建本次接收的专属子目录：
+// `<20060102-150405>-<发送方名>`，同秒冲突时追加 -2、-3……
+// 依赖 os.Mkdir 的排他性保证并发安全。
+func newTransferDir(receiveDir, sender string) (string, error) {
+	if sender == "" {
+		sender = "peer"
+	}
+	base := time.Now().Format("20060102-150405") + "-" + sanitizeName(sender)
+	dir := filepath.Join(receiveDir, base)
+	for i := 2; ; i++ {
+		err := os.Mkdir(dir, 0o755)
+		if err == nil {
+			return dir, nil
+		}
+		if !os.IsExist(err) {
+			return "", err
+		}
+		dir = filepath.Join(receiveDir, fmt.Sprintf("%s-%d", base, i))
+	}
+}
+
+// removeDirIfEmpty 清理接收失败后遗留的空子目录（非空时保留，便于排查）。
+func removeDirIfEmpty(dir string) {
+	os.Remove(dir)
 }
 
 func recvText(conn net.Conn, br *bufio.Reader, hdr Header, onText func(sender, text string), peer string) {
@@ -405,7 +446,9 @@ func sanitizeName(name string) string {
 	return s
 }
 
-// resolvePath 决定接收文件的最终路径；同路径同内容（sha256 相同）返回 duplicate=true。
+// resolvePath 决定接收文件在本次传输子目录内的最终路径；
+// 同路径同内容（sha256 相同）返回 duplicate=true。子目录每次接收独占新建，
+// 正常情况下不会走到重名分支（兜底逻辑仅防御异常竞态）。
 func resolvePath(dir, name, sha string, size int64) (string, bool, error) {
 	p := filepath.Join(dir, name)
 	if _, err := os.Stat(p); err != nil {

@@ -666,17 +666,39 @@ func (a *App) addFile(r ui.FileRecord) {
 
 // ---------- 接收回调 ----------
 
-func (a *App) onFileReceived(sender, path string, dup bool) {
+func (a *App) onFileReceived(sender, path string, dup bool, bundle bool) {
 	a.lastRecv.Store(time.Now().UnixNano())
+
+	// 发送端因多文件/目录自动打包的合成 zip：解包到本次接收子目录，
+	// 剪贴板回贴解包后的内容（单个目录或多个文件）。用户亲手发送的 zip
+	//（bundle=false）原样保留，不误解包。
+	targets := []string{path} // 写回剪贴板的路径列表（默认为文件本身）
+	unpacked := false
+	if bundle && strings.EqualFold(filepath.Ext(path), ".zip") {
+		tops, err := unpackZip(path)
+		if err != nil {
+			log.Printf("自动解包失败（保留原 zip）: %v", err)
+		} else {
+			targets = tops
+			unpacked = true
+			log.Printf("已自动解包为 %d 项内容", len(tops))
+			// 后续日志/统计/记录全部指向解出的内容而非已删除的 zip：
+			// 单个顶层目标（文件夹包）用目标本身，多目标指向接收子目录
+			path = bundleRecordPath(tops)
+		}
+	}
+
 	if a.cfg.AutoPaste {
-		if err := clip.SetFiles([]string{path}); err != nil {
+		if err := clip.SetFiles(targets); err != nil {
 			log.Printf("写入剪贴板失败: %v", err)
 		} else {
 			a.ownSeq.Store(clip.Seq())
 		}
 	}
 	note := ""
-	if dup {
+	if unpacked {
+		note = "（已自动解包）"
+	} else if dup {
 		note = "（已存在相同内容）"
 	}
 	log.Printf("已接收文件 %s（来自 %s）%s，可直接 Ctrl+V", path, sender, note)
@@ -686,14 +708,33 @@ func (a *App) onFileReceived(sender, path string, dup bool) {
 			size = fi.Size()
 		}
 		status := "已接收"
-		if dup {
+		if unpacked {
+			status = "已接收（已解包）"
+		} else if dup {
 			status = "重复内容"
+		}
+		recordName := filepath.Base(path)
+		if unpacked && len(targets) > 1 {
+			recordName += fmt.Sprintf("（%d 项）", len(targets))
 		}
 		a.addFile(ui.FileRecord{
 			Time: time.Now(), In: true, Peer: sender,
-			Name: filepath.Base(path), Size: size, Status: status, Detail: path,
+			Name: recordName, Size: size, Status: status, Detail: path,
 		})
 	}
+}
+
+// bundleRecordPath 返回解包后记录应指向的路径：
+// 单个顶层目标（文件夹包）即目标本身；多个目标则指向本次接收的子目录，
+// 便于一键定位全部内容。
+func bundleRecordPath(targets []string) string {
+	if len(targets) == 1 {
+		return targets[0]
+	}
+	if len(targets) == 0 {
+		return ""
+	}
+	return filepath.Dir(targets[0])
 }
 
 func (a *App) onTextReceived(sender, text string) {
@@ -735,6 +776,7 @@ func (a *App) SendText(text string) {
 func (a *App) sendFilePayload(paths []string) []SendResult {
 	var payloadPath, sendName string
 	var cleanup func()
+	isBundle := false // true = 合成 zip（多文件/目录打包），对端将自动解包
 	if len(paths) == 1 {
 		fi, err := os.Stat(paths[0])
 		if err != nil {
@@ -748,6 +790,7 @@ func (a *App) sendFilePayload(paths []string) []SendResult {
 				log.Printf("打包目录失败: %v", err)
 				return nil
 			}
+			isBundle = true
 		} else {
 			payloadPath = paths[0]
 			sendName = filepath.Base(payloadPath)
@@ -760,6 +803,7 @@ func (a *App) sendFilePayload(paths []string) []SendResult {
 			log.Printf("打包失败: %v", err)
 			return nil
 		}
+		isBundle = true
 	}
 	if cleanup != nil {
 		defer cleanup()
@@ -793,6 +837,7 @@ func (a *App) sendFilePayload(paths []string) []SendResult {
 		hdr := transport.Header{
 			V: 1, Type: "file",
 			Name: sendName, Size: size, SHA256: sha, Sender: a.cfg.NodeName,
+			Bundle: isBundle,
 		}
 		timeout := transport.TimeoutFor(size) + 30*time.Second
 		// 严格按头部声明的 size 发送：文件若中途变化，宁可报错也不多发一个字节，
