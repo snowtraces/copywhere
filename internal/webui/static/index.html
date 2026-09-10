@@ -133,7 +133,8 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: h
 .chipbtn { font-size: 12.5px; padding: 5px 11px; border-radius: 8px;
   border: 1px solid var(--border); color: var(--dim); }
 .chipbtn:hover { border-color: var(--accent); color: var(--accent); }
-.pill { font-size: 12px; padding: 2px 9px; border-radius: 9px; flex: none; }
+.pill { font-size: 12px; padding: 2px 9px; border-radius: 9px; flex: none;
+  display: inline-flex; align-items: center; white-space: nowrap; }
 .pill.ok { background: var(--in-weak); color: var(--in); }
 .pill.fail { background: var(--err-weak); color: var(--err); }
 .pill.out { background: var(--accent-weak); color: var(--accent); }
@@ -157,12 +158,14 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: h
   color: #fff; display: grid; place-items: center; font-weight: 650; font-size: 16px; flex: none; }
 .peer-card .name { font-weight: 650; font-size: 15px; display: flex; align-items: center; gap: 8px; }
 .peer-card .tag { font-size: 11px; padding: 1px 8px; border-radius: 8px;
+  display: inline-flex; align-items: center; white-space: nowrap;
   background: var(--accent-weak); color: var(--accent); font-weight: 500; }
 .peer-card .tag.ok { background: var(--in-weak); color: var(--in); }
 .peer-card .tag.warn { background: var(--err-weak); color: var(--err); }
 .peer-card .id { font-size: 11.5px; color: var(--dim); font-family: var(--mono); }
 .ip-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
 .ip-chip { font-family: var(--mono); font-size: 12px; padding: 4px 9px; border-radius: 7px;
+  display: inline-flex; align-items: center;
   background: var(--track); color: var(--dim); }
 .ip-chip.primary { background: var(--accent-weak); color: var(--accent); font-weight: 550; }
 .peer-card .foot { font-size: 12.5px; color: var(--dim); display: flex; gap: 6px; }

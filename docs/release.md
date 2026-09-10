@@ -25,10 +25,13 @@ gofmt -l .                     # 格式检查，输出应为空
 
 ```powershell
 $v = "vX.Y.Z"   # 与 CHANGELOG / git tag 保持一致
-go build -trimpath -ldflags "-s -w -X copywhere/internal/app.Version=$v" `
+go build -trimpath -ldflags "-s -w -H windowsgui -X copywhere/internal/app.Version=$v" `
   -o copywhere-$v-windows-amd64.exe ./cmd/copywhere
 .\copywhere-$v-windows-amd64.exe version   # 应输出 copywhere vX.Y.Z
 ```
+
+`-H windowsgui` 使双击启动时不弹控制台黑框（gui 模式依赖）；exe 图标与版本
+信息由 `cmd/copywhere/rsrc_windows_amd64.syso` 自动嵌入，无需额外步骤。
 
 产物命名规范：`copywhere-$v-windows-amd64.exe`（未来如有跨平台再加后缀）。
 产物只进 GitHub Release 附件，**不要提交进 git 仓库**。
