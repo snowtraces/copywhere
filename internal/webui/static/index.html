@@ -260,6 +260,15 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: h
 .check { display: flex; align-items: center; gap: 9px; padding: 9px 0; cursor: pointer; }
 .check input { width: 16px; height: 16px; accent-color: var(--accent); }
 .hint { font-size: 12px; color: var(--dim); }
+/* 滑块行：标题右侧实时显示数值 */
+.srow { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; }
+.srow label { margin-bottom: 0; }
+.srow .sval { font: inherit; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 13px; color: var(--accent); }
+input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 26px; background: transparent; cursor: pointer; }
+input[type=range]::-webkit-slider-runnable-track { height: 6px; border-radius: 6px; background: var(--track); }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 18px; height: 18px; margin-top: -6px; border-radius: 50%; background: var(--accent); border: 2px solid var(--card); box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+input[type=range]::-moz-range-track { height: 6px; border-radius: 6px; background: var(--track); }
+input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: var(--accent); border: 2px solid var(--card); }
 .msg { min-height: 20px; font-size: 13px; margin-top: 10px; }
 .msg.ok { color: var(--in); } .msg.err { color: var(--err); } .msg.warn { color: var(--warn); }
 
@@ -442,6 +451,16 @@ main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: h
       <div class="field"><label>接收目录（立即生效）</label>
         <input type="text" id="cfg_receive_dir" spellcheck="false"></div>
       <button class="chipbtn" onclick="openPath({dir:'receive'})">打开接收目录</button>
+    </div>
+    <div class="group"><h4>鼠标跨屏手感（保存后立即生效，无需重启）</h4>
+      <div class="field"><div class="srow"><label>移动合拍间隔</label><span class="sval" id="v_move">默认 8ms</span></div>
+        <input type="range" id="cfg_kvm_move_ms" min="0" max="50" step="1" oninput="syncKvmScales()"></div>
+      <div class="field"><div class="srow"><label>重排注入节拍</label><span class="sval" id="v_reflow">默认 4ms</span></div>
+        <input type="range" id="cfg_kvm_reflow_ms" min="-1" max="50" step="1" oninput="syncKvmScales()"></div>
+      <div class="field"><div class="srow"><label>速度补偿系数</label><span class="sval" id="v_speed">100%</span></div>
+        <input type="range" id="cfg_kvm_speed_pct" min="50" max="300" step="5" value="100" oninput="syncKvmScales()"></div>
+      <p class="hint">合拍=主控端把原始移动攒成一次发送的频率（0=默认8，越小越跟手、越耗带宽）；重排=被控端把收到的位移拆成恒定小步注入以消除台阶感（-1=关闭）。系数=本机作主控时位移 ×此值/100。</p>
+      <p class="hint">拖动即对本机生效：A→B 偏慢调高 A 机系数、B→A 偏慢调高 B 机系数（各机自设）。运行日志有 KVM 切换的标定参考。</p>
     </div>
     <div class="group"><h4>已配对设备</h4>
       <div id="pairedList" class="hint">加载中…</div>
@@ -1062,6 +1081,10 @@ async function openSettings() {
     $("cfg_receive_dir").value = c.receive_dir || "";
     $("cfg_auto_paste").checked = !!c.auto_paste;
     $("cfg_text_sync").checked = !!c.text_sync;
+    $("cfg_kvm_move_ms").value = c.kvm_move_interval_ms ?? 0;
+    $("cfg_kvm_reflow_ms").value = c.kvm_reflow_step_ms ?? 0;
+    $("cfg_kvm_speed_pct").value = c.kvm_speed_percent || 100;
+    syncKvmScales();
     $("cfgPath").textContent = "配置文件: " + r.path;
     cfgLoaded = true;
   } catch (e) {
@@ -1078,6 +1101,9 @@ async function saveCfg() {
     receive_dir: $("cfg_receive_dir").value.trim(),
     auto_paste: $("cfg_auto_paste").checked,
     text_sync: $("cfg_text_sync").checked,
+    kvm_move_interval_ms: Number($("cfg_kvm_move_ms").value || 0),
+    kvm_reflow_step_ms: Number.isNaN(Number($("cfg_kvm_reflow_ms").value)) ? 0 : Number($("cfg_kvm_reflow_ms").value),
+    kvm_speed_percent: Number($("cfg_kvm_speed_pct").value || 100),
   };
   try {
     const r = await api("/api/config", { method: "POST",
@@ -1090,6 +1116,15 @@ async function saveCfg() {
     m.className = "msg err";
     m.textContent = "保存失败: " + e.message;
   }
+}
+
+// 实时刷新跨屏手感滑块的数值气泡（拖动即更新显示，不写后端）。
+function syncKvmScales() {
+  const mv = Number($("cfg_kvm_move_ms").value);
+  $("v_move").textContent = mv <= 0 ? "默认 8ms" : mv + "ms";
+  const rv = Number($("cfg_kvm_reflow_ms").value);
+  $("v_reflow").textContent = rv < 0 ? "已关闭" : (rv === 0 ? "默认 4ms" : rv + "ms");
+  $("v_speed").textContent = Number($("cfg_kvm_speed_pct").value || 100) + "%";
 }
 
 // ---------- 已配对设备 ----------

@@ -25,6 +25,7 @@ type fakeInjector struct {
 	keys    []uint32
 	cursorX int
 	cursorY int
+	speed   int // MouseSpeed 返回值（0=不补偿，保持既有测试语义）
 }
 
 func newFakeInjector() *fakeInjector { return &fakeInjector{} }
@@ -79,6 +80,41 @@ func (f *fakeInjector) relCount() int {
 	defer f.mu.Unlock()
 	return len(f.rels)
 }
+
+// relSum 返回所有相对注入的累计位移 (Σdx, Σdy)，用于验证重排位移守恒。
+func (f *fakeInjector) relSum() (int, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var sx, sy int
+	for _, r := range f.rels {
+		sx += r[0]
+		sy += r[1]
+	}
+	return sx, sy
+}
+
+// maxRelStep 返回单拍最大绝对位移，用于验证重排把大步拆成了小步。
+func (f *fakeInjector) maxRelStep() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m := 0
+	for _, r := range f.rels {
+		for _, v := range [2]int{r[0], r[1]} {
+			if v < 0 {
+				v = -v
+			}
+			if v > m {
+				m = v
+			}
+		}
+	}
+	return m
+}
+func (f *fakeInjector) MouseSpeed() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.speed
+}
 func (f *fakeInjector) absCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -97,6 +133,19 @@ func (f *fakeInjector) setCursor(x, y int) {
 
 func newTestService(t *testing.T, inj Injector) (*Service, int) {
 	t.Helper()
+	// 默认关闭重排（ReflowStep<0），保持逐包直注语义，便于既有测试确定性地
+	// 断言"整包位移即注入位移"。重排行为由 newTestServiceReflow 单独覆盖。
+	return newTestServiceCfg(t, inj, Config{ReflowStep: -1})
+}
+
+// newTestServiceReflow 启用重排注入（reflow），用于验证拆步/守恒/追平。
+func newTestServiceReflow(t *testing.T, inj Injector, step time.Duration) (*Service, int) {
+	t.Helper()
+	return newTestServiceCfg(t, inj, Config{ReflowStep: step})
+}
+
+func newTestServiceCfg(t *testing.T, inj Injector, over Config) (*Service, int) {
+	t.Helper()
 	l, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -106,6 +155,8 @@ func newTestService(t *testing.T, inj Injector) (*Service, int) {
 	store := discovery.NewStore("self")
 	svc := NewService(Config{
 		Port: port, EntryMonitor: -1, SelfID: "SLAVE-ID",
+		MoveInterval: over.MoveInterval,
+		ReflowStep:   over.ReflowStep,
 		// 测试约定：主控机指纹 MASTER-ID 的配对令牌为 "tok"
 		PairTokenFor: func(id string) (string, bool) { return "tok", id == "MASTER-ID" },
 	}, "SLAVE", store, 12*time.Second, inj)
@@ -497,4 +548,145 @@ func waitFor(t *testing.T, cond func() bool, what string) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("等待超时: %s", what)
+}
+
+// 热更新：UpdateTunables 写入后各读取路径（move 合拍/reflow 节拍/速度系数）
+// 立即取到新值，无需重启；默认与哨兵归一化正确。
+func TestUpdateTunablesHotApply(t *testing.T) {
+	inj := newFakeInjector()
+	svc, _ := newTestService(t, inj) // 默认 reflow 关闭（-1）
+
+	if got := svc.currentSpeedPercent(); got != 100 { // 默认 100=不补偿
+		t.Fatalf("默认系数应为 100, got %d", got)
+	}
+	if got := svc.currentMoveInterval(); got != DefaultMoveInterval {
+		t.Fatalf("默认合拍应为 %v, got %v", DefaultMoveInterval, got)
+	}
+	if got := svc.currentReflowStep(); got != -1 {
+		t.Fatalf("默认重排应为 -1（newTestService 关闭）, got %v", got)
+	}
+
+	svc.UpdateTunables(16*time.Millisecond, 5*time.Millisecond, 150)
+	if got := svc.currentMoveInterval(); got != 16*time.Millisecond {
+		t.Fatalf("热更合拍未生效: got %v", got)
+	}
+	if got := svc.currentReflowStep(); got != 5*time.Millisecond {
+		t.Fatalf("热更重排未生效: got %v", got)
+	}
+	if got := svc.currentSpeedPercent(); got != 150 {
+		t.Fatalf("热更系数未生效: got %d", got)
+	}
+	// 哨兵与默认归一：<=0 视为默认，reflow 的 -1 表示关闭（保持负值）
+	svc.UpdateTunables(0, -1, 0)
+	if got := svc.currentMoveInterval(); got != DefaultMoveInterval {
+		t.Fatalf("move=0 应归一为默认, got %v", got)
+	}
+	if got := svc.currentReflowStep(); got != -1 {
+		t.Fatalf("reflow=-1 应保持关闭语义, got %v", got)
+	}
+	if got := svc.currentSpeedPercent(); got != 100 {
+		t.Fatalf("speed<=0 应归一为 100, got %d", got)
+	}
+}
+
+// 手调系数：speedGainPct = 百分比/100；<=0 视为 100（1.0x，不补偿）。
+func TestSpeedGainPct(t *testing.T) {
+	cases := []struct {
+		pct  int
+		want float64
+	}{
+		{0, 1},      // 未配置 → 1.0
+		{-5, 1},     // 非法 → 1.0
+		{100, 1},    // 基准
+		{125, 1.25}, // 偏慢上调
+		{80, 0.8},   // 偏快下调
+	}
+	for _, c := range cases {
+		if got := speedGainPct(c.pct); got != c.want {
+			t.Fatalf("pct=%d: got %.2f, want %.2f", c.pct, got, c.want)
+		}
+	}
+}
+
+// 缩放补偿的取宽：返回光标所属显示器的物理宽（fake 两屏均 1920 宽）。
+func TestMonitorWidthAt(t *testing.T) {
+	inj := newFakeInjector()
+	svc, _ := newTestService(t, inj)
+	if got := svc.monitorWidthAt(960, 540); got != 1920 { // 主屏
+		t.Fatalf("主屏宽应为 1920, got %d", got)
+	}
+	if got := svc.monitorWidthAt(-960, 540); got != 1920 { // 副屏
+		t.Fatalf("副屏宽应为 1920, got %d", got)
+	}
+}
+
+// 重排：整包累计位移被拆成多个更小的步注入，最终位移精确守恒。
+func TestReflowSplitsAndConserves(t *testing.T) {
+	inj := newFakeInjector()
+	_, port := newTestServiceReflow(t, inj, 8*time.Millisecond)
+
+	tm := dialMaster(t, port, "tok")
+	if _, err := tm.recv(); err != nil {
+		t.Fatal(err)
+	}
+	tm.send(wireMsg{T: "enter", Dir: "right", Y: 0.5})
+	waitFor(t, func() bool { return inj.absCount() > 0 }, "入口注入")
+
+	tm.send(wireMsg{T: "move", DX: 100, DY: 10})
+	waitFor(t, func() bool {
+		sx, sy := inj.relSum()
+		return sx == 100 && sy == 10
+	}, "位移追平")
+
+	if inj.relCount() <= 1 {
+		t.Fatalf("单包 100px 应被拆成多步，got relCount=%d", inj.relCount())
+	}
+	if m := inj.maxRelStep(); m >= 100 {
+		t.Fatalf("每步应严格小于整包位移，got maxRelStep=%d", m)
+	}
+}
+
+// 重排：成批到达的多次移动合并后按节拍排空，位移总和守恒。
+func TestReflowBatchesConserve(t *testing.T) {
+	inj := newFakeInjector()
+	_, port := newTestServiceReflow(t, inj, 4*time.Millisecond)
+
+	tm := dialMaster(t, port, "tok")
+	if _, err := tm.recv(); err != nil {
+		t.Fatal(err)
+	}
+	tm.send(wireMsg{T: "enter", Dir: "right", Y: 0.5})
+	waitFor(t, func() bool { return inj.absCount() > 0 }, "入口注入")
+
+	// 连续快速推 4 个包（模拟主控合拍 + 网络成批），每包 10px
+	for i := 0; i < 4; i++ {
+		if err := tm.send(wireMsg{T: "move", DX: 10, DY: -5}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFor(t, func() bool {
+		sx, sy := inj.relSum()
+		return sx == 40 && sy == -20
+	}, "批量位移追平")
+}
+
+// 会话结束时残余 pending 必须被 flush，位移不丢失。
+func TestReflowFlushOnSessionEnd(t *testing.T) {
+	inj := newFakeInjector()
+	_, port := newTestServiceReflow(t, inj, 20*time.Millisecond) // 节拍放慢，确保结束时尚有 pending
+
+	tm := dialMaster(t, port, "tok")
+	if _, err := tm.recv(); err != nil {
+		t.Fatal(err)
+	}
+	tm.send(wireMsg{T: "enter", Dir: "right", Y: 0.5})
+	waitFor(t, func() bool { return inj.absCount() > 0 }, "入口注入")
+
+	tm.send(wireMsg{T: "move", DX: 57, DY: 33})
+	// 立即断开（不等节拍排空），触发 handleSlaveConn 退出 → stopReflow flush
+	tm.conn.Close()
+	waitFor(t, func() bool {
+		sx, sy := inj.relSum()
+		return sx == 57 && sy == 33
+	}, "结束时残余位移 flush")
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // Config 是 copywhere 的持久化配置。
@@ -26,6 +27,9 @@ type Config struct {
 	KVMLeft       string `json:"kvm_left"`                    // 左边缘邻居节点名（光标推向左边缘时控制它）
 	KVMRight      string `json:"kvm_right"`                   // 右边缘邻居节点名
 	KVMEntryMon   *int   `json:"kvm_entry_monitor,omitempty"` // 被控入口显示器下标（缺省 -1=主显示器）
+	KVMMoveMs     int    `json:"kvm_move_interval_ms"`        // 主控移动合拍间隔（ms）；0=默认(8)，>0 自定义
+	KVMReflowMs   int    `json:"kvm_reflow_step_ms"`          // 被控重排注入节拍（ms）；0=默认(4)，-1=关闭直注，>0 自定义
+	KVMSpeedPct   int    `json:"kvm_speed_percent"`           // 本机作为主控的位移手调系数百分比（100=1.0x；<=0 视为 100）
 	WebPort       int    `json:"web_port"`                    // GUI 面板端口（gui 命令；0=默认，负数=随机）
 	Path          string `json:"-"`                           // 配置文件实际路径（Load 时填充；信任库/面板地址等派生文件放在同目录）
 }
@@ -36,6 +40,33 @@ func (c *Config) KVMEntryMonitorIdx() int {
 		return -1
 	}
 	return *c.KVMEntryMon
+}
+
+// KVMMoveInterval 返回主控移动合拍间隔：<=0 交 kvm 层用默认值。
+func (c *Config) KVMMoveInterval() time.Duration {
+	if c.KVMMoveMs <= 0 {
+		return 0 // 0 → NewService 落 DefaultMoveInterval
+	}
+	return time.Duration(c.KVMMoveMs) * time.Millisecond
+}
+
+// KVMReflowStep 返回被控重排节拍：0 交 kvm 层用默认值，-1 关闭重排（逐包直注），
+// >0 为自定义毫秒。注意与 MoveInterval 区分：这里 -1 是有意义的"关闭"哨兵。
+func (c *Config) KVMReflowStep() time.Duration {
+	if c.KVMReflowMs == 0 {
+		return 0
+	}
+	return time.Duration(c.KVMReflowMs) * time.Millisecond
+}
+
+// KVMSpeedFactor 返回本机作为主控的位移手调系数（kvm_speed_percent/100，
+// <=0 视为 1.0）。用于标定"远程光标与本机快慢不一致"：每台机器各自设一档，
+// 双向可分别校正、互不干扰（详见 kvm 包 trySwitch 注释）。
+func (c *Config) KVMSpeedFactor() int {
+	if c.KVMSpeedPct <= 0 {
+		return 100
+	}
+	return c.KVMSpeedPct
 }
 
 // Default 返回默认配置。
@@ -59,6 +90,7 @@ func Default() (*Config, error) {
 		AnnounceSec:   2,
 		PeerTTLSec:    12,
 		KVMPort:       47832,
+		KVMSpeedPct:   100,
 		WebPort:       47890,
 	}, nil
 }

@@ -43,6 +43,7 @@ const (
 	smYVirtualScreen  = 77
 	smCXVirtualScreen = 78
 	smCYVirtualScreen = 79
+	smGetMouseSpeed   = 138 // SPI_GETMOUSESPEED：1..20，10 = 1.0x 基准倍率
 
 	ridevInputSink = 0x00000100
 	ridInput       = 0x10000003
@@ -84,6 +85,7 @@ var (
 	procGetRawInputData               = user32.NewProc("GetRawInputData")
 	procSendInput                     = user32.NewProc("SendInput")
 	procGetSystemMetrics              = user32.NewProc("GetSystemMetrics")
+	procGetSystemParametersInfoW      = user32.NewProc("SystemParametersInfoW")
 	procSetCursorPos                  = user32.NewProc("SetCursorPos")
 	procGetCursorPos                  = user32.NewProc("GetCursorPos")
 	procMapVirtualKeyW                = user32.NewProc("MapVirtualKeyW")
@@ -159,6 +161,19 @@ func (DefaultInjector) Key(vk, scan uint32, down, ext bool) { InjectKey(vk, scan
 func (DefaultInjector) ScreenBounds() (int, int, int, int)  { return VirtualScreen() }
 func (DefaultInjector) CursorPos() (int, int)               { return CursorPos() }
 func (DefaultInjector) Monitors() []Rect                    { return Monitors() }
+func (DefaultInjector) MouseSpeed() int                     { return MouseSpeed() }
+
+// MouseSpeed 返回系统指针速度（SPI_GETMOUSESPEED，1..20，10≈1.0x 基准）。
+// 失败返回 0，调用方据此跳过倍率补偿。
+func MouseSpeed() int {
+	var v int32
+	r, _, _ := procGetSystemParametersInfoW.Call(
+		uintptr(smGetMouseSpeed), 0, uintptr(unsafe.Pointer(&v)), 0)
+	if r == 0 {
+		return 0
+	}
+	return int(v)
+}
 
 // InjectMoveRel 以相对位移注入（光标随本机多显示器布局自然跨屏）。
 func InjectMoveRel(dx, dy int) {

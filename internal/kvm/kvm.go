@@ -27,8 +27,16 @@ import (
 )
 
 const (
-	moveSendInterval = 20 * time.Millisecond // 移动事件合拍间隔（≤50Hz）
-	edgePushPixels   = 16                    // 本地边缘推动判定：累计推动像素
+	// DefaultMoveInterval 主控端移动事件合拍间隔（≈125Hz）。原始移动在窗口内
+	// 累加为一次累计位移再发送，兼顾流畅与带宽。
+	DefaultMoveInterval = 8 * time.Millisecond
+	// DefaultReflowStep 被控端重排（reflow）注入节拍（≈250Hz）。
+	DefaultReflowStep = 4 * time.Millisecond
+	// reflowHorizon 每拍排空 pending 的比例分母：每拍注入约 1/horizon，
+	// 网络成批到达时约 horizon 拍内追平，空闲时以最小步继续细分平滑。
+	reflowHorizon = 3
+
+	edgePushPixels   = 16 // 本地边缘推动判定：累计推动像素
 	pushGapReset     = 600 * time.Millisecond
 	edgeAdjacency    = 2  // 判断两显示器相邻的坐标容差（像素）
 	edgeBand         = 2  // 光标距边缘多少像素内算"贴边"
@@ -48,6 +56,18 @@ type Config struct {
 	Right        string // 光标从本机暴露的右边缘离开时控制的节点名
 	EntryMonitor int    // 被控入口显示器索引（-1=主显示器，默认）
 	SelfID       string // 本机节点指纹（配对令牌校验随 hello 发给对端）
+	// MoveInterval 主控端移动合拍间隔；<=0 使用 DefaultMoveInterval。
+	MoveInterval time.Duration
+	// ReflowStep 被控端重排注入节拍；<=0 使用 DefaultReflowStep，
+	// 显式传 <0 的哨兵值（-1）关闭重排、恢复逐包直注。
+	ReflowStep time.Duration
+	// SpeedPercent 本机作为主控时施加到发送位移的百分比手调系数（100=1.0x，
+	// <=0 视为 100）。这是"远程光标与本机快慢不一致"的方案 C 修正：本地光标
+	// 速度 = Raw 计数 ×(本机滑块倍率×加速曲线)，而 SendInput 注入不走该硬件
+	// 管线，两者之差是每台机器各自、不随主/被角色翻转的常数；自动折算读不准
+	// （已多次证伪），故交给用户按诊断日志各端一次标定：A→B 偏慢调高 A 的
+	// 百分比，B→A 偏慢调高 B 的百分比，互不干扰。
+	SpeedPercent int
 	// TokenForPeer 返回对端签发给本机的配对令牌（本机作为主控连接它时使用）；
 	// 未配对返回 false，回退共享 token。
 	TokenForPeer func(id string) (string, bool)
@@ -66,6 +86,7 @@ type Injector interface {
 	ScreenBounds() (x, y, w, h int)
 	CursorPos() (x, y int)
 	Monitors() []input.Rect
+	MouseSpeed() int // 系统指针速度（1..20，10=1.0x）；0=不可用
 }
 
 // Callbacks 是输入捕获回调集合（实现 input.Callbacks）。
@@ -93,6 +114,7 @@ type wireMsg struct {
 	Scan  uint32  `json:"scan,omitempty"`
 	Ext   bool    `json:"ext,omitempty"`
 	Msg   string  `json:"msg,omitempty"`
+	PW    int     `json:"pw,omitempty"` // 被控端入口显示器物理宽，供主控折算缩放比
 }
 
 type masterSession struct {
@@ -104,6 +126,11 @@ type masterSession struct {
 	lastX    float64 // 上次发送时的位置（差值基准）
 	lastY    float64
 	lastSent time.Time
+	// 速度补偿系数在 OnMouseMove 锁内实时读 s.cfg.SpeedPercent（面板热生效），
+	// 不快照到会话；此处只留亚像素余数结转字段与对端入口宽（诊断日志用）。
+	slavePW  int // 被控端入口显示器物理宽（0=旧版对端）
+	gainResX float64
+	gainResY float64
 	stop     chan struct{}
 	stopOnce sync.Once
 }
@@ -121,6 +148,15 @@ type slaveSession struct {
 	pushLast   time.Time
 	leaveEdges []input.Rect // 主控方向上暴露的边缘（切回触发区）
 	endOnce    sync.Once
+
+	// 重排（reflow）注入：主控端把移动合拍为较大的累计位移、且经 TCP 成批到达，
+	// 若逐包直注，副机光标会"一格一格跳"且忽快忽慢。这里把收到的位移并入
+	// pending，由独立协程按固定节拍以恒定步长拆步注入，兼顾平滑与追平。
+	rfMu    sync.Mutex
+	rfDX    int           // 待注入的累计 X 位移
+	rfDY    int           // 待注入的累计 Y 位移
+	rfStop  chan struct{} // 非 nil 表示 reflow 协程在运行
+	rfStopO sync.Once
 }
 
 // end 结束被控会话（幂等）：可选发送 leave 并关闭连接。
@@ -167,6 +203,9 @@ func NewService(cfg Config, nodeName string, store *discovery.Store,
 	if cfg.Port <= 0 {
 		cfg.Port = 47832
 	}
+	cfg.MoveInterval = normalizeMoveInterval(cfg.MoveInterval)
+	cfg.ReflowStep = normalizeReflowStep(cfg.ReflowStep)
+	cfg.SpeedPercent = normalizeSpeedPercent(cfg.SpeedPercent)
 	return &Service{
 		cfg: cfg, nodeName: nodeName,
 		store: store, ttl: ttl, injector: injector,
@@ -181,6 +220,59 @@ func (s *Service) UpdateNeighbors(left, right string) {
 	s.cfg.Right = right
 	s.mu.Unlock()
 	log.Printf("KVM 邻居已更新：左邻 %q，右邻 %q", left, right)
+}
+
+// UpdateTunables 热更新手感参数（合拍间隔/重排节拍/速度系数），无需重启：
+// 主控移动在下一帧、重排在下一拍、系数在下一次移动即生效（均为锁内读取）。
+func (s *Service) UpdateTunables(moveInterval, reflowStep time.Duration, speedPercent int) {
+	s.mu.Lock()
+	s.cfg.MoveInterval = normalizeMoveInterval(moveInterval)
+	s.cfg.ReflowStep = normalizeReflowStep(reflowStep)
+	s.cfg.SpeedPercent = normalizeSpeedPercent(speedPercent)
+	s.mu.Unlock()
+	log.Printf("KVM 手感参数已热更新：合拍 %v，重排 %v，速度系数 %d%%",
+		s.cfg.MoveInterval, s.cfg.ReflowStep, s.cfg.SpeedPercent)
+}
+
+// currentMoveInterval / currentReflowStep / currentSpeedPercent 在锁内读参数。
+func (s *Service) currentMoveInterval() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.MoveInterval
+}
+
+func (s *Service) currentReflowStep() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.ReflowStep
+}
+
+func (s *Service) currentSpeedPercent() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.SpeedPercent
+}
+
+func normalizeMoveInterval(d time.Duration) time.Duration {
+	if d <= 0 {
+		return DefaultMoveInterval
+	}
+	return d
+}
+
+// normalizeReflowStep：0→默认；<0（哨兵）→关闭重排；>0→自定义。
+func normalizeReflowStep(d time.Duration) time.Duration {
+	if d == 0 {
+		return DefaultReflowStep
+	}
+	return d
+}
+
+func normalizeSpeedPercent(p int) int {
+	if p <= 0 {
+		return 100
+	}
+	return p
 }
 
 // inputSetSuppress 包一层避免各处直接依赖 input 包细节。
@@ -362,9 +454,11 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 	sess := &slaveSession{conn: conn, w: bw}
 	s.serving = sess
 	s.mu.Unlock()
-	writeMsg(bw, wireMsg{T: "ok"})
+	entryW := pickEntryMonitor(s.currentMonitors(), s.cfg.EntryMonitor).W
+	writeMsg(bw, wireMsg{T: "ok", PW: entryW})
 	log.Printf("KVM：开始被 %q 控制", hello.Name)
 	defer func() {
+		s.stopReflow(sess) // 停重排协程并把残余位移注入，绝不泄漏
 		s.mu.Lock()
 		if s.serving == sess {
 			s.serving = nil
@@ -417,11 +511,7 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 			if sess.dir == "" {
 				continue
 			}
-			s.injector.MoveRel(m.DX, m.DY)
-			if s.detectLeave(sess, m.DX) { // 返回 true 表示触发切回
-				sess.end(true, "光标推回共享边缘")
-				return
-			}
+			s.feedMove(sess, m.DX, m.DY)
 		case "btn":
 			s.injector.Button(m.Down, m.B)
 		case "wheel":
@@ -440,6 +530,108 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 			// 未知消息忽略
 		}
 	}
+}
+
+// feedMove 处理一条 move 事件：合拍关闭时保持旧的逐包直注语义，
+// 开启时并入待注入位移并保证 reflow 协程在跑。
+// 切回检测在注入之后对"实际位移"执行，与直注模式时序等价。
+func (s *Service) feedMove(sess *slaveSession, dx, dy int) {
+	if s.cfg.ReflowStep < 0 {
+		s.injector.MoveRel(dx, dy)
+		if s.detectLeave(sess, dx) {
+			sess.end(true, "光标推回共享边缘")
+		}
+		return
+	}
+	s.startReflow(sess)
+	sess.rfMu.Lock()
+	sess.rfDX += dx
+	sess.rfDY += dy
+	sess.rfMu.Unlock()
+}
+
+// startReflow 惰性启动本会话的 reflow 协程（move 首次到达时）。
+func (s *Service) startReflow(sess *slaveSession) {
+	sess.rfMu.Lock()
+	if sess.rfStop != nil {
+		sess.rfMu.Unlock()
+		return
+	}
+	sess.rfStop = make(chan struct{})
+	sess.rfStopO = sync.Once{}
+	stop := sess.rfStop
+	sess.rfMu.Unlock()
+	go s.reflowLoop(sess, stop)
+}
+
+// stopReflow 结束 reflow 协程并把残余位移立即注入，保证总位移守恒。
+func (s *Service) stopReflow(sess *slaveSession) {
+	sess.rfMu.Lock()
+	stop := sess.rfStop
+	sess.rfStop = nil
+	sess.rfMu.Unlock()
+	if stop == nil {
+		return
+	}
+	sess.rfStopO.Do(func() { close(stop) })
+}
+
+// flushReflow 立即把 pending 位移全部注入（返回实际注入的 dx,dy），
+// 供切回检测等需要光标即时到位的路径使用。
+func (s *Service) flushReflow(sess *slaveSession) (int, int) {
+	sess.rfMu.Lock()
+	dx, dy := sess.rfDX, sess.rfDY
+	sess.rfDX, sess.rfDY = 0, 0
+	sess.rfMu.Unlock()
+	if dx != 0 || dy != 0 {
+		s.injector.MoveRel(dx, dy)
+	}
+	return dx, dy
+}
+
+// reflowLoop 按固定节拍重排注入。每拍排空 pending 的约 1/reflowHorizon
+// （有符号、保底各 1px 防滞留），位移总和精确守恒；空闲后协程自动退出，
+// 下一次 move 再惰性重启。
+func (s *Service) reflowLoop(sess *slaveSession, stop chan struct{}) {
+	t := time.NewTicker(s.currentReflowStep())
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			s.flushReflow(sess)
+			return
+		case <-t.C:
+			sess.rfMu.Lock()
+			dx, dy := sess.rfDX, sess.rfDY
+			if dx == 0 && dy == 0 {
+				sess.rfStop = nil
+				sess.rfMu.Unlock()
+				return // 队列排空：退出，等下一个 move 惰性重启
+			}
+			sx := reflowStep(dx)
+			sy := reflowStep(dy)
+			sess.rfDX -= sx
+			sess.rfDY -= sy
+			sess.rfMu.Unlock()
+			s.injector.MoveRel(sx, sy)
+			if s.detectLeave(sess, sx) {
+				sess.end(true, "光标推回共享边缘")
+				return
+			}
+		}
+	}
+}
+
+// reflowStep 计算单拍步长：约 1/reflowHorizon，向零取整、非零时保底 1px。
+func reflowStep(v int) int {
+	step := v / reflowHorizon
+	if v > 0 && step < 1 {
+		step = 1
+	}
+	if v < 0 && step > -1 {
+		step = -1
+	}
+	return step
 }
 
 // detectLeave 检测"光标推回共享边缘"的切回动作。光标为真实位置，
@@ -567,6 +759,12 @@ func (s *Service) trySwitch(dir string) {
 	sess.virtX = float64(cx)
 	sess.virtY = float64(cy)
 	sess.lastX, sess.lastY = sess.virtX, sess.virtY
+	// 速度补偿系数在 OnMouseMove 锁内实时读取（面板热生效），会话不再快照。
+	// 这里只打标定参考日志：本机指针速度 + 两机屏宽（比例可换算该设多大）。
+	mW := s.monitorWidthAt(cx, cy)
+	log.Printf("KVM 速度补偿标定参考：本机指针速度=%d 本机所在屏宽=%d 对端入口宽=%d "+
+		"当前系数=%d%%（拖动面板即时生效，无需重启）",
+		s.injector.MouseSpeed(), mW, sess.slavePW, s.currentSpeedPercent())
 	// 入口垂直比例：光标在"主控离场所属显示器"内的高度比例（0..1）。
 	// 用所在显示器而非整个虚拟桌面，主控多屏时才能把比例正确对应到被控主屏，
 	// 实现"主控比例 → 被控主屏同比例"。找不到所在显示器时退回整桌面比例。
@@ -581,6 +779,21 @@ func (s *Service) trySwitch(dir string) {
 	go s.masterSender(sess)
 	go s.masterReader(sess, peer.Name)
 	go s.masterPinger(sess)
+}
+
+// monitorWidthAt 返回光标 (x,y) 所属显示器的物理宽（与 entryRatio 用同一块屏
+// 为基准）。找不到匹配屏时退回主屏宽，再兜底 0（scaleGain 据此退回 1.0）。
+func (s *Service) monitorWidthAt(x, y int) int {
+	var primaryW int
+	for _, m := range s.currentMonitors() {
+		if m.Primary {
+			primaryW = m.W
+		}
+		if x >= m.X && x < m.X+m.W && y >= m.Y && y < m.Y+m.H {
+			return m.W
+		}
+	}
+	return primaryW
 }
 
 // entryRatio 计算光标 (x,y) 在其所属显示器内的高度比例（0..1）。
@@ -625,10 +838,11 @@ func (s *Service) masterHandshake(conn net.Conn, peerID string) (*masterSession,
 		return nil, fmt.Errorf("%s", resp.Msg)
 	}
 	sess := &masterSession{
-		conn:   conn,
-		w:      bw,
-		sendCh: make(chan wireMsg, 512),
-		stop:   make(chan struct{}),
+		conn:    conn,
+		w:       bw,
+		sendCh:  make(chan wireMsg, 512),
+		stop:    make(chan struct{}),
+		slavePW: resp.PW, // 被控端入口显示器物理宽（旧版对端为 0）
 	}
 	conn.SetDeadline(time.Time{}) // 清除握手超时，后续由 ping/读超时保活
 	return sess, nil
@@ -738,16 +952,25 @@ func (s *Service) OnMouseMove(dx, dy int) {
 		m.virtX += float64(dx)
 		m.virtY += float64(dy)
 		now := time.Now()
-		if now.Sub(m.lastSent) < moveSendInterval {
+		if now.Sub(m.lastSent) < s.cfg.MoveInterval {
 			s.mu.Unlock()
 			return
 		}
 		m.lastSent = now
-		// 发送自上次发送以来的累计位移（未裁剪，副机自行处理边界）
-		ddx := int(math.Round(m.virtX - m.lastX))
-		ddy := int(math.Round(m.virtY - m.lastY))
-		m.lastX += float64(ddx)
-		m.lastY += float64(ddy)
+		// 发送自上次发送以来的累计位移（Raw 计数按手调系数放大，未裁剪，
+		// 副机自行处理边界）。系数在锁内实时读取 s.cfg.SpeedPercent，故面板
+		// 拖动即时生效；lastX/Y 消费全部原始计数，亚像素余数结转 gainResX/Y。
+		rdx := m.virtX - m.lastX
+		rdy := m.virtY - m.lastY
+		m.lastX = m.virtX
+		m.lastY = m.virtY
+		gain := speedGainPct(s.cfg.SpeedPercent)
+		fx := rdx*gain + m.gainResX
+		fy := rdy*gain + m.gainResY
+		ddx := int(math.Trunc(fx))
+		ddy := int(math.Trunc(fy))
+		m.gainResX = fx - float64(ddx)
+		m.gainResY = fy - float64(ddy)
 		msg := wireMsg{T: "move", DX: ddx, DY: ddy}
 		select {
 		case m.sendCh <- msg:
@@ -966,4 +1189,13 @@ func clamp01(v float64) float64 {
 		return 1
 	}
 	return v
+}
+
+// speedGainPct 把手调百分比（kvm_speed_percent）折算为发送位移系数；
+// <=0 视为 100（1.0x，即不补偿）。
+func speedGainPct(pct int) float64 {
+	if pct <= 0 {
+		return 1
+	}
+	return float64(pct) / 100.0
 }

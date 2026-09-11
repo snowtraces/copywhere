@@ -321,6 +321,9 @@ func Start(ctx context.Context, cfg *config.Config, opts Options) (*App, error) 
 				Right:        cfg.KVMRight,
 				EntryMonitor: cfg.KVMEntryMonitorIdx(),
 				SelfID:       a.selfID,
+				MoveInterval: cfg.KVMMoveInterval(),
+				ReflowStep:   cfg.KVMReflowStep(),
+				SpeedPercent: cfg.KVMSpeedFactor(),
 				TokenForPeer: func(id string) (string, bool) {
 					e, ok := a.trust.Get(id)
 					return e.PeerToken, ok && e.PeerToken != ""
@@ -577,6 +580,7 @@ func (a *App) PendingPair() (id, name string, ok bool) {
 func (a *App) SyncKVM() {
 	if a.kvmSvc != nil {
 		a.kvmSvc.UpdateNeighbors(a.cfg.KVMLeft, a.cfg.KVMRight)
+		a.kvmSvc.UpdateTunables(a.cfg.KVMMoveInterval(), a.cfg.KVMReflowStep(), a.cfg.KVMSpeedFactor())
 	}
 	a.syncKVMOne(a.cfg.KVMLeft, "right")
 	a.syncKVMOne(a.cfg.KVMRight, "left")

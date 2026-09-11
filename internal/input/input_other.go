@@ -37,6 +37,10 @@ func (DefaultInjector) Key(uint32, uint32, bool, bool)     {}
 func (DefaultInjector) ScreenBounds() (int, int, int, int) { return 0, 0, 0, 0 }
 func (DefaultInjector) CursorPos() (int, int)              { return 0, 0 }
 func (DefaultInjector) Monitors() []Rect                   { return nil }
+func (DefaultInjector) MouseSpeed() int                    { return 0 }
+
+// MouseSpeed 非 Windows 占位（返回 0 表示不补偿）。
+func MouseSpeed() int { return 0 }
 
 // CursorPos 非 Windows 占位。
 func CursorPos() (int, int) { return 0, 0 }
