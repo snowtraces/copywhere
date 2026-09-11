@@ -7,412 +7,746 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/favicon.png?v=0.2.0">
 <link rel="alternate icon" href="/favicon.ico?v=0.2.0" type="image/x-icon">
 <link rel="apple-touch-icon" href="/favicon.png?v=0.2.0">
-<title>copywhere 控制面板</title>
+<title>copywhere</title>
 <style>
+/* ============================================================
+   copywhere 控制面板 · WIREFRAME / TERMINAL 皮肤
+   等宽字体 · 直角 · 1px 线框 · 蓝图网格 · 扁平终端配色 · 零渐变零模糊
+   ============================================================ */
 :root {
-  --bg: #f3f6fb; --card: #ffffff; --card-hover: #f8fafc; --border: #e1e7f2;
-  --text: #0d1527; --dim: #5b6b86;
-  --accent: #1e48fa; --accent-hover: #153ad8; --accent-weak: #edf3ff;
-  --cyan: #00b4c2; --cyan-weak: #e0f8fa;
-  --grad: linear-gradient(135deg, #1e48fa 0%, #0284c7 62%, #00dfe8 100%);
-  --in: #059669; --in-weak: #ecfdf5; --err: #e11d48; --err-weak: #fff1f2; --warn: #d97706;
-  --track: #e4ecf7; --shadow: 0 1px 3px rgba(14,35,80,.05), 0 4px 14px rgba(14,35,80,.07);
-  --mono: Consolas, "Cascadia Mono", monospace;
+  --bg: #edebe3;
+  --panel: #fbfaf5;
+  --panel-2: #f1efe6;
+  --border: #7e7c75;
+  --border-dim: #a9a79b;
+  --text: #161d23;
+  --dim: #4f5a64;
+  --accent: #056e7a;
+  --accent-ink: #f6f5f0;      /* 落在 accent 上的文字/图形色 */
+  --accent-weak: #d3eae8;
+  --in: #096a3d;
+  --in-weak: #dcf0e5;
+  --err: #ab2440;
+  --err-weak: #f7e2e7;
+  --warn: #7d5708;
+  --track: #dcd9cd;
+  --gridline: rgba(22,29,35,.10);
+  --mono: "Cascadia Mono", "JetBrains Mono", Consolas, "Courier New", "Microsoft YaHei", monospace;
+  --shadow-pop: 0 10px 34px rgba(20,28,34,.22);
 }
 :root[data-theme="dark"] {
-  --bg: #080c16; --card: #0f172a; --card-hover: #15223c; --border: #1d2942;
-  --text: #f1f5fc; --dim: #8496b4;
-  --accent: #388bfd; --accent-hover: #58a6ff; --accent-weak: #12213d;
-  --cyan: #00dfe8; --cyan-weak: #072b38;
-  --grad: linear-gradient(135deg, #1e48fa 0%, #0284c7 50%, #00dfe8 100%);
-  --in: #10b981; --in-weak: #062e22; --err: #f43f5e; --err-weak: #35121a; --warn: #fbbf24;
-  --track: #17233a; --shadow: 0 2px 6px rgba(0,0,0,.5), 0 8px 24px rgba(0,15,45,.7);
+  --bg: #0a0e13;
+  --panel: #0e141b;
+  --panel-2: #111923;
+  --border: #26323e;
+  --border-dim: #1a232d;
+  --text: #d5e0e8;
+  --dim: #7c8e9c;
+  --accent: #00d0c8;
+  --accent-ink: #06131a;
+  --accent-weak: #0f2629;
+  --in: #3ddc97;
+  --in-weak: #0e2b21;
+  --err: #ff5c74;
+  --err-weak: #2c141a;
+  --warn: #ffc247;
+  --track: #1a232d;
+  --gridline: rgba(213,224,232,.045);
+  --shadow-pop: 0 14px 44px rgba(0,0,0,.55);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
-    --bg: #080c16; --card: #0f172a; --card-hover: #15223c; --border: #1d2942;
-    --text: #f1f5fc; --dim: #8496b4;
-    --accent: #388bfd; --accent-hover: #58a6ff; --accent-weak: #12213d;
-    --cyan: #00dfe8; --cyan-weak: #072b38;
-    --grad: linear-gradient(135deg, #1e48fa 0%, #0284c7 50%, #00dfe8 100%);
-    --in: #10b981; --in-weak: #062e22; --err: #f43f5e; --err-weak: #35121a; --warn: #fbbf24;
-    --track: #17233a; --shadow: 0 2px 6px rgba(0,0,0,.5), 0 8px 24px rgba(0,15,45,.7);
+    --bg: #0a0e13;
+    --panel: #0e141b;
+    --panel-2: #111923;
+    --border: #26323e;
+    --border-dim: #1a232d;
+    --text: #d5e0e8;
+    --dim: #7c8e9c;
+    --accent: #00d0c8;
+    --accent-ink: #06131a;
+    --accent-weak: #0f2629;
+    --in: #3ddc97;
+    --in-weak: #0e2b21;
+    --err: #ff5c74;
+    --err-weak: #2c141a;
+    --warn: #ffc247;
+    --track: #1a232d;
+    --gridline: rgba(213,224,232,.045);
+    --shadow-pop: 0 14px 44px rgba(0,0,0,.55);
   }
 }
-* { box-sizing: border-box; }
+* { box-sizing: border-box; border-radius: 0 !important; }
 html, body { height: 100%; }
-body { margin: 0; background: var(--bg); color: var(--text);
-  font: 14px/1.5 "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei", sans-serif; }
+body { margin: 0; background: var(--bg); color: var(--text); overflow: hidden;
+  font: 13px/1.6 var(--mono);
+  display: flex; flex-direction: column; }
 button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
 svg { display: block; }
-.ic { width: 18px; height: 18px; stroke: currentColor; stroke-width: 1.8; fill: none;
-  stroke-linecap: round; stroke-linejoin: round; }
+.ic { width: 16px; height: 16px; stroke: currentColor; stroke-width: 1.6; fill: none;
+  stroke-linecap: square; stroke-linejoin: miter; }
+kbd { font: 11px var(--mono); padding: 0 5px; border: 1px solid var(--border);
+  background: var(--panel); color: var(--dim); }
 
-/* ---------- 布局 ---------- */
-.app { display: flex; height: 100vh; }
-.side { width: 228px; flex: none; display: flex; flex-direction: column; gap: 6px;
-  padding: 16px 12px; background: var(--card); border-right: 1px solid var(--border); }
-.side .grow { flex: 1; }
-.brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px 14px; }
-.brand .mark { width: 32px; height: 32px; border-radius: 9px; background: var(--grad);
-  display: grid; place-items: center; color: #fff; box-shadow: 0 4px 12px rgba(30,72,250,.32); }
-.brand .mark svg { width: 18px; height: 18px; }
-.brand b { font-size: 15px; letter-spacing: .2px; }
-.brand .ver { font-size: 11px; color: var(--dim); }
-nav { display: flex; flex-direction: column; gap: 2px; }
-nav button { display: flex; align-items: center; gap: 10px; padding: 9px 12px;
-  border-radius: 9px; color: var(--dim); font-weight: 500; text-align: left; }
-nav button:hover { background: var(--track); color: var(--text); }
-nav button.active { background: var(--accent-weak); color: var(--accent); }
-.side-status { padding: 12px; border: 1px solid var(--border); border-radius: 12px;
-  display: flex; flex-direction: column; gap: 10px; }
-.status-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dim); }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--err); flex: none; }
-.dot.on { background: var(--in); }
-.status-row b { color: var(--text); font-weight: 600; }
-.switch { display: flex; align-items: center; justify-content: space-between;
-  font-size: 13px; color: var(--dim); cursor: pointer; user-select: none; }
-.switch input { display: none; }
-.switch .knob { width: 34px; height: 20px; border-radius: 10px; background: var(--track);
-  position: relative; transition: background .15s; flex: none; }
-.switch .knob::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px;
-  height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25);
-  transition: left .15s; }
-.switch input:checked + .knob { background: var(--accent); }
-.switch input:checked + .knob::after { left: 16px; }
-.side-btns { display: flex; flex-direction: column; gap: 6px; }
-.btn { display: flex; align-items: center; justify-content: center; gap: 8px;
-  height: 38px; padding: 0 16px; border-radius: 9px; border: 1px solid var(--border);
-  background: var(--card); font-weight: 500;
-  transition: border-color .12s, background .12s, box-shadow .12s; }
+/* ---------- 背景：蓝图网格 ---------- */
+.bgfx { position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background-image:
+    linear-gradient(var(--gridline) 1px, transparent 1px),
+    linear-gradient(90deg, var(--gridline) 1px, transparent 1px);
+  background-size: 28px 28px; }
+
+/* ---------- 顶部工具栏 ---------- */
+.topbar { position: relative; z-index: 10; height: 52px; flex: none;
+  display: flex; align-items: center; gap: 12px; padding: 0 14px;
+  background: var(--bg); border-bottom: 1px solid var(--border); }
+.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.brand .mark { width: 28px; height: 28px; background: var(--accent);
+  display: grid; place-items: center; }
+.brand .mark svg { width: 16px; height: 16px; }
+.brand b { font-size: 14px; letter-spacing: .5px; white-space: nowrap; text-transform: uppercase; }
+.brand .ver { font-size: 11px; color: var(--dim); white-space: nowrap; }
+.tabs { display: flex; gap: 0; }
+.tabs button { padding: 6px 16px; font-size: 12.5px; color: var(--dim);
+  display: flex; align-items: center; gap: 7px;
+  border: 1px solid var(--border); border-right-width: 0; background: var(--bg);
+  transition: none; }
+.tabs button:last-child { border-right-width: 1px; }
+.tabs button:hover { color: var(--text); background: var(--panel); }
+.tabs button.active { color: var(--accent-ink); background: var(--accent);
+  border-color: var(--accent); font-weight: 600; }
+.grow { flex: 1; }
+.chip { display: inline-flex; align-items: center; gap: 7px; height: 28px;
+  padding: 0 10px; font-size: 12px; color: var(--dim);
+  border: 1px solid var(--border); background: var(--bg); white-space: nowrap; }
+.chip b { color: var(--text); font-weight: 600; }
+.chip.clickable { cursor: pointer; }
+.chip.clickable:hover { border-color: var(--accent); color: var(--text); }
+.dot { width: 8px; height: 8px; background: var(--err); flex: none; }
+.dot.on { background: var(--in); animation: blink 2.4s step-end infinite; }
+@keyframes blink { 50% { opacity: .3; } }
+.top-actions { display: flex; align-items: center; gap: 8px; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: 30px; padding: 0 12px; border: 1px solid var(--border);
+  background: var(--bg); font-weight: 500; font-size: 12.5px; white-space: nowrap;
+  transition: none; }
 .btn:hover { border-color: var(--accent); color: var(--accent); }
-.btn.primary { background: var(--grad) no-repeat; border: none; color: #fff;
-  box-shadow: 0 2px 8px rgba(30,72,250,.28); }
-.btn.primary:hover { filter: brightness(1.08); box-shadow: 0 4px 14px rgba(30,72,250,.42); color: #fff; }
-.side-foot { display: flex; align-items: center; gap: 4px; padding: 8px 4px 0; }
-.iconbtn { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
-  color: var(--dim); position: relative; }
-.iconbtn:hover { background: var(--track); color: var(--text); }
-.iconbtn .badge { position: absolute; top: 2px; right: 2px; min-width: 15px; height: 15px;
-  border-radius: 8px; background: var(--err); color: #fff; font-size: 10px; line-height: 15px;
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink);
+  font-weight: 600; }
+.btn.primary:hover { background: var(--accent); color: var(--accent-ink);
+  outline: 1px solid var(--accent); outline-offset: 2px; }
+.iconbtn { width: 30px; height: 30px; display: grid; place-items: center;
+  color: var(--dim); position: relative; flex: none;
+  border: 1px solid transparent; }
+.iconbtn:hover { border-color: var(--border); color: var(--text); background: var(--panel); }
+.iconbtn .badge { position: absolute; top: -5px; right: -5px; min-width: 14px; height: 14px;
+  background: var(--err); color: #fff; font-size: 10px; line-height: 14px;
   text-align: center; padding: 0 3px; }
-.side-foot .self { flex: 1; min-width: 0; text-align: right; font-size: 11px;
-  color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.switch { display: inline-flex; align-items: center; justify-content: space-between;
+  font-size: 12px; color: var(--dim); cursor: pointer; user-select: none; gap: 8px; }
+.switch input { display: none; }
+.switch .knob { width: 28px; height: 15px; background: var(--track);
+  position: relative; transition: none; flex: none; border: 1px solid var(--border); }
+.switch .knob::after { content: ""; position: absolute; top: 1px; left: 1px; width: 11px;
+  height: 11px; background: var(--dim); transition: left .12s step-end; }
+.switch input:checked + .knob { background: var(--accent); border-color: var(--accent); }
+.switch input:checked + .knob::after { left: 14px; background: var(--accent-ink); }
 
-main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
-.viewhead { padding: 20px 28px 12px; display: flex; align-items: baseline; gap: 12px; }
-.viewhead h1 { margin: 0; font-size: 20px; font-weight: 650; }
-.viewhead .sub { color: var(--dim); font-size: 13px; }
-.viewbody { flex: 1; overflow-y: auto; padding: 4px 28px 40px; }
-.view { display: none; height: 100%; flex-direction: column; }
-.view.active { display: flex; }
+/* ---------- 主区（持久设备坞 + 内容空间） ---------- */
+.main-row { display: flex; flex: 1; min-height: 0; position: relative; z-index: 1; }
+.space { display: none; flex: 1; min-height: 0; position: relative; z-index: 1; }
+.space.active { display: flex; }
+/* 空间切换：快速淡入 */
+@keyframes spaceIn { from { opacity: 0; } to { opacity: 1; } }
+.space.enter-right, .space.enter-left { animation: spaceIn .16s linear; }
+@media (prefers-reduced-motion: reduce) {
+  .space.enter-right, .space.enter-left, .row, .xfer, .toast { animation: none !important; }
+}
 
-/* ---------- 动态流 ---------- */
-.xfer-strip { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
-.xfer { background: var(--card); border: 1px solid var(--border); border-radius: 12px;
-  padding: 10px 14px; box-shadow: var(--shadow); }
-.xfer .cap { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px;
-  color: var(--dim); margin-bottom: 6px; }
-.xfer .cap b { color: var(--text); font-weight: 550; }
-.bar { height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
-.bar > i { display: block; height: 100%; width: 0; border-radius: 3px;
-  background: var(--grad); transition: width .25s; }
-.feed { display: flex; flex-direction: column; gap: 8px; max-width: 860px; }
-.item { display: flex; align-items: center; gap: 12px; background: var(--card);
-  border: 1px solid var(--border); border-radius: 12px; padding: 11px 14px;
-  box-shadow: var(--shadow); }
-.item .ico { width: 38px; height: 38px; border-radius: 11px; display: grid;
-  place-items: center; flex: none; }
-.item .ico.in { background: var(--in-weak); color: var(--in); }
-.item .ico.out { background: var(--accent-weak); color: var(--accent); }
-.item .body { flex: 1; min-width: 0; }
-.item .title { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.item .sub { font-size: 12.5px; color: var(--dim); display: flex; gap: 6px; flex-wrap: wrap; }
-.item .sub .sep::before { content: "·"; }
-.item .acts { display: flex; gap: 6px; flex: none; }
-.chipbtn { font-size: 12.5px; padding: 5px 11px; border-radius: 8px;
-  border: 1px solid var(--border); color: var(--dim); }
-.chipbtn:hover { border-color: var(--accent); color: var(--accent); }
-.pill { font-size: 12px; padding: 2px 9px; border-radius: 9px; flex: none;
-  display: inline-flex; align-items: center; white-space: nowrap; }
-.pill.ok { background: var(--in-weak); color: var(--in); }
-.pill.fail { background: var(--err-weak); color: var(--err); }
-.pill.out { background: var(--accent-weak); color: var(--accent); }
-.pill.in { background: var(--in-weak); color: var(--in); }
-.empty { text-align: center; color: var(--dim); padding: 60px 20px; }
-.empty .art { width: 64px; height: 64px; margin: 0 auto 14px; border-radius: 18px;
-  background: var(--card); border: 1px solid var(--border); display: grid;
-  place-items: center; color: var(--accent); box-shadow: var(--shadow); }
-.empty .art svg { width: 28px; height: 28px; }
-.empty b { display: block; color: var(--text); margin-bottom: 4px; font-weight: 600; }
-
-/* ---------- 节点 ---------- */
-.peer-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 12px; max-width: 960px; }
-.peer-card { background: var(--card); border: 1px solid var(--border); border-radius: 14px;
-  padding: 16px; box-shadow: var(--shadow); }
-.peer-card.self { border-color: transparent; outline: 2px solid var(--accent); }
-.peer-card .head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-.peer-card .head .hact { margin-left: auto; }
-.avatar { width: 38px; height: 38px; border-radius: 11px; background: var(--grad);
-  color: #fff; display: grid; place-items: center; font-weight: 650; font-size: 16px; flex: none; }
-.peer-card .name { font-weight: 650; font-size: 15px; display: flex; align-items: center; gap: 8px; }
-.peer-card .tag { font-size: 11px; padding: 1px 8px; border-radius: 8px;
+.dock { width: 292px; flex: none; display: flex; flex-direction: column; gap: 8px;
+  padding: 12px; overflow-y: auto; border-right: 1px solid var(--border); }
+.dock-cap { font-size: 11px; font-weight: 600; color: var(--dim);
+  text-transform: uppercase; letter-spacing: 1px; padding: 2px 0 0; }
+.dock-cap::before { content: "// "; color: var(--accent); }
+.dev-card { background: var(--panel); border: 1px solid var(--border); padding: 10px; }
+.dev-card.self { border-color: var(--accent); outline: 1px solid var(--accent); outline-offset: 2px; }
+.dev-card .head { display: flex; align-items: center; gap: 10px; }
+.avatar { width: 30px; height: 30px; border: 1px solid var(--accent); color: var(--accent);
+  display: grid; place-items: center; font-weight: 600; font-size: 13px; flex: none;
+  background: var(--accent-weak); }
+.avatar.plain { border-color: var(--border); color: var(--dim); background: var(--panel-2); }
+.dev-card .who { flex: 1; min-width: 0; }
+.dev-card .nm { font-weight: 600; font-size: 13px; display: flex; align-items: center;
+  gap: 7px; overflow: hidden; }
+.dev-card .nm .nm-txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dev-card .sub { font-size: 11px; color: var(--dim); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.tag { font-size: 10.5px; padding: 0 6px; flex: none;
   display: inline-flex; align-items: center; white-space: nowrap;
-  background: var(--accent-weak); color: var(--accent); font-weight: 500; }
-.peer-card .tag.ok { background: var(--in-weak); color: var(--in); }
-.peer-card .tag.warn { background: var(--err-weak); color: var(--err); }
-.peer-card .id { font-size: 11.5px; color: var(--dim); font-family: var(--mono); }
-.ip-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
-.ip-chip { font-family: var(--mono); font-size: 12px; padding: 4px 9px; border-radius: 7px;
-  display: inline-flex; align-items: center;
-  background: var(--track); color: var(--dim); }
-.ip-chip.primary { background: var(--accent-weak); color: var(--accent); font-weight: 550; }
-.peer-card .foot { font-size: 12.5px; color: var(--dim); display: flex; gap: 6px; }
-.peer-card .foot .sep::before { content: "·"; }
+  border: 1px solid var(--accent); color: var(--accent); font-weight: 500; }
+.tag.ok { border-color: var(--in); color: var(--in); }
+.tag.warn { border-color: var(--err); color: var(--err); }
+.tag.mute { border-color: var(--border); color: var(--dim); }
+.dev-card .meta { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0 0; font-size: 11px;
+  color: var(--dim); align-items: center; }
+.dev-card .meta .sep::before { content: "·"; }
+.dev-card .acts { display: flex; gap: 6px; margin-top: 9px; flex-wrap: wrap; }
+.chipbtn { font-size: 11.5px; padding: 3px 9px; border: 1px solid var(--border);
+  color: var(--dim); background: var(--bg); }
+.chipbtn:hover { border-color: var(--accent); color: var(--accent); }
+.chipbtn.accent { background: var(--accent); border-color: var(--accent);
+  color: var(--accent-ink); font-weight: 600; }
+.chipbtn.accent:hover { outline: 1px solid var(--accent); outline-offset: 1px; }
+.dock-empty { text-align: center; color: var(--dim); font-size: 12px; padding: 16px 10px;
+  border: 1px dashed var(--border); }
+
+/* ---------- 传输时间线 ---------- */
+.stage { min-width: 0; flex-direction: column; padding: 14px 20px 0; }
+.stage-head { display: flex; align-items: baseline; gap: 12px; padding: 2px 4px 10px;
+  border-bottom: 1px solid var(--border-dim); }
+.stage-head h1 { margin: 0; font-size: 15px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 1px; }
+.stage-head h1::before { content: "▍"; color: var(--accent); margin-right: 6px; }
+.stage-head .sub { color: var(--dim); font-size: 12px; }
+.timeline { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 6px 22px; }
+.chat-row { display: flex; gap: 10px; max-width: min(76%, 640px); animation: rise .15s linear; }
+.chat-row.out { align-self: flex-end; flex-direction: row-reverse; }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+.ava { width: 26px; height: 26px; border: 1px solid var(--border); display: grid;
+  place-items: center; font-weight: 600; font-size: 12px; flex: none; margin-top: 1px;
+  color: var(--dim); background: var(--panel); }
+.chat-row.in .ava { border-color: var(--in); color: var(--in); background: var(--in-weak); }
+.chat-row.out .ava { border-color: var(--accent); color: var(--accent); background: var(--accent-weak); }
+.bubble { background: var(--panel); border: 1px solid var(--border); padding: 8px 12px;
+  min-width: 220px; }
+.chat-row.in .bubble { border-left: 3px solid var(--in); }
+.chat-row.out .bubble { border-right: 3px solid var(--accent); }
+.b-title { font-weight: 600; word-break: break-all; }
+.b-title::before { content: "─ "; color: var(--border); }
+.b-meta { font-size: 11.5px; color: var(--dim); display: flex; gap: 6px; flex-wrap: wrap;
+  align-items: center; margin-top: 2px; }
+.b-meta .sep::before { content: "·"; }
+.b-meta b { color: var(--text); font-weight: 600; }
+.b-acts { display: flex; gap: 6px; margin-top: 7px; }
+.pill { font-size: 11px; padding: 0 6px; display: inline-flex; align-items: center;
+  white-space: nowrap; border: 1px solid currentColor; }
+.pill.ok, .pill.in { color: var(--in); background: var(--in-weak); }
+.pill.fail { color: var(--err); background: var(--err-weak); }
+.pill.out { color: var(--accent); background: var(--accent-weak); }
+/* 进行中的传输：斜纹进度线框 */
+.xfer { background: var(--panel); border: 1px solid var(--border); padding: 8px 12px;
+  min-width: 260px; animation: rise .15s linear; }
+.xfer .cap { display: flex; justify-content: space-between; gap: 12px; font-size: 12px;
+  color: var(--dim); margin-bottom: 6px; }
+.xfer .cap b { color: var(--text); font-weight: 600; }
+.bar { height: 10px; border: 1px solid var(--border); background: var(--bg);
+  overflow: hidden; }
+.bar > i { display: block; height: 100%; width: 0;
+  background-color: var(--accent);
+  background-image: repeating-linear-gradient(135deg,
+    rgba(0,0,0,.28) 0 2px, transparent 2px 7px);
+  transition: width .2s steps(12); }
+.empty { align-self: center; text-align: center; color: var(--dim); padding: 40px 30px;
+  margin-top: 8vh; border: 1px dashed var(--border); }
+.empty .art { width: 52px; height: 52px; margin: 0 auto 14px; border: 1px solid var(--border);
+  display: grid; place-items: center; color: var(--accent); background: var(--panel); }
+.empty .art svg { width: 24px; height: 24px; }
+.empty h2 { margin: 0 0 6px; font-size: 14px; color: var(--text); font-weight: 700;
+  text-transform: uppercase; letter-spacing: 1px; }
+.empty p { margin: 0; font-size: 12.5px; }
 
 /* ---------- 屏幕布局（KVM） ---------- */
-.layout-canvas { background: var(--track); border: 1px solid var(--border); border-radius: 14px;
-  padding: 34px 20px 26px; display: flex; justify-content: center; align-items: flex-end;
-  gap: 22px; flex-wrap: wrap; max-width: 960px; }
-.screen { width: 148px; user-select: none; }
-.screen .bezel { position: relative; height: 92px; border: 2.5px solid var(--border);
-  border-radius: 9px; background: var(--card); box-shadow: var(--shadow);
+.layout-space { flex-direction: column; overflow-y: auto; padding: 16px 24px 36px; }
+.layout-head { display: flex; align-items: baseline; gap: 12px; padding: 2px 4px 12px;
+  border-bottom: 1px solid var(--border-dim); }
+.layout-head h1 { margin: 0; font-size: 15px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 1px; }
+.layout-head h1::before { content: "▍"; color: var(--accent); margin-right: 6px; }
+.layout-head .sub { color: var(--dim); font-size: 12px; }
+.layout-canvas { border: 1px dashed var(--border); padding: 34px 20px 26px;
+  display: flex; justify-content: center; align-items: flex-end; gap: 24px;
+  flex-wrap: wrap; max-width: 980px; }
+.screen { width: 150px; user-select: none; }
+.screen .bezel { position: relative; height: 92px; border: 1px solid var(--border);
+  background: var(--panel);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 4px; padding: 8px; text-align: center; }
-.screen .stand { width: 30px; height: 12px; background: var(--track); margin: 0 auto;
-  border-radius: 0 0 5px 5px; }
-.screen .base { width: 74px; height: 5px; background: var(--border); margin: 0 auto;
-  border-radius: 3px; }
-.screen .scr-name { font-weight: 600; font-size: 13px; max-width: 100%;
+.screen .stand { width: 26px; height: 10px; background: var(--track); margin: 0 auto; }
+.screen .base { width: 68px; height: 4px; background: var(--border); margin: 0 auto; }
+.screen .scr-name { font-weight: 600; font-size: 12.5px; max-width: 100%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.screen .scr-sub { font-size: 11px; color: var(--dim); max-width: 100%;
+.screen .scr-sub { font-size: 10.5px; color: var(--dim); max-width: 100%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .screen .side-label { position: absolute; top: -22px; left: 50%; transform: translateX(-50%);
-  font-size: 11.5px; color: var(--dim); background: var(--card); border: 1px solid var(--border);
-  border-radius: 8px; padding: 1px 9px; white-space: nowrap; }
-.screen.self .bezel { border-color: var(--accent); }
-.screen.self .initial { background: var(--grad); }
-.screen .initial { width: 30px; height: 30px; border-radius: 8px; background: var(--track);
-  color: var(--dim); display: grid; place-items: center; font-weight: 650; font-size: 15px; }
-.screen.empty .bezel { border-style: dashed; box-shadow: none; background: transparent;
-  color: var(--dim); }
-.screen.offline .bezel { opacity: .55; }
-.screen.drag-hot .bezel { border-color: var(--accent); outline: 2px dashed var(--accent);
+  font-size: 11px; color: var(--dim); background: var(--bg); border: 1px solid var(--border);
+  padding: 0 8px; white-space: nowrap; }
+.screen.self .bezel { border-color: var(--accent); outline: 1px solid var(--accent); outline-offset: 2px; }
+.screen.self .initial { border-color: var(--accent); color: var(--accent); background: var(--accent-weak); }
+.screen .initial { width: 26px; height: 26px; border: 1px solid var(--border);
+  color: var(--dim); display: grid; place-items: center; font-weight: 600; font-size: 13px;
+  background: var(--panel-2); }
+.screen.empty .bezel { border-style: dashed; background: transparent; color: var(--dim); }
+.screen.offline .bezel { opacity: .45; }
+.screen.drag-hot .bezel { border-color: var(--accent); outline: 1px dashed var(--accent);
   outline-offset: 3px; }
-.screen .scr-x { position: absolute; top: 5px; right: 5px; width: 20px; height: 20px;
-  border-radius: 6px; display: grid; place-items: center; color: var(--dim); font-size: 11px; }
+.screen .scr-x { position: absolute; top: 3px; right: 3px; width: 18px; height: 18px;
+  display: grid; place-items: center; color: var(--dim); font-size: 11px; }
 .screen .scr-x:hover { background: var(--err-weak); color: var(--err); }
 .screen[draggable=true] .bezel { cursor: grab; }
-.sect { margin: 18px 0 10px; font-size: 13px; font-weight: 600; color: var(--dim); }
-.tray { display: flex; flex-wrap: wrap; gap: 10px; max-width: 960px; }
-.tray .dev { display: flex; align-items: center; gap: 9px; background: var(--card);
-  border: 1px solid var(--border); border-radius: 11px; padding: 8px 12px;
-  box-shadow: var(--shadow); cursor: grab; }
-.tray .dev.dragging { opacity: .45; }
-.tray .dev .initial { width: 26px; height: 26px; border-radius: 7px; background: var(--track);
-  color: var(--dim); display: grid; place-items: center; font-weight: 650; font-size: 13px; }
-.tray .dev .nm { font-weight: 550; }
-.tray .dev .ip { font-size: 11.5px; color: var(--dim); font-family: var(--mono); }
+.sect { margin: 18px 0 8px; font-size: 12px; font-weight: 600; color: var(--dim);
+  text-transform: uppercase; letter-spacing: 1px; }
+.sect::before { content: "// "; color: var(--accent); }
+.tray { display: flex; flex-wrap: wrap; gap: 8px; max-width: 980px; }
+.tray .dev { display: flex; align-items: center; gap: 9px; background: var(--panel);
+  border: 1px solid var(--border); padding: 7px 11px; cursor: grab; }
+.tray .dev.dragging { opacity: .4; }
+.tray .dev .initial { width: 22px; height: 22px; border: 1px solid var(--border);
+  color: var(--dim); display: grid; place-items: center; font-weight: 600; font-size: 12px;
+  background: var(--panel-2); }
+.tray .dev .nm { font-weight: 600; }
+.tray .dev .ip { font-size: 11px; color: var(--dim); }
 .tray .dev.selected { border-color: var(--accent); }
 .tray .dev .quick { display: none; gap: 4px; }
 .tray .dev.selected .quick { display: flex; }
 .kvm-bar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
-  margin-top: 16px; max-width: 960px; }
+  margin-top: 14px; max-width: 980px; }
+.check { display: flex; align-items: center; gap: 9px; padding: 6px 0; cursor: pointer; }
+.check input { width: 14px; height: 14px; accent-color: var(--accent); }
+.hint { font-size: 11.5px; color: var(--dim); }
+
+/* ---------- 底部状态栏 ---------- */
+.statusbar { position: relative; z-index: 10; height: 28px; flex: none;
+  display: flex; align-items: center; gap: 10px; padding: 0 14px; font-size: 11px;
+  color: var(--dim); background: var(--bg);
+  border-top: 1px solid var(--border); white-space: nowrap; overflow: hidden; }
+.statusbar .sep::before { content: "│"; margin: 0 2px; opacity: .6; }
+.statusbar b { color: var(--text); font-weight: 600; }
+.statusbar .pal-hint { margin-left: auto; display: inline-flex; align-items: center;
+  gap: 6px; cursor: pointer; border: 1px solid var(--border); padding: 1px 8px; }
+.statusbar .pal-hint:hover { border-color: var(--accent); color: var(--text); }
+
+/* ---------- 遮罩 / 设置面板 / 弹窗 ---------- */
+.scrim { position: fixed; inset: 0; z-index: 50; background: rgba(4,7,10,.62);
+  opacity: 0; pointer-events: none; transition: opacity .12s linear; }
+.scrim.show { opacity: 1; pointer-events: auto; }
+.sheet { position: fixed; z-index: 51; top: 50%; left: 50%;
+  width: min(940px, 94vw); height: min(86vh, 720px);
+  transform: translate(-50%, -46%); opacity: 0; pointer-events: none;
+  transition: transform .14s linear, opacity .12s linear;
+  background: var(--bg); border: 1px solid var(--border);
+  box-shadow: var(--shadow-pop); display: flex; flex-direction: column; overflow: hidden; }
+.sheet.open { transform: translate(-50%, -50%); opacity: 1; pointer-events: auto; }
+.sheet-head { display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 18px; border-bottom: 1px solid var(--border); }
+.sheet-head h2 { margin: 0; font-size: 14px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 1px; }
+.sheet-head h2::before { content: "▍"; color: var(--accent); margin-right: 6px; }
+.sheet-body { flex: 1; min-height: 0; display: flex; gap: 24px; padding: 4px 18px 14px; }
+.sheet .cat-nav { width: 168px; flex: none; padding-top: 12px;
+  display: flex; flex-direction: column; gap: 1px; align-self: flex-start;
+  position: sticky; top: 0; }
+.cat-nav button { text-align: left; padding: 6px 12px; color: var(--dim); font-size: 12.5px;
+  border-left: 2px solid transparent; }
+.cat-nav button:hover { background: var(--panel-2); color: var(--text); }
+.cat-nav button.active { border-left-color: var(--accent); background: var(--accent-weak);
+  color: var(--accent); font-weight: 600; }
+.cat-body { flex: 1; min-width: 0; overflow-y: auto; padding-top: 6px; }
+.cat { padding-bottom: 6px; margin-bottom: 10px; scroll-margin-top: 8px; }
+.cat > h3 { margin: 12px 0 2px; font-size: 12.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 1px; padding-bottom: 6px;
+  border-bottom: 1px solid var(--border); }
+.cat > h3::before { content: "── "; color: var(--border); }
+.cat > h3::after { content: " ──"; color: var(--border); }
+.set-row { display: flex; align-items: flex-start; gap: 18px; padding: 11px 0;
+  border-bottom: 1px dashed var(--border-dim); }
+.set-row:last-child { border-bottom: none; }
+.set-row .info { flex: 1; min-width: 0; }
+.set-row .info > b { display: block; font-weight: 600; font-size: 12.5px; }
+.set-row .info .hint { margin-top: 2px; }
+.set-row .ctl { flex: none; display: flex; align-items: center; gap: 8px; min-height: 28px; }
+.set-row.col { flex-direction: column; gap: 5px; }
+.set-row .ctl input[type=text], .set-row .ctl input[type=number] {
+  padding: 6px 9px; border: 1px solid var(--border); background: var(--bg);
+  color: var(--text); font: inherit; }
+.set-row .ctl input[type=text] { width: 250px; }
+.set-row .ctl input[type=number] { width: 110px; }
+.set-row .ctl input:focus { outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent); }
+.badge { font-size: 10.5px; padding: 0 6px; border: 1px solid var(--warn); color: var(--warn);
+  white-space: nowrap; display: inline-flex; align-items: center; vertical-align: 1px; }
+.seg { display: inline-flex; gap: 0; }
+.seg button { padding: 4px 12px; font-size: 12px; color: var(--dim);
+  border: 1px solid var(--border); border-right-width: 0; background: var(--bg); }
+.seg button:last-child { border-right-width: 1px; }
+.seg button:hover { color: var(--text); }
+.seg button.active { background: var(--accent); border-color: var(--accent);
+  color: var(--accent-ink); font-weight: 600; }
+.srow { display: flex; align-items: baseline; justify-content: space-between; }
+.srow b { font-weight: 600; font-size: 12.5px; }
+.srow .sval { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 12px;
+  color: var(--accent); }
+input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 22px;
+  background: transparent; cursor: pointer; }
+input[type=range]::-webkit-slider-runnable-track { height: 4px; background: var(--track);
+  border: 1px solid var(--border); }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+  width: 12px; height: 16px; margin-top: -7px; background: var(--accent); border: none; }
+input[type=range]::-moz-range-track { height: 4px; background: var(--track);
+  border: 1px solid var(--border); }
+input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var(--accent);
+  border: none; border-radius: 0; }
+.msg { min-height: 18px; font-size: 12px; }
+.msg.ok { color: var(--in); } .msg.err { color: var(--err); } .msg.warn { color: var(--warn); }
+.save-bar { position: sticky; bottom: -14px; padding: 12px 0 2px; margin-top: 6px;
+  background: var(--bg); border-top: 1px solid var(--border);
+  display: flex; align-items: center; gap: 14px; }
 
 /* ---------- 控制台抽屉 ---------- */
 .console { position: fixed; left: 0; right: 0; bottom: 0; height: 44vh; z-index: 40;
-  background: #060a12; color: #cad5e6; display: flex; flex-direction: column;
-  border-top: 1px solid #1a253a; transform: translateY(100%); transition: transform .22s ease;
-  box-shadow: 0 -8px 30px rgba(0,0,0,.45); }
+  background: #05080c; color: #9fb4c4; display: flex; flex-direction: column;
+  border-top: 1px solid var(--accent); transform: translateY(100%);
+  transition: transform .16s linear; }
 .console.open { transform: translateY(0); }
-.console .chead { display: flex; align-items: center; gap: 12px; padding: 8px 16px;
-  border-bottom: 1px solid #1a253a; font-size: 12.5px; color: #8496b4; }
-.console .chead .ttl { display: flex; align-items: center; gap: 8px; font-weight: 550;
-  color: #f1f5fc; }
-.console pre { flex: 1; overflow-y: auto; margin: 0; padding: 10px 16px;
-  font: 12px/1.65 var(--mono); white-space: pre-wrap; word-break: break-all; }
+.console .chead { display: flex; align-items: center; gap: 12px; padding: 6px 14px;
+  border-bottom: 1px solid #1a2530; font-size: 12px; color: #5f7484; }
+.console .chead .ttl { display: flex; align-items: center; gap: 8px; font-weight: 600;
+  color: #d5e0e8; }
+.console pre { flex: 1; overflow-y: auto; margin: 0; padding: 8px 14px;
+  font: 11.5px/1.6 var(--mono); white-space: pre-wrap; word-break: break-all; }
 .console .chead label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
-.console .chead button { color: #8496b4; padding: 3px 9px; border-radius: 7px; }
-.console .chead button:hover { background: #1a253a; color: #f1f5fc; }
+.console .chead button { color: #5f7484; padding: 2px 8px; }
+.console .chead button:hover { background: #1a2530; color: #d5e0e8; }
 
-/* ---------- 侧滑设置 / 弹层 ---------- */
-.scrim { position: fixed; inset: 0; background: rgba(10,12,16,.45); z-index: 50;
-  opacity: 0; pointer-events: none; transition: opacity .18s; }
-.scrim.show { opacity: 1; pointer-events: auto; }
-.panel { position: fixed; top: 0; right: 0; bottom: 0; width: 420px; max-width: 92vw;
-  background: var(--card); z-index: 51; box-shadow: -12px 0 40px rgba(0,0,0,.18);
-  transform: translateX(100%); transition: transform .22s ease; display: flex;
-  flex-direction: column; }
-.panel.open { transform: translateX(0); }
-.panel .phead { display: flex; align-items: center; justify-content: space-between;
-  padding: 16px 20px; border-bottom: 1px solid var(--border); font-weight: 650; font-size: 16px; }
-.panel .pbody { flex: 1; overflow-y: auto; padding: 8px 20px 20px; }
-.group { margin: 16px 0; }
-.group h4 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--dim);
-  text-transform: uppercase; letter-spacing: .6px; }
-.field { margin: 10px 0; }
-.field label { display: block; font-size: 12.5px; color: var(--dim); margin-bottom: 5px; }
-.field input[type=text], .field input[type=number] { width: 100%; padding: 9px 11px;
-  border: 1px solid var(--border); border-radius: 9px; background: var(--bg);
-  color: var(--text); font: inherit; }
-.field input:focus { outline: none; border-color: var(--accent); }
-.check { display: flex; align-items: center; gap: 9px; padding: 9px 0; cursor: pointer; }
-.check input { width: 16px; height: 16px; accent-color: var(--accent); }
-.hint { font-size: 12px; color: var(--dim); }
-/* 滑块行：标题右侧实时显示数值 */
-.srow { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; }
-.srow label { margin-bottom: 0; }
-.srow .sval { font: inherit; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 13px; color: var(--accent); }
-input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 26px; background: transparent; cursor: pointer; }
-input[type=range]::-webkit-slider-runnable-track { height: 6px; border-radius: 6px; background: var(--track); }
-input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 18px; height: 18px; margin-top: -6px; border-radius: 50%; background: var(--accent); border: 2px solid var(--card); box-shadow: 0 1px 3px rgba(0,0,0,.25); }
-input[type=range]::-moz-range-track { height: 6px; border-radius: 6px; background: var(--track); }
-input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: var(--accent); border: 2px solid var(--card); }
-.msg { min-height: 20px; font-size: 13px; margin-top: 10px; }
-.msg.ok { color: var(--in); } .msg.err { color: var(--err); } .msg.warn { color: var(--warn); }
+/* ---------- 命令面板 ---------- */
+.palette { position: fixed; inset: 0; z-index: 70; display: none;
+  background: rgba(4,7,10,.55); }
+.palette.show { display: block; }
+.pal-box { position: relative; width: min(580px, 92vw); margin: 13vh auto 0;
+  background: var(--bg); border: 1px solid var(--border); box-shadow: var(--shadow-pop); }
+.pal-box::before { content: ">_"; position: absolute; left: 14px; top: 12px;
+  color: var(--accent); font-weight: 700; font-size: 14px; z-index: 1; }
+.pal-box input { width: 100%; height: 42px; padding: 0 16px 0 42px; border: none;
+  outline: none; background: transparent; color: var(--text);
+  font: 14px/1 var(--mono); border-bottom: 1px solid var(--border); }
+.pal-list { max-height: 320px; overflow-y: auto; padding: 4px; }
+.pal-item { display: flex; align-items: center; gap: 10px; padding: 7px 12px;
+  font-size: 13px; cursor: pointer; color: var(--text);
+  border-left: 2px solid transparent; }
+.pal-item .ic { width: 14px; height: 14px; color: var(--dim); flex: none; }
+.pal-item.sel { background: var(--accent-weak); border-left-color: var(--accent); }
+.pal-item.sel .ic { color: var(--accent); }
+.pal-none { padding: 16px; text-align: center; color: var(--dim); font-size: 12.5px; }
+.pal-foot { display: flex; gap: 14px; padding: 6px 14px; border-top: 1px solid var(--border);
+  font-size: 11px; color: var(--dim); align-items: center; }
 
-/* 发送文本弹窗 */
-.modal { position: fixed; inset: 0; z-index: 60; display: none; place-items: center; }
+/* ---------- 普通弹窗 ---------- */
+.modal { position: fixed; inset: 0; z-index: 60; display: none; place-items: center;
+  background: rgba(4,7,10,.55); }
 .modal.show { display: grid; }
-.modal .box { width: 480px; max-width: 92vw; background: var(--card); border-radius: 16px;
-  padding: 20px; box-shadow: 0 20px 60px rgba(0,0,0,.3); border: 1px solid var(--border); }
-.modal h3 { margin: 0 0 12px; font-size: 16px; }
-.modal textarea { width: 100%; min-height: 110px; resize: vertical; padding: 10px 12px;
-  border: 1px solid var(--border); border-radius: 10px; background: var(--bg);
-  color: var(--text); font: inherit; }
-.modal textarea:focus { outline: none; border-color: var(--accent); }
+.modal .box { width: 460px; max-width: 92vw; background: var(--bg); padding: 18px;
+  box-shadow: var(--shadow-pop); border: 1px solid var(--border); }
+.modal h3 { margin: 0 0 12px; font-size: 14px; font-weight: 700; }
+.modal h3::before { content: "▍"; color: var(--accent); margin-right: 6px; }
+.modal textarea { width: 100%; min-height: 110px; resize: vertical; padding: 8px 10px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; }
+.modal textarea:focus { outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent); }
 .modal .row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 
-/* 拖拽遮罩 */
+/* ---------- 拖拽遮罩 ---------- */
 .dropzone { position: fixed; inset: 0; z-index: 70; display: none; place-items: center;
-  background: color-mix(in srgb, var(--bg) 55%, transparent);
-  backdrop-filter: blur(3px); }
+  background: rgba(4,7,10,.5); }
 .dropzone.show { display: grid; }
-.dropzone .inner { border: 2.5px dashed var(--accent); border-radius: 22px; padding: 48px 72px;
-  background: var(--card); text-align: center; box-shadow: var(--shadow); }
-.dropzone .inner .ic { width: 40px; height: 40px; margin: 0 auto 12px; color: var(--accent); }
-.dropzone b { font-size: 17px; display: block; margin-bottom: 4px; }
+.dropzone .inner { border: 2px dashed var(--accent); padding: 44px 68px;
+  background: var(--bg); text-align: center; }
+.dropzone .inner .ic { width: 36px; height: 36px; margin: 0 auto 12px; color: var(--accent); }
+.dropzone b { font-size: 15px; display: block; margin-bottom: 4px; }
 .dropzone .hint { color: var(--dim); }
 
-/* Toast */
-.toasts { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
-  display: flex; flex-direction: column; gap: 8px; z-index: 80; align-items: center; }
-.toast { background: var(--card); border: 1px solid var(--border); border-radius: 11px;
-  padding: 9px 18px; box-shadow: 0 6px 24px rgba(0,0,0,.16); font-size: 13.5px;
-  animation: pop .18s ease; max-width: 70vw; }
-.toast.err { border-color: var(--err); color: var(--err); }
-@keyframes pop { from { opacity: 0; transform: translateY(8px); } }
+/* ---------- Toast ---------- */
+.toasts { position: fixed; bottom: 42px; left: 50%; transform: translateX(-50%);
+  display: flex; flex-direction: column; gap: 6px; z-index: 80; align-items: center; }
+.toast { background: var(--bg); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  padding: 7px 16px; box-shadow: var(--shadow-pop); font-size: 12.5px;
+  animation: rise .15s linear; max-width: 70vw; }
+.toast.err { border-left-color: var(--err); color: var(--err); }
+.toast.err::before { content: "[!] "; font-weight: 700; }
 
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: var(--track); border-radius: 5px; border: 2px solid var(--bg); }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--border); }
+::-webkit-scrollbar-thumb:hover { background: var(--dim); }
+::-webkit-scrollbar-track { background: transparent; }
 
-@media (max-width: 760px) {
-  .app { flex-direction: column; }
-  .side { width: 100%; flex-direction: row; align-items: center; flex-wrap: wrap;
-    border-right: none; border-bottom: 1px solid var(--border); padding: 10px 14px; }
-  .brand { padding: 0 8px 0 0; }
-  nav { flex-direction: row; }
-  .side .grow, .side-status { display: none; }
-  .side-btns { flex-direction: row; }
-  .viewhead, .viewbody { padding-left: 16px; padding-right: 16px; }
+@media (max-width: 860px) {
+  .topbar { flex-wrap: wrap; height: auto; padding: 8px 10px; row-gap: 8px; }
+  .brand .ver { display: none; }
+  .main-row { flex-direction: column; }
+  .dock { width: 100%; flex-direction: row; overflow-x: auto; overflow-y: hidden;
+    border-right: none; border-bottom: 1px solid var(--border); padding: 8px 10px; }
+  .dock-cap { display: none; }
+  .dev-card { min-width: 230px; }
+  .stage { padding: 10px 12px 0; }
+  .chat-row { max-width: 92%; }
+  .sheet { width: 96vw; height: 88vh; }
+  .sheet-body { flex-direction: column; overflow-y: auto; }
+  .sheet .cat-nav { position: static; flex-direction: row; width: 100%;
+    overflow-x: auto; padding-top: 6px; }
+  .cat-nav button { white-space: nowrap; }
+  .cat-body { overflow: visible; }
+  .set-row { flex-direction: column; gap: 8px; }
+  .set-row .ctl input[type=text] { width: 100%; }
+  .statusbar .hide-sm { display: none; }
 }
+
 </style>
 </head>
 <body>
-<div class="app">
-  <aside class="side">
-    <div class="brand">
-      <div class="mark">
-        <svg viewBox="0 0 24 24" width="18" height="18">
-          <path d="M21 3L4 11l8 1z" fill="#ffffff"/>
-          <path d="M21 3L12 12l1 8z" fill="#00dfe8"/>
-          <line x1="8.5" y1="15.5" x2="6.5" y2="17.5" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>
-        </svg>
-      </div>
-      <div><b>copywhere</b><div class="ver" id="ver"></div></div>
+<div class="bgfx"></div>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="mark">
+      <svg viewBox="0 0 24 24" width="16" height="16">
+        <path d="M21 3L4 11l8 1z" fill="#ffffff"/>
+        <path d="M21 3L12 12l1 8z" fill="#00dfe8"/>
+        <line x1="8.5" y1="15.5" x2="6.5" y2="17.5" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>
+      </svg>
     </div>
-    <nav>
-      <button data-view="feed" class="active">
-        <svg class="ic" viewBox="0 0 24 24">
-          <path d="M21 3L11 8.5l3 1.5z" fill="currentColor" fill-opacity="0.22"/>
-          <path d="M21 3l-7 4.5 1.5 5.5z"/>
-          <path d="M3 17l5-4.5 3 2.5 4-4"/>
-        </svg>传输动态</button>
-      <button data-view="layout">
-        <svg class="ic" viewBox="0 0 24 24">
-          <rect x="2.5" y="5" width="10" height="11" rx="1.8"/>
-          <rect x="15" y="7" width="6.5" height="9" rx="1.5"/>
-          <path d="M10 10.5l4-1.5-1.5 3.5-1-1z" fill="currentColor" fill-opacity="0.25"/>
-        </svg>屏幕布局</button>
-      <button data-view="peers">
-        <svg class="ic" viewBox="0 0 24 24">
-          <rect x="2.5" y="4" width="12" height="9" rx="1.8"/>
-          <path d="M5.5 16h6M8.5 13v3"/>
-          <rect x="15.5" y="8" width="6" height="11" rx="1.5"/>
-          <path d="M10.5 7.5l3.5 2-3.5 2" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>在线节点</button>
-    </nav>
-    <div class="grow"></div>
-    <div class="side-status">
-      <div class="status-row"><span class="dot" id="dot"></span><span>在线 <b id="peerCount">0</b> 个节点</span></div>
-      <label class="switch"><span>自动同步</span><input type="checkbox" id="syncSwitch"><span class="knob"></span></label>
-    </div>
-    <div class="side-btns">
-      <button class="btn primary" id="sendFileBtn">
-        <svg class="ic" viewBox="0 0 24 24">
-          <path d="M21 3L5 11.5l7 2z" fill="currentColor" fill-opacity="0.3"/>
-          <path d="M21 3l-9 7.5 2 7.5z"/>
-          <line x1="12" y1="13.5" x2="21" y2="3"/>
-          <line x1="6.5" y1="18.5" x2="9" y2="16" stroke-linecap="round" stroke-width="2"/>
-        </svg>发送文件</button>
-      <button class="btn" id="sendTextBtn">
-        <svg class="ic" viewBox="0 0 24 24">
-          <path d="M14 3H5.5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2V9.5L14 3z"/>
-          <path d="M14 3v6.5h6.5"/>
-          <path d="M7 13.5h10M7 17h6" stroke-linecap="round"/>
-        </svg>发送文本</button>
-    </div>
-    <div class="side-foot">
-      <button class="iconbtn" id="consoleBtn" title="运行日志">
-        <svg class="ic" viewBox="0 0 24 24">
-          <rect x="2.5" y="4" width="19" height="16" rx="2.5"/>
-          <path d="m6.5 8.5 4 3.5-4 3.5M13.5 15.5h4" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        <span class="badge" id="consoleBadge" hidden></span></button>
-      <button class="iconbtn" id="themeBtn" title="切换主题"></button>
-      <button class="iconbtn" id="settingsBtn" title="设置">
-        <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/>
-          <path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2-1.2L14.2 3h-4l-.4 2.7a7 7 0 0 0-2 1.2l-2.3-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 2 1.2l.4 2.7h4l.4-2.7a7 7 0 0 0 2-1.2l2.3 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2Z"/></svg></button>
-      <div class="self" id="selfInfo"></div>
-    </div>
+    <div><b>copywhere</b><div class="ver" id="ver"></div></div>
+  </div>
+  <nav class="tabs">
+    <button data-view="workspace" class="active">
+      <svg class="ic" viewBox="0 0 24 24" style="width:15px;height:15px">
+        <path d="M21 3L11 8.5l3 1.5z" fill="currentColor" fill-opacity="0.22"/>
+        <path d="M21 3l-7 4.5 1.5 5.5z"/>
+        <path d="M3 17l5-4.5 3 2.5 4-4"/>
+      </svg>工作台</button>
+    <button data-view="layout">
+      <svg class="ic" viewBox="0 0 24 24" style="width:15px;height:15px">
+        <rect x="2.5" y="5" width="10" height="11" rx="1.8"/>
+        <rect x="15" y="7" width="6.5" height="9" rx="1.5"/>
+        <path d="M10 10.5l4-1.5-1.5 3.5-1-1z" fill="currentColor" fill-opacity="0.25"/>
+      </svg>屏幕布局</button>
+  </nav>
+  <div class="grow"></div>
+  <span class="chip"><span class="dot" id="dot"></span><b id="peerCount">0</b>&nbsp;节点在线</span>
+  <label class="chip clickable" title="自动同步：复制内容自动发往在线节点">
+    <span>自动同步</span>
+    <span class="switch" style="gap:0"><input type="checkbox" id="syncSwitch"><span class="knob"></span></span>
+  </label>
+  <div class="top-actions">
+    <button class="btn primary" id="sendFileBtn">
+      <svg class="ic" viewBox="0 0 24 24" style="width:16px;height:16px">
+        <path d="M21 3L5 11.5l7 2z" fill="currentColor" fill-opacity="0.3"/>
+        <path d="M21 3l-9 7.5 2 7.5z"/>
+        <line x1="12" y1="13.5" x2="21" y2="3"/>
+        <line x1="6.5" y1="18.5" x2="9" y2="16" stroke-linecap="round" stroke-width="2"/>
+      </svg>发送文件</button>
+    <button class="btn" id="sendTextBtn">
+      <svg class="ic" viewBox="0 0 24 24" style="width:16px;height:16px">
+        <path d="M14 3H5.5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2V9.5L14 3z"/>
+        <path d="M14 3v6.5h6.5"/>
+        <path d="M7 13.5h10M7 17h6" stroke-linecap="round"/>
+      </svg>发送文本</button>
+    <button class="iconbtn" id="consoleBtn" title="运行日志">
+      <svg class="ic" viewBox="0 0 24 24">
+        <rect x="2.5" y="4" width="19" height="16" rx="2.5"/>
+        <path d="m6.5 8.5 4 3.5-4 3.5M13.5 15.5h4" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span class="badge" id="consoleBadge" hidden></span></button>
+    <button class="iconbtn" id="themeBtn" title="切换主题"></button>
+    <button class="iconbtn" id="settingsBtn" title="设置">
+      <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/>
+        <path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2-1.2L14.2 3h-4l-.4 2.7a7 7 0 0 0-2 1.2l-2.3-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 2 1.2l.4 2.7h4l.4-2.7a7 7 0 0 0 2-1.2l2.3 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2Z"/></svg></button>
+  </div>
+</header>
+
+<!-- 主区：持久设备坞 + 右侧内容空间（时间线 / 屏幕布局） -->
+<div class="main-row">
+  <aside class="dock" id="dock">
+    <div class="dock-cap">本机</div>
+    <div id="selfCard"></div>
+    <div class="dock-cap">在线节点</div>
+    <div id="peerDock"></div>
   </aside>
 
-  <main>
-    <section class="view active" id="view-feed">
-      <div class="viewhead"><h1>传输动态</h1><span class="sub" id="feedSub"></span></div>
-      <div class="viewbody">
-        <div class="xfer-strip" id="xferStrip"></div>
-        <div class="feed" id="feed"></div>
-      </div>
-    </section>
-    <section class="view" id="view-peers">
-      <div class="viewhead"><h1>在线节点</h1><span class="sub">通过 UDP 广播自动发现</span></div>
-      <div class="viewbody"><div class="peer-grid" id="peerGrid"></div></div>
-    </section>
-    <section class="view" id="view-layout">
-      <div class="viewhead"><h1>屏幕布局</h1><span class="sub">仿多显示器排列：把设备拖到本机左右两侧，配置鼠标键盘跨屏（KVM，实验性）</span></div>
-      <div class="viewbody">
-        <div class="layout-canvas" id="layoutCanvas"></div>
-        <div class="kvm-bar">
-          <label class="check" style="padding:0"><input type="checkbox" id="kvmEnabled"> 启用鼠标键盘跨屏</label>
-          <span class="hint">邻居配置<b>即时生效</b>并自动同步到对端 · 启用/停用跨屏需重启 · 被控时按 <b>Ctrl+Alt+Shift+X</b> 紧急退出</span>
+  <!-- 空间一：传输时间线 -->
+  <section class="space stage active" id="view-workspace">
+    <div class="stage-head"><h1>传输动态</h1><span class="sub" id="feedSub"></span></div>
+    <div class="timeline" id="timeline">
+      <div id="feed" style="display:contents"></div>
+      <div id="xferStrip" style="display:contents"></div>
+    </div>
+  </section>
+
+  <!-- 空间二：屏幕布局 -->
+  <section class="space layout-space" id="view-layout">
+    <div class="layout-head"><h1>屏幕布局</h1>
+      <span class="sub">仿多显示器排列：把设备拖到本机左右两侧，配置鼠标键盘跨屏（KVM，实验性）</span></div>
+    <div class="layout-canvas" id="layoutCanvas"></div>
+    <div class="kvm-bar">
+      <label class="check" style="padding:0"><input type="checkbox" id="kvmEnabled"> 启用鼠标键盘跨屏</label>
+      <span class="hint">邻居配置<b>即时生效</b>并自动同步到对端 · 启用/停用跨屏需重启 · 手感调参见「设置 → 跨屏控制」 · 被控时按 <b>Ctrl+Alt+Shift+X</b> 紧急退出</span>
+    </div>
+    <div class="sect">在线设备（拖到上方空位，或点选后使用快捷按钮）</div>
+    <div class="tray" id="deviceTray"></div>
+  </section>
+</div>
+
+<footer class="statusbar">
+  <span id="selfInfo"></span>
+  <span class="sep hide-sm"></span><span id="sbKvm" class="hide-sm"></span>
+  <span class="sep hide-sm"></span><span id="sbVer" class="hide-sm"></span>
+  <span class="pal-hint" id="palHint"><kbd>Ctrl</kbd>+<kbd>K</kbd> 快捷命令</span>
+</footer>
+
+<!-- 遮罩 + 设置大面板 -->
+<div class="scrim" id="scrim"></div>
+<section class="sheet" id="settings">
+  <div class="sheet-head"><h2>设置</h2>
+    <span class="hint" style="margin-right:auto;margin-left:14px">标记 <span class="badge">重启生效</span> 的项保存后需重启 copywhere，其余立即生效</span>
+    <button class="iconbtn" id="settingsClose">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12" stroke-linecap="round"/></svg></button></div>
+  <div class="sheet-body">
+    <aside class="cat-nav" id="cfgNav">
+      <button data-cat="general" class="active">通用</button>
+      <button data-cat="sync">自动同步</button>
+      <button data-cat="storage">存储</button>
+      <button data-cat="kvm">跨屏控制</button>
+      <button data-cat="paired">已配对设备</button>
+      <button data-cat="about">关于</button>
+    </aside>
+    <div class="cat-body" id="cfgScroll">
+      <div class="cat" data-cat="general" id="cat-general">
+        <h3>通用</h3>
+        <div class="set-row">
+          <div class="info"><b>节点名</b>
+            <div class="hint">局域网内展示的设备名称 <span class="badge">重启生效</span></div></div>
+          <div class="ctl"><input type="text" id="cfg_node_name" spellcheck="false"></div>
         </div>
-        <div class="sect">在线设备（拖到上方空位，或点选后使用快捷按钮）</div>
-        <div class="tray" id="deviceTray"></div>
+        <div class="set-row">
+          <div class="info"><b>外观</b>
+            <div class="hint">界面主题，仅对当前浏览器生效</div></div>
+          <div class="ctl seg" id="themeSeg">
+            <button data-theme-opt="auto">跟随系统</button>
+            <button data-theme-opt="light">浅色</button>
+            <button data-theme-opt="dark">深色</button>
+          </div>
+        </div>
+        <div class="set-row">
+          <div class="info"><b>配对认证</b>
+            <div class="hint">认证采用配对制：在左侧设备坞或「屏幕布局」配对后即可互通，无需配置 token。</div></div>
+        </div>
       </div>
-    </section>
-  </main>
+
+      <div class="cat" data-cat="sync" id="cat-sync">
+        <h3>自动同步</h3>
+        <div class="set-row">
+          <div class="info"><b>自动同步剪贴板</b>
+            <div class="hint">复制文件或文本后自动同步到所有在线节点；关闭后仍可手动发送</div></div>
+          <div class="ctl"><label class="switch"><input type="checkbox" id="syncSwitch2"><span class="knob"></span></label></div>
+        </div>
+        <div class="set-row">
+          <div class="info"><b>同步剪贴板文本</b>
+            <div class="hint">纯文本复制内容也在节点间同步</div></div>
+          <div class="ctl"><label class="switch"><input type="checkbox" id="cfg_text_sync"><span class="knob"></span></label></div>
+        </div>
+        <div class="set-row">
+          <div class="info"><b>收到文件后自动写入剪贴板</b>
+            <div class="hint">对端 Ctrl+V 即可直接粘贴收到的文件</div></div>
+          <div class="ctl"><label class="switch"><input type="checkbox" id="cfg_auto_paste"><span class="knob"></span></label></div>
+        </div>
+        <div class="set-row">
+          <div class="info"><b>容量阈值</b>
+            <div class="hint">超过此大小的复制内容不参与自动同步（0 = 不限制，立即生效）；手动发送不受限制</div></div>
+          <div class="ctl"><input type="number" id="cfg_max_auto_copy_mb" min="0"><span class="hint">MB</span></div>
+        </div>
+      </div>
+
+      <div class="cat" data-cat="storage" id="cat-storage">
+        <h3>存储</h3>
+        <div class="set-row">
+          <div class="info"><b>接收目录</b>
+            <div class="hint">收到的文件保存位置（每次接收建立独立子目录，立即生效）</div></div>
+          <div class="ctl">
+            <input type="text" id="cfg_receive_dir" spellcheck="false">
+            <button class="chipbtn" onclick="openPath({dir:'receive'})">打开目录</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="cat" data-cat="kvm" id="cat-kvm">
+        <h3>跨屏控制（KVM）</h3>
+        <div class="set-row">
+          <div class="info"><b>启用鼠标键盘跨屏</b>
+            <div class="hint">把本机鼠标键盘推向左右邻居设备 <span class="badge">重启生效</span> · 被控时按 <b>Ctrl+Alt+Shift+X</b> 紧急退出</div></div>
+          <div class="ctl"><label class="switch"><input type="checkbox" id="kvmEnabled2"><span class="knob"></span></label></div>
+        </div>
+        <div class="set-row">
+          <div class="info"><b>邻居布局</b>
+            <div class="hint">在「屏幕布局」或左侧设备坞把设备设为左邻/右邻；配置即时生效并自动同步到对端</div></div>
+        </div>
+        <div class="set-row col">
+          <div class="srow"><b>移动合拍间隔</b><span class="sval" id="v_move">默认 8ms</span></div>
+          <input type="range" id="cfg_kvm_move_ms" min="0" max="50" step="1" oninput="syncKvmScales()">
+          <div class="hint">主控端把原始移动攒成一次发送的频率（0 = 默认 8，越小越跟手、越耗带宽）。保存后立即生效，无需重启。</div>
+        </div>
+        <div class="set-row col">
+          <div class="srow"><b>重排注入节拍</b><span class="sval" id="v_reflow">默认 4ms</span></div>
+          <input type="range" id="cfg_kvm_reflow_ms" min="-1" max="50" step="1" oninput="syncKvmScales()">
+          <div class="hint">被控端把收到的位移拆成恒定小步注入以消除台阶感（-1 = 关闭）。</div>
+        </div>
+        <div class="set-row col">
+          <div class="srow"><b>速度补偿系数</b><span class="sval" id="v_speed">100%</span></div>
+          <input type="range" id="cfg_kvm_speed_pct" min="50" max="300" step="5" value="100" oninput="syncKvmScales()">
+          <div class="hint">本机作主控时位移 × 此值 / 100。A→B 偏慢调高 A 机系数、B→A 偏慢调高 B 机系数（各机自设）；运行日志有 KVM 切换的标定参考。</div>
+        </div>
+      </div>
+
+      <div class="cat" data-cat="paired" id="cat-paired">
+        <h3>已配对设备</h3>
+        <div id="pairedList" class="hint">加载中…</div>
+      </div>
+
+      <div class="cat" data-cat="about" id="cat-about">
+        <h3>关于</h3>
+        <div class="set-row">
+          <div class="info"><b>版本</b></div>
+          <div class="ctl"><span class="hint" id="aboutVer"></span></div>
+        </div>
+        <div class="set-row">
+          <div class="info"><b>本机</b></div>
+          <div class="ctl"><span class="hint" id="aboutSelf"></span></div>
+        </div>
+        <div class="set-row">
+          <div class="info"><b>配置文件</b>
+            <div class="hint" id="cfgPath" style="font-family:var(--mono)"></div></div>
+        </div>
+        <div class="set-row">
+          <div class="info"><b>诊断</b></div>
+          <div class="ctl">
+            <button class="chipbtn" id="aboutConsoleBtn">打开运行日志</button>
+            <button class="chipbtn" onclick="openPath({dir:'receive'})">打开接收目录</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="save-bar">
+        <button class="btn primary" onclick="saveCfg()">保存配置</button>
+        <span class="msg" id="cfgMsg"></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 命令面板 -->
+<div class="palette" id="palette">
+  <div class="pal-box">
+    <input id="palInput" placeholder="输入命令：发送、暂停、布局、主题、解除配对…" autocomplete="off">
+    <div class="pal-list" id="palList"></div>
+    <div class="pal-foot"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>Enter</kbd> 执行</span>
+      <span><kbd>Esc</kbd> 关闭</span></div>
+  </div>
 </div>
 
 <!-- 控制台抽屉 -->
@@ -428,48 +762,6 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
   </div>
   <pre id="consoleBody"></pre>
 </div>
-
-<!-- 设置侧滑 -->
-<div class="scrim" id="scrim"></div>
-<aside class="panel" id="settings">
-  <div class="phead">设置
-    <button class="iconbtn" id="settingsClose">
-      <svg class="ic" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12" stroke-linecap="round"/></svg></button></div>
-  <div class="pbody">
-    <div class="group"><h4>身份</h4>
-      <div class="field"><label>节点名（重启后生效）</label>
-        <input type="text" id="cfg_node_name"></div>
-      <p class="hint">认证采用配对制：在「在线节点」页配对后即可互通，无需配置 token。</p>
-    </div>
-    <div class="group"><h4>自动同步</h4>
-      <div class="field"><label>容量阈值 MB（0 = 不限制，立即生效）</label>
-        <input type="number" id="cfg_max_auto_copy_mb" min="0"></div>
-      <label class="check"><input type="checkbox" id="cfg_auto_paste">收到文件后自动写入剪贴板</label>
-      <label class="check"><input type="checkbox" id="cfg_text_sync">同步剪贴板文本</label>
-    </div>
-    <div class="group"><h4>存储</h4>
-      <div class="field"><label>接收目录（立即生效）</label>
-        <input type="text" id="cfg_receive_dir" spellcheck="false"></div>
-      <button class="chipbtn" onclick="openPath({dir:'receive'})">打开接收目录</button>
-    </div>
-    <div class="group"><h4>鼠标跨屏手感（保存后立即生效，无需重启）</h4>
-      <div class="field"><div class="srow"><label>移动合拍间隔</label><span class="sval" id="v_move">默认 8ms</span></div>
-        <input type="range" id="cfg_kvm_move_ms" min="0" max="50" step="1" oninput="syncKvmScales()"></div>
-      <div class="field"><div class="srow"><label>重排注入节拍</label><span class="sval" id="v_reflow">默认 4ms</span></div>
-        <input type="range" id="cfg_kvm_reflow_ms" min="-1" max="50" step="1" oninput="syncKvmScales()"></div>
-      <div class="field"><div class="srow"><label>速度补偿系数</label><span class="sval" id="v_speed">100%</span></div>
-        <input type="range" id="cfg_kvm_speed_pct" min="50" max="300" step="5" value="100" oninput="syncKvmScales()"></div>
-      <p class="hint">合拍=主控端把原始移动攒成一次发送的频率（0=默认8，越小越跟手、越耗带宽）；重排=被控端把收到的位移拆成恒定小步注入以消除台阶感（-1=关闭）。系数=本机作主控时位移 ×此值/100。</p>
-      <p class="hint">拖动即对本机生效：A→B 偏慢调高 A 机系数、B→A 偏慢调高 B 机系数（各机自设）。运行日志有 KVM 切换的标定参考。</p>
-    </div>
-    <div class="group"><h4>已配对设备</h4>
-      <div id="pairedList" class="hint">加载中…</div>
-    </div>
-    <div class="msg" id="cfgMsg"></div>
-    <button class="btn primary" style="width:100%" onclick="saveCfg()">保存配置</button>
-    <p class="hint" id="cfgPath" style="margin-top:10px"></p>
-  </div>
-</aside>
 
 <!-- 发送文本弹窗 -->
 <div class="modal" id="textModal">
@@ -527,12 +819,27 @@ const feed = [];            // 传输记录（旧 → 新）
 const xfers = new Map();    // 进行中传输 peer|name → 元素引用
 let pendingUpload = null;   // 面板上传刚完成、等待被发送进度接管的那条进度条
 
-// ---------- 视图切换 ----------
-document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
-  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("active", x === b));
-  document.querySelectorAll(".view").forEach(x => x.classList.remove("active"));
-  $("view-" + b.dataset.view).classList.add("active");
-});
+// ---------- 空间切换（工作台 / 屏幕布局） ----------
+const SPACE_ORDER = ["workspace", "layout"];
+let currentSpace = "workspace";
+function switchView(name) {
+  if (!SPACE_ORDER.includes(name)) name = "workspace";
+  const goingRight = SPACE_ORDER.indexOf(name) > SPACE_ORDER.indexOf(currentSpace);
+  currentSpace = name;
+  document.querySelectorAll(".tabs button").forEach(b =>
+    b.classList.toggle("active", b.dataset.view === name));
+  document.querySelectorAll(".space").forEach(s => {
+    const on = s.id === "view-" + name;
+    s.classList.remove("enter-left", "enter-right");
+    s.classList.toggle("active", on);
+    if (on) {
+      void s.offsetWidth; // 强制回流，确保每次切换都重放入场动画
+      s.classList.add(goingRight ? "enter-right" : "enter-left");
+    }
+  });
+}
+document.querySelectorAll(".tabs button").forEach(b =>
+  b.onclick = () => switchView(b.dataset.view));
 
 // ---------- Toast ----------
 function toast(msg, err) {
@@ -555,6 +862,7 @@ async function load() {
   applyState(st);
   rc.records.forEach(addFeed);
   renderFeed();
+  scrollTimeline(true); // 首屏直接定位到最新消息
 }
 
 // ---------- SSE ----------
@@ -573,24 +881,118 @@ function connect() {
 }
 
 // ---------- 状态 ----------
+// 工具栏与设置面板里的同一开关保持同步
+function setSyncUI(running) {
+  for (const id of ["syncSwitch", "syncSwitch2"]) {
+    const el = $(id);
+    if (el && el.checked !== running) el.checked = running;
+  }
+}
+function setKvmUI(on) {
+  for (const id of ["kvmEnabled", "kvmEnabled2"]) {
+    const el = $(id);
+    if (el && el.checked !== on) el.checked = on;
+  }
+}
 function applyState(st) {
   state = st;
   $("dot").classList.toggle("on", st.peer_count > 0);
   $("peerCount").textContent = st.peer_count;
   $("selfInfo").textContent = st.node_name + " · " + st.self_ip;
+  $("aboutSelf").textContent = st.node_name + " · " + st.self_ip;
   $("feedSub").textContent = st.peer_count > 0
     ? `${st.peer_count} 个节点在线 · 复制即同步` : "暂无在线节点";
-  const sw = $("syncSwitch");
-  const desired = !st.paused; // 勾选 = 自动同步运行中
-  if (sw.checked !== desired) sw.checked = desired;
-  const ke = $("kvmEnabled");
-  if (ke.checked !== !!st.kvm_enabled) ke.checked = !!st.kvm_enabled;
+  const kvmTxt = !st.kvm_enabled ? "跨屏未启用"
+    : `跨屏：左「${st.kvm_left || "-"}」右「${st.kvm_right || "-"}」`;
+  $("sbKvm").textContent = kvmTxt;
+  setSyncUI(!st.paused); // 勾选 = 自动同步运行中
+  setKvmUI(!!st.kvm_enabled);
+  renderDock();
   renderLayout();
 }
 
-// ---------- 动态流 ----------
-const ICON_UP = '<svg class="ic" viewBox="0 0 24 24"><path d="M20 4L6 10.5l5.5 1.5z" fill="currentColor" fill-opacity="0.25"/><path d="M20 4l-8.5 8 1.5 6z"/><line x1="11.5" y1="12" x2="20" y2="4"/></svg>';
-const ICON_DOWN = '<svg class="ic" viewBox="0 0 24 24"><path d="M4 20l14-6.5-5.5-1.5z" fill="currentColor" fill-opacity="0.25"/><path d="M4 20l8.5-8-1.5-6z"/><line x1="12.5" y1="12" x2="4" y2="20"/></svg>';
+// ---------- 设备坞 ----------
+let lastPeers = [];
+let dockSig = ""; // 内容签名：无变化不重建卡片，避免周期快照打断 hover/文本选区
+function renderDock() {
+  const left = state.kvm_left || "", right = state.kvm_right || "";
+  const sig = JSON.stringify([state.paused, state.peer_count, state.node_name, state.self_ip,
+    state.kvm_enabled, left, right,
+    lastPeers.map(p => [p.id, p.name, p.ips.join(","), p.paired, p.blocked, p.tcp_port])]);
+  if (sig === dockSig) {
+    // 结构未变：仅刷新各卡片的活跃时间文本（每 2s 都会变，但无需重建 DOM）
+    for (const card of $("peerDock").querySelectorAll(".dev-card[data-id]")) {
+      const p = lastPeers.find(x => x.id === card.dataset.id);
+      const t = card.querySelector(".idle-txt");
+      if (p && t) t.textContent = p.idle + "前活跃";
+    }
+    return;
+  }
+  dockSig = sig;
+  const selfCard = $("selfCard");
+  selfCard.innerHTML = "";
+  const self = document.createElement("div");
+  self.className = "dev-card self";
+  self.innerHTML = `
+    <div class="head">
+      <div class="avatar">${esc((state.node_name || "?")[0].toUpperCase())}</div>
+      <div class="who">
+        <div class="nm"><span class="nm-txt">${esc(state.node_name || "")}</span><span class="tag">本机</span></div>
+        <div class="sub">${esc(state.self_ip || "")}</div>
+      </div>
+    </div>
+    <div class="meta"><span>自动同步${state.paused ? "已暂停" : "运行中"}</span>
+      <span class="sep"></span><span>${state.peer_count} 节点在线</span></div>`;
+  selfCard.appendChild(self);
+
+  const box = $("peerDock");
+  box.innerHTML = "";
+  if (!lastPeers.length) {
+    box.innerHTML = `<div class="dock-empty">暂无在线节点<br>对端运行 copywhere 后经 UDP 广播自动出现在这里</div>`;
+    return;
+  }
+  for (const p of lastPeers) {
+    const card = document.createElement("div");
+    card.className = "dev-card";
+    card.dataset.id = p.id;
+    const stateTag = p.blocked ? `<span class="tag warn">已被拒</span>`
+      : (p.paired ? `<span class="tag ok">已配对</span>` : `<span class="tag mute">未配对</span>`);
+    const sideTag = p.name === left ? `<span class="tag">左邻</span>`
+      : (p.name === right ? `<span class="tag">右邻</span>` : "");
+    let acts = "";
+    if (!p.paired) {
+      acts = `<button class="chipbtn accent" data-act="pair">配对</button>`;
+    } else {
+      acts = `
+        ${p.name === left ? `<button class="chipbtn" data-act="unleft">移出左邻</button>`
+          : `<button class="chipbtn" data-act="left">设为左邻</button>`}
+        ${p.name === right ? `<button class="chipbtn" data-act="unright">移出右邻</button>`
+          : `<button class="chipbtn" data-act="right">设为右邻</button>`}`;
+    }
+    card.innerHTML = `
+      <div class="head">
+        <div class="avatar plain">${esc((p.name || "?")[0].toUpperCase())}</div>
+        <div class="who">
+          <div class="nm"><span class="nm-txt">${esc(p.name)}</span>${stateTag}${sideTag}</div>
+          <div class="sub">${esc(p.ips[0] || "")}</div>
+        </div>
+      </div>
+      <div class="meta"><span>${p.tcp_port}/tcp</span><span class="sep"></span>
+        <span class="idle-txt">${esc(p.idle)}前活跃</span>${p.ips.length > 1
+          ? `<span class="sep"></span><span title="${esc(p.ips.join(", "))}">+${p.ips.length - 1} IP</span>` : ""}</div>
+      <div class="acts">${acts}</div>`;
+    card.querySelector('[data-act="pair"]')?.addEventListener("click", () => pairWith(p.id, p.name));
+    card.querySelector('[data-act="left"]')?.addEventListener("click", () => assignSide("left", p.name));
+    card.querySelector('[data-act="right"]')?.addEventListener("click", () => assignSide("right", p.name));
+    card.querySelector('[data-act="unleft"]')?.addEventListener("click", () =>
+      saveKvm("", right, !!state.kvm_enabled));
+    card.querySelector('[data-act="unright"]')?.addEventListener("click", () =>
+      saveKvm(left, "", !!state.kvm_enabled));
+    box.appendChild(card);
+  }
+}
+
+// ---------- 动态流（聊天式时间线） ----------
 
 function addFeed(r) { feed.push(r); if (feed.length > 300) feed.shift(); }
 
@@ -599,35 +1001,52 @@ function renderFeed() {
   el.innerHTML = "";
   if (!feed.length) {
     el.innerHTML = `<div class="empty">
-      <div class="art"><svg class="ic" viewBox="0 0 24 24" style="width:28px;height:28px"><path d="M20 4L5 11l6.5 2z" fill="currentColor" fill-opacity="0.25"/><path d="M20 4l-8.5 9 2 6z"/><line x1="11.5" y1="13" x2="20" y2="4"/><line x1="6" y1="18.5" x2="8.5" y2="16" stroke-linecap="round" stroke-width="2"/></svg></div>
-      <b>还没有传输记录</b>在本机 Ctrl+C 复制文件或文本，会自动同步到所有在线节点；<br>也可以把文件直接拖进本窗口发送。
+      <div class="art"><svg class="ic" viewBox="0 0 24 24"><path d="M20 4L5 11l6.5 2z" fill="currentColor" fill-opacity="0.25"/><path d="M20 4l-8.5 9 2 6z"/><line x1="11.5" y1="13" x2="20" y2="4"/><line x1="6" y1="18.5" x2="8.5" y2="16" stroke-linecap="round" stroke-width="2"/></svg></div>
+      <h2>复制即同步</h2>
+      <p>在本机 Ctrl+C 复制文件或文本，自动发往所有在线节点；<br>也可以把文件直接拖进本窗口，或用 <b>Ctrl+K</b> 快捷发送。</p>
     </div>`;
     return;
   }
-  for (let i = feed.length - 1; i >= 0; i--) {
-    const r = feed[i];
-    const div = document.createElement("div");
-    div.className = "item";
-    const dir = r.in ? "in" : "out";
-    div.innerHTML = `
-      <div class="ico ${dir}">${r.in ? ICON_DOWN : ICON_UP}</div>
-      <div class="body">
-        <div class="title">${esc(r.name)}</div>
-        <div class="sub"><span>${r.in ? "来自" : "发往"} <b style="font-weight:550">${esc(r.peer)}</b></span>
-          <span class="sep"></span><span>${esc(r.time)}</span>
-          <span class="sep"></span><span>${fmtBytes(r.size)}</span></div>
-      </div>`;
-    const tail = document.createElement("div");
-    tail.className = "acts";
-    const failed = r.status.includes("失败");
-    tail.innerHTML = `<span class="pill ${failed ? "fail" : dir}">${esc(r.status)}</span>`;
-    if (r.in && r.detail) {
-      tail.appendChild(mkBtn("打开", () => openPath({ path: r.detail })));
-      tail.appendChild(mkBtn("所在目录", () => openPath({ path: r.detail, select: true })));
-    }
-    div.appendChild(tail);
-    el.appendChild(div);
+  // 时间升序：旧 → 新，最新消息在底部（聊天式阅读顺序）
+  for (let i = 0; i < feed.length; i++) el.appendChild(feedRow(feed[i]));
+  scrollTimeline(); // 用户没有向上翻历史时跟随到底部
+}
+
+// 时间线贴底跟随：仅当用户本就停留在底部附近时才自动滚到底，
+// 向上翻阅历史时不打扰。
+function nearTimelineBottom() {
+  const el = $("timeline");
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 140;
+}
+function scrollTimeline(force) {
+  const el = $("timeline");
+  if (force || nearTimelineBottom()) el.scrollTop = el.scrollHeight;
+}
+
+function feedRow(r) {
+  const dir = r.in ? "in" : "out";
+  const failed = String(r.status).includes("失败");
+  const row = document.createElement("div");
+  row.className = "chat-row " + dir;
+  row.innerHTML = `
+    <div class="ava" title="${esc(r.peer)}">${esc((r.peer || "?")[0].toUpperCase())}</div>
+    <div class="bubble">
+      <div class="b-title">${esc(r.name)}</div>
+      <div class="b-meta">
+        <span>${r.in ? "来自" : "发往"} <b>${esc(r.peer)}</b></span>
+        <span class="sep"></span><span>${esc(r.time)}</span>
+        <span class="sep"></span><span>${fmtBytes(r.size)}</span>
+        <span class="pill ${failed ? "fail" : dir}">${esc(r.status)}</span>
+      </div>
+    </div>`;
+  if (r.in && r.detail) {
+    const acts = document.createElement("div");
+    acts.className = "b-acts";
+    acts.appendChild(mkBtn("打开", () => openPath({ path: r.detail })));
+    acts.appendChild(mkBtn("所在目录", () => openPath({ path: r.detail, select: true })));
+    row.querySelector(".bubble").appendChild(acts);
   }
+  return row;
 }
 
 function mkBtn(text, fn) {
@@ -638,7 +1057,7 @@ function mkBtn(text, fn) {
   return b;
 }
 
-// ---------- 进行中传输 ----------
+// ---------- 进行中传输（时间线顶部的实时气泡） ----------
 function applyProgress(p) {
   const key = p.peer + "|" + p.name;
   let x = xfers.get(key);
@@ -656,8 +1075,8 @@ function applyProgress(p) {
   if (!x) {
     let el;
     if (pendingUpload) {
-      // 面板上传后紧接着的发送：让发送进度接管刚完成的上传条，
-      // 避免先显示"上传文件"、再显示"发送文件"两条进度条先后出现。
+      // 面板上传后紧接着的发送：让发送进度接管刚完成的上传气泡，
+      // 避免先显示"上传文件"、再显示"发送文件"两条进度先后出现。
       clearTimeout(pendingUpload.timer);
       xfers.delete(pendingUpload.key);
       el = pendingUpload.el;
@@ -673,6 +1092,7 @@ function applyProgress(p) {
     }
     x = { el, bar: el.querySelector("i"), pct: el.querySelector(".pct"), amt: el.querySelector(".amt") };
     xfers.set(key, x);
+    scrollTimeline(); // 新气泡在时间线底部，跟随可见
   }
   const pct = p.total > 0 ? Math.min(100, p.sent / p.total * 100) : 100;
   x.bar.style.width = pct + "%";
@@ -683,49 +1103,10 @@ function applyProgress(p) {
   }
 }
 
-// ---------- 节点 ----------
-let lastPeers = [];
+// ---------- 节点（保持接口，刷新设备坞与布局画布） ----------
 function renderPeers(peers) {
   lastPeers = peers;
-  const grid = $("peerGrid");
-  grid.innerHTML = "";
-  // 本机卡片
-  const self = document.createElement("div");
-  self.className = "peer-card self";
-  self.innerHTML = `
-    <div class="head"><div class="avatar">${esc((state.node_name || "?")[0].toUpperCase())}</div>
-      <div><div class="name">${esc(state.node_name || "")}<span class="tag">本机</span></div>
-      <div class="id">本节点 · 自动同步${state.paused ? "已暂停" : "运行中"}</div></div></div>
-    <div class="ip-chips"><span class="ip-chip primary">${esc(state.self_ip || "")}</span></div>
-    <div class="foot"><span>面板与传输服务运行中</span></div>`;
-  grid.appendChild(self);
-
-  if (!peers.length) {
-    grid.insertAdjacentHTML("beforeend", `<div class="peer-card" style="grid-column:1/-1">
-      <div class="empty" style="padding:28px 16px"><b>暂无在线节点</b>
-      正在等待 UDP 广播发现…请确认对端已运行 copywhere、且防火墙已放行。</div></div>`);
-    return;
-  }
-  for (const p of peers) {
-    const card = document.createElement("div");
-    card.className = "peer-card";
-    const chips = p.ips.map((ip, i) =>
-      `<span class="ip-chip ${i === 0 ? "primary" : ""}">${esc(ip)}</span>`).join("");
-    const stateTag = p.blocked
-      ? `<span class="tag warn">已被拒</span>`
-      : (p.paired ? `<span class="tag ok">已配对</span>` : "");
-    const hact = p.paired ? "" : `<div class="hact"><button class="btn primary" data-pair>配对</button></div>`;
-    card.innerHTML = `
-      <div class="head"><div class="avatar">${esc((p.name || "?")[0].toUpperCase())}</div>
-        <div><div class="name">${esc(p.name)}${stateTag}</div>
-        <div class="id">${esc(p.id.slice(0, 8))}</div></div>${hact}</div>
-      <div class="ip-chips">${chips}</div>
-      <div class="foot"><span>${p.tcp_port}/tcp</span><span class="sep"></span>
-        <span>${esc(p.idle)}前活跃</span></div>`;
-    const pb = card.querySelector("[data-pair]");
-    if (pb) pb.onclick = () => pairWith(p.id, p.name);
-    grid.appendChild(card);
-  }
+  renderDock();
   renderLayout();
 }
 
@@ -867,14 +1248,17 @@ async function saveKvm(left, right, enabled) {
     state.kvm_left = left; state.kvm_right = right;
     if (enableChanged) state.kvm_enabled = enabled;
     layoutSig = ""; // 强制重绘
+    renderDock();
     renderLayout();
-    const sw = $("kvmEnabled");
-    if (sw.checked !== enabled) sw.checked = enabled;
+    setKvmUI(enabled);
     toast(enableChanged ? "布局已保存（启用/停用跨屏重启后生效）" : "布局已保存，已即时生效并同步到对端");
   } catch (e) { toast("保存失败: " + e.message, true); }
 }
 
 $("kvmEnabled").addEventListener("change", e => {
+  saveKvm(state.kvm_left || "", state.kvm_right || "", e.target.checked);
+});
+$("kvmEnabled2").addEventListener("change", e => {
   saveKvm(state.kvm_left || "", state.kvm_right || "", e.target.checked);
 });
 
@@ -913,23 +1297,28 @@ async function checkPendingPair() {
   } catch (e) { /* 忽略：SSE 也会推送 */ }
 }
 
-// ---------- 暂停开关 ----------
-$("syncSwitch").addEventListener("change", async e => {
-  const paused = !e.target.checked; // 开关勾选 = 自动同步运行中（与 applyState 一致）
+// ---------- 暂停开关（工具栏 + 设置面板两处入口） ----------
+async function toggleSync(paused) {
   try {
     const r = await api("/api/pause", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paused }) });
     state.paused = r.paused;
-    renderPeers(lastPeers); // 立即刷新本节点卡片上的"自动同步运行中/已暂停"
+    setSyncUI(!r.paused);
+    renderDock();
     toast(paused ? "自动同步已暂停（手动发送不受影响）" : "自动同步已恢复");
   } catch (err) {
-    e.target.checked = !paused;
+    setSyncUI(!paused);
     toast("操作失败: " + err.message, true);
   }
-});
+}
+$("syncSwitch").addEventListener("change", e => toggleSync(!e.target.checked));
+$("syncSwitch2").addEventListener("change", e => toggleSync(!e.target.checked));
 
 // ---------- 发送文件（选择 + 全局拖拽） ----------
-$("sendFileBtn").onclick = () => $("pick").click();
+function openFilePicker() { $("pick").click(); }
+function openTextModal() { $("textModal").classList.add("show"); $("sendTextArea").focus(); }
+$("sendFileBtn").onclick = openFilePicker;
+$("sendTextBtn").onclick = openTextModal;
 $("pick").onchange = e => { if (e.target.files.length) upload(e.target.files); e.target.value = ""; };
 
 let dragDepth = 0;
@@ -969,6 +1358,7 @@ function upload(files) {
     $("xferStrip").appendChild(el);
     x = { el, bar: el.querySelector("i"), pct: el.querySelector(".pct"), amt: el.querySelector(".amt") };
     xfers.set(key, x);
+    scrollTimeline(); // 上传气泡在时间线底部，跟随可见
   }
   const xhr = new XMLHttpRequest();
   xhr.open("POST", "/api/upload");
@@ -984,7 +1374,7 @@ function upload(files) {
       x.bar.style.width = "100%";
       x.pct.textContent = "已上传";
       x.amt.textContent = "正在发送到在线节点";
-      // 不再定时收起：等待发送进度接管同一条进度条（见 applyProgress）；
+      // 不再定时收起：等待发送进度接管同一条气泡（见 applyProgress）；
       // 若始终没有发送进度（如节点均未配对被跳过），兜底 15s 后收起。
       if (pendingUpload) { // 上一条还没被接管（罕见）：先清掉，避免残留
         clearTimeout(pendingUpload.timer);
@@ -1004,7 +1394,6 @@ function upload(files) {
 }
 
 // ---------- 发送文本 ----------
-$("sendTextBtn").onclick = () => { $("textModal").classList.add("show"); $("sendTextArea").focus(); };
 $("textModal").addEventListener("click", e => { if (e.target === $("textModal")) closeTextModal(); });
 function closeTextModal() { $("textModal").classList.remove("show"); $("sendTextArea").value = ""; }
 
@@ -1044,33 +1433,49 @@ function pushLog(line) {
     b.textContent = unread > 99 ? "99+" : unread;
   }
 }
-$("consoleBtn").onclick = () => {
-  $("console").classList.toggle("open");
+function openConsole() {
+  $("console").classList.add("open");
   unread = 0;
   $("consoleBadge").hidden = true;
-  if ($("console").classList.contains("open")) $("consoleBody").scrollTop = $("consoleBody").scrollHeight;
-};
+  $("consoleBody").scrollTop = $("consoleBody").scrollHeight;
+}
+$("consoleBtn").onclick = openConsole;
+$("aboutConsoleBtn").onclick = openConsole;
 $("consoleClose").onclick = () => $("console").classList.remove("open");
 $("consoleClear").onclick = () => { logs.length = 0; $("consoleBody").textContent = ""; };
 
-// ---------- 设置面板 ----------
-$("settingsBtn").onclick = () => { openSettings(); loadPaired(); $("scrim").classList.add("show"); $("settings").classList.add("open"); };
-$("settingsClose").onclick = closePanels;
-$("scrim").onclick = closePanels;
-function closePanels() {
+// ---------- 设置大面板 ----------
+function openSettings() {
+  $("scrim").classList.add("show");
+  $("settings").classList.add("open");
+  loadCfg(); loadPaired();
+}
+function closeSettings() {
   $("scrim").classList.remove("show");
   $("settings").classList.remove("open");
 }
-document.addEventListener("keydown", e => {
-  if (e.key === "Escape") {
-    closePanels(); closeTextModal();
-    $("pairModal").classList.remove("show");
-    $("dropzone").classList.remove("show"); dragDepth = 0;
-  }
+$("settingsBtn").onclick = openSettings;
+$("settingsClose").onclick = closeSettings;
+$("scrim").onclick = closeSettings;
+
+// 分类导航：点击滚动定位 + 滚动时高亮当前分类
+document.querySelectorAll("#cfgNav button").forEach(b => b.onclick = () => {
+  const cat = $("cat-" + b.dataset.cat);
+  if (cat) cat.scrollIntoView({ behavior: "smooth", block: "start" });
+});
+const cfgScrollBox = $("cfgScroll");
+cfgScrollBox.addEventListener("scroll", () => {
+  const boxTop = cfgScrollBox.getBoundingClientRect().top;
+  let cur = "general";
+  document.querySelectorAll("#cfgScroll .cat").forEach(c => {
+    if (c.getBoundingClientRect().top - boxTop <= 70) cur = c.dataset.cat;
+  });
+  document.querySelectorAll("#cfgNav button").forEach(b =>
+    b.classList.toggle("active", b.dataset.cat === cur));
 });
 
-let cfgLoaded = false;
-async function openSettings() {
+// ---------- 配置加载与保存 ----------
+async function loadCfg() {
   $("cfgMsg").textContent = "";
   $("cfgMsg").className = "msg";
   try {
@@ -1079,14 +1484,13 @@ async function openSettings() {
     $("cfg_node_name").value = c.node_name || "";
     $("cfg_max_auto_copy_mb").value = c.max_auto_copy_mb ?? 10;
     $("cfg_receive_dir").value = c.receive_dir || "";
-    $("cfg_auto_paste").checked = !!c.auto_paste;
     $("cfg_text_sync").checked = !!c.text_sync;
+    $("cfg_auto_paste").checked = !!c.auto_paste;
     $("cfg_kvm_move_ms").value = c.kvm_move_interval_ms ?? 0;
     $("cfg_kvm_reflow_ms").value = c.kvm_reflow_step_ms ?? 0;
     $("cfg_kvm_speed_pct").value = c.kvm_speed_percent || 100;
     syncKvmScales();
-    $("cfgPath").textContent = "配置文件: " + r.path;
-    cfgLoaded = true;
+    $("cfgPath").textContent = r.path;
   } catch (e) {
     $("cfgMsg").className = "msg err";
     $("cfgMsg").textContent = "读取配置失败: " + e.message;
@@ -1128,34 +1532,28 @@ function syncKvmScales() {
 }
 
 // ---------- 已配对设备 ----------
+let pairedCache = []; // 供命令面板使用
 async function loadPaired() {
   const el = $("pairedList");
   try {
     const r = await api("/api/paired");
+    pairedCache = r.paired;
     if (!r.paired.length) {
-      el.textContent = "暂无配对设备：在「在线节点」页点击「配对」，对端确认后即完成。";
+      el.textContent = "暂无配对设备：在设备坞或「屏幕布局」点击「配对」，对端确认后即完成。";
       return;
     }
     el.innerHTML = "";
     for (const d of r.paired) {
       const row = document.createElement("div");
-      row.style.cssText = "display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border)";
+      row.style.cssText = "display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border-dim)";
       row.innerHTML = `<div style="flex:1;min-width:0">
           <div style="font-weight:550">${esc(d.name || "未命名节点")}</div>
-          <div class="hint" style="font-family:var(--mono)">${esc(d.id.slice(0, 12))}… · ${esc(d.paired_at)}</div>
+          <div class="hint" style="font-family:var(--mono)">${esc(d.id.slice(0, 12))}… · 配对于 ${esc(d.paired_at)}</div>
         </div>`;
       const b = document.createElement("button");
       b.className = "chipbtn";
       b.textContent = "解除配对";
-      b.onclick = async () => {
-        if (!confirm(`解除与「${d.name || d.id.slice(0, 8)}」的配对？双方将无法再互相同步。`)) return;
-        try {
-          await api("/api/unpair", { method: "POST",
-            headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: d.id }) });
-          toast("已解除配对");
-          loadPaired();
-        } catch (e) { toast("解除失败: " + e.message, true); }
-      };
+      b.onclick = () => unpairDevice(d);
       row.appendChild(b);
       el.appendChild(row);
     }
@@ -1163,6 +1561,107 @@ async function loadPaired() {
     el.textContent = "读取配对列表失败: " + e.message;
   }
 }
+
+async function unpairDevice(d) {
+  if (!confirm(`解除与「${d.name || d.id.slice(0, 8)}」的配对？双方将无法再互相同步。`)) return;
+  try {
+    await api("/api/unpair", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: d.id }) });
+    toast("已解除配对");
+    loadPaired();
+  } catch (e) { toast("解除失败: " + e.message, true); }
+}
+
+// ---------- 命令面板（Ctrl+K） ----------
+const palCmds = [];
+let palSel = 0;
+let palShown = [];
+
+function buildCommands() {
+  palCmds.length = 0;
+  palCmds.push(
+    { t: "发送文件…", kw: "send file 文件", fn: openFilePicker },
+    { t: "发送文本…", kw: "send text 文本", fn: openTextModal },
+    { t: state.paused ? "恢复自动同步" : "暂停自动同步", kw: "pause resume 暂停 恢复 同步", fn: () => toggleSync(!state.paused) },
+    { t: state.kvm_enabled ? "停用鼠标键盘跨屏（重启生效）" : "启用鼠标键盘跨屏（重启生效）", kw: "kvm 跨屏", fn: () => saveKvm(state.kvm_left || "", state.kvm_right || "", !state.kvm_enabled) },
+    { t: "打开接收目录", kw: "open folder 目录 接收", fn: () => openPath({ dir: "receive" }) },
+    { t: "打开运行日志", kw: "log console 日志", fn: openConsole },
+    { t: "打开屏幕布局", kw: "layout kvm 布局", fn: () => { switchView("layout"); } },
+    { t: "回到工作台", kw: "workspace 工作台", fn: () => switchView("workspace") },
+    { t: "打开设置…", kw: "settings 设置", fn: openSettings },
+    { t: "主题：跟随系统", kw: "theme auto 主题", fn: () => setTheme("auto") },
+    { t: "主题：浅色", kw: "theme light 主题 亮", fn: () => setTheme("light") },
+    { t: "主题：深色", kw: "theme dark 主题 暗", fn: () => setTheme("dark") },
+  );
+  for (const d of pairedCache) {
+    palCmds.push({ t: `解除配对「${d.name || d.id.slice(0, 8)}」`, kw: "unpair 解除 配对",
+      fn: () => unpairDevice(d) });
+  }
+}
+
+function palRender() {
+  const q = $("palInput").value.trim().toLowerCase();
+  palShown = palCmds.filter(c => !q || (c.t + " " + c.kw).toLowerCase().includes(q));
+  palSel = Math.min(palSel, Math.max(0, palShown.length - 1));
+  const list = $("palList");
+  list.innerHTML = "";
+  if (!palShown.length) {
+    list.innerHTML = `<div class="pal-none">没有匹配的命令</div>`;
+    return;
+  }
+  palShown.forEach((c, i) => {
+    const div = document.createElement("div");
+    div.className = "pal-item" + (i === palSel ? " sel" : "");
+    div.innerHTML = `<svg class="ic" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>${esc(c.t)}</span>`;
+    div.onclick = () => { closePalette(); c.fn(); };
+    div.onmousemove = () => { if (palSel !== i) { palSel = i; palRender(); } };
+    list.appendChild(div);
+  });
+}
+
+function openPalette() {
+  // 解除配对命令依赖已配对列表：首次打开时若尚未加载则补拉一次
+  if (!pairedCache.length) {
+    loadPaired().then(() => {
+      if ($("palette").classList.contains("show")) { buildCommands(); palRender(); }
+    }).catch(() => {});
+  }
+  buildCommands();
+  $("palette").classList.add("show");
+  $("palInput").value = "";
+  palSel = 0;
+  palRender();
+  $("palInput").focus();
+}
+function closePalette() { $("palette").classList.remove("show"); }
+
+$("palHint").onclick = openPalette;
+$("palette").addEventListener("click", e => { if (e.target === $("palette")) closePalette(); });
+$("palInput").addEventListener("input", () => { palSel = 0; palRender(); });
+$("palInput").addEventListener("keydown", e => {
+  if (e.key === "ArrowDown") { e.preventDefault(); palSel = Math.min(palSel + 1, palShown.length - 1); palRender(); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); palSel = Math.max(palSel - 1, 0); palRender(); }
+  else if (e.key === "Enter") {
+    e.preventDefault();
+    const c = palShown[palSel];
+    if (c) { closePalette(); c.fn(); }
+  }
+});
+
+// ---------- 全局快捷键 ----------
+document.addEventListener("keydown", e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    $("palette").classList.contains("show") ? closePalette() : openPalette();
+    return;
+  }
+  if (e.key === "Escape") {
+    if ($("palette").classList.contains("show")) { closePalette(); return; }
+    closeSettings(); closeTextModal();
+    $("pairModal").classList.remove("show");
+    $("dropzone").classList.remove("show"); dragDepth = 0;
+  }
+});
 
 // ---------- 主题 ----------
 const THEMES = ["auto", "light", "dark"];
@@ -1172,22 +1671,34 @@ const THEME_ICON = {
   dark: '<svg class="ic" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" fill="currentColor" fill-opacity="0.2"/><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>'
 };
 function applyTheme() {
-  const t = localStorage.getItem("cw-theme") || "auto";
+  const raw = localStorage.getItem("cw-theme") || "auto";
+  const t = THEMES.includes(raw) ? raw : "auto"; // 防御非法存储值
   if (t === "auto") document.documentElement.removeAttribute("data-theme");
   else document.documentElement.dataset.theme = t;
   $("themeBtn").innerHTML = THEME_ICON[t];
   $("themeBtn").title = "主题: " + ({ auto: "跟随系统", light: "浅色", dark: "深色" }[t]);
+  // 设置面板分段控件同步高亮
+  document.querySelectorAll("#themeSeg [data-theme-opt]").forEach(b =>
+    b.classList.toggle("active", b.dataset.themeOpt === t));
+}
+function setTheme(t) {
+  localStorage.setItem("cw-theme", t);
+  applyTheme();
 }
 $("themeBtn").onclick = () => {
   const cur = localStorage.getItem("cw-theme") || "auto";
-  localStorage.setItem("cw-theme", THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length]);
-  applyTheme();
+  setTheme(THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length]);
 };
+document.querySelectorAll("#themeSeg [data-theme-opt]").forEach(b =>
+  b.onclick = () => setTheme(b.dataset.themeOpt));
 applyTheme();
 
 // ---------- 启动 ----------
 fetch("/api/state").then(r => r.json()).then(st => {
-  $("ver").textContent = "面板 v" + (st.version || "1");
+  const v = "v" + (st.version || "1");
+  $("ver").textContent = v;
+  $("sbVer").textContent = v;
+  $("aboutVer").textContent = v;
 }).catch(() => {});
 load().then(() => { connect(); checkPendingPair(); }).catch(e => {
   toast("面板加载失败: " + e.message, true);
