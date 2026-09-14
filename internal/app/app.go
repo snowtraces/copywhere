@@ -48,12 +48,13 @@ type Options struct {
 	Sink EventSink
 }
 
-// Progress 描述一次文件发送的实时进度。
+// Progress 描述一次文件传输的实时进度（发送或接收）。
 type Progress struct {
 	Peer  string `json:"peer"`
 	Name  string `json:"name"`
 	Sent  int64  `json:"sent"`
 	Total int64  `json:"total"`
+	In    bool   `json:"in"` // true=接收方向
 }
 
 // EventSink 接收运行事件（日志行、文件记录、发送进度、配对请求）。
@@ -297,8 +298,14 @@ func Start(ctx context.Context, cfg *config.Config, opts Options) (*App, error) 
 
 	go func() {
 		if err := transport.Server(runCtx, cfg, transport.Handlers{
-			OnFile:    a.onFileReceived,
-			OnText:    a.onTextReceived,
+			OnFile: a.onFileReceived,
+			OnText: a.onTextReceived,
+			// 接收方向进度推给面板（发送方向的进度由 progressWriter 上报）
+			OnProgress: func(sender, name string, sent, total int64) {
+				if a.sink != nil {
+					a.sink.Progress(Progress{Peer: sender, Name: name, Sent: sent, Total: total, In: true})
+				}
+			},
 			Authorize: a.authorize,
 			OnPair:    a.onPairRequest,
 			OnKVM:     a.onKVMSync,

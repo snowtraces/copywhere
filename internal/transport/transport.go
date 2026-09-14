@@ -102,6 +102,9 @@ type Handlers struct {
 	OnFile func(sender, path string, dup bool, bundle bool)
 	// OnText 收到文本。
 	OnText func(sender, text string)
+	// OnProgress 接收进度（每 256KB 上报一次；sent=-1 表示接收失败，
+	// sent==total 表示接收完成）。供 GUI 面板展示接收方向的实时进度。
+	OnProgress func(sender, name string, sent, total int64)
 	// Authorize 鉴权回调（必填）：校验配对令牌，返回 false 即拒绝。
 	Authorize func(hdr Header) bool
 	// OnPair 处理配对请求：校验并等待本机用户裁决（可阻塞），
@@ -172,7 +175,7 @@ func handle(conn net.Conn, cfg *config.Config, h Handlers) {
 	}
 	switch hdr.Type {
 	case "file":
-		recvFile(conn, br, hdr, cfg, h.OnFile, peer)
+		recvFile(conn, br, hdr, cfg, h, peer)
 	case "text":
 		recvText(conn, br, hdr, h.OnText, peer)
 	case "kvm":
@@ -251,7 +254,7 @@ func shortID(id string) string {
 }
 
 func recvFile(conn net.Conn, br *bufio.Reader, hdr Header, cfg *config.Config,
-	onFile func(sender, path string, dup bool, bundle bool), peer string) {
+	h Handlers, peer string) {
 
 	if hdr.Size < 0 || hdr.Size > maxFileBytes {
 		writeResp(conn, Response{Error: "size out of range"})
@@ -277,9 +280,48 @@ func recvFile(conn net.Conn, br *bufio.Reader, hdr Header, cfg *config.Config,
 		writeResp(conn, Response{Error: "create temp: " + err.Error()})
 		return
 	}
-	h := sha256.New()
-	n, cerr := io.Copy(io.MultiWriter(out, h), io.LimitReader(br, hdr.Size))
+	sum := sha256.New()
+	report := func(sent int64) {
+		if h.OnProgress != nil {
+			h.OnProgress(hdr.Sender, hdr.Name, sent, hdr.Size)
+		}
+	}
+
+	// 分块读取，每 256KB 上报一次接收进度（完成报 total，失败报 -1）
+	buf := make([]byte, 64*1024)
+	var n, next int64
+	next = 256 * 1024
+	var cerr error
+	for n < hdr.Size {
+		want := int64(len(buf))
+		if remain := hdr.Size - n; remain < want {
+			want = remain
+		}
+		rn, rerr := io.ReadFull(br, buf[:want])
+		if rn > 0 {
+			if _, werr := io.MultiWriter(out, sum).Write(buf[:rn]); werr != nil {
+				cerr = werr
+				n += int64(rn)
+				break
+			}
+			n += int64(rn)
+			if n >= next {
+				report(n)
+				next += 256 * 1024
+			}
+		}
+		if rerr != nil {
+			cerr = rerr
+			break
+		}
+	}
 	out.Close()
+
+	if cerr == nil && n == hdr.Size {
+		report(n)
+	} else {
+		report(-1)
+	}
 
 	if cerr != nil || n != hdr.Size {
 		os.Remove(tmp)
@@ -289,8 +331,8 @@ func recvFile(conn net.Conn, br *bufio.Reader, hdr Header, cfg *config.Config,
 		writeResp(conn, Response{Error: fmt.Sprintf("transfer incomplete: got %d/%d bytes", n, hdr.Size)})
 		return
 	}
-	sum := hex.EncodeToString(h.Sum(nil))
-	if sum != hdr.SHA256 {
+	sumHex := hex.EncodeToString(sum.Sum(nil))
+	if sumHex != hdr.SHA256 {
 		os.Remove(tmp)
 		removeDirIfEmpty(dir)
 		log.Printf("接收 %s 的文件 %q 校验失败（sha256 不匹配，文件可能在发送途中被修改）", peer, hdr.Name)
@@ -298,7 +340,7 @@ func recvFile(conn net.Conn, br *bufio.Reader, hdr Header, cfg *config.Config,
 		return
 	}
 
-	final, dup, err := resolvePath(dir, sanitizeName(hdr.Name), sum, hdr.Size)
+	final, dup, err := resolvePath(dir, sanitizeName(hdr.Name), sumHex, hdr.Size)
 	if err != nil {
 		os.Remove(tmp)
 		removeDirIfEmpty(dir)
@@ -314,8 +356,8 @@ func recvFile(conn net.Conn, br *bufio.Reader, hdr Header, cfg *config.Config,
 		return
 	}
 	writeResp(conn, Response{OK: true, Path: final, Duplicate: dup})
-	if onFile != nil {
-		onFile(hdr.Sender, final, dup, hdr.Bundle)
+	if h.OnFile != nil {
+		h.OnFile(hdr.Sender, final, dup, hdr.Bundle)
 	}
 }
 

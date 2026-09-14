@@ -211,6 +211,8 @@ kbd { font: 11px var(--mono); padding: 0 5px; border: 1px solid var(--border);
 .timeline { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
   padding: 12px 6px 14px; }
 /* 消息行：收在左（头像-气泡），发在右（气泡-头像），与主流聊天一致 */
+.fdate { align-self: center; font-size: 11px; color: var(--dim); padding: 1px 10px;
+  border: 1px dashed var(--border); background: var(--bg); margin: 4px 0 0; }
 .chat-row { display: flex; gap: 8px; max-width: min(76%, 600px); animation: rise .15s linear; }
 .chat-row.out { align-self: flex-end; flex-direction: row-reverse; }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
@@ -272,14 +274,35 @@ kbd { font: 11px var(--mono); padding: 0 5px; border: 1px solid var(--border);
 .chat-row.act { cursor: pointer; }
 
 /* ---------- 对话输入框（发送文本 / 附件） ---------- */
-.composer { flex: none; display: flex; align-items: center; gap: 8px;
+.stage { position: relative; }
+.composer { flex: none; display: flex; align-items: flex-end; gap: 8px;
   padding: 10px 14px 14px; border-top: 1px solid var(--border-dim); }
 .composer .iconbtn { border: 1px solid var(--border); background: var(--panel); }
-.composer .cinput { flex: 1; min-width: 0; height: 34px; padding: 0 12px;
-  border: 1px solid var(--border); background: var(--panel); color: var(--text); font: inherit; }
+.composer .cinput { flex: 1; min-width: 0; resize: none; height: auto;
+  min-height: 34px; max-height: 132px; padding: 7px 12px; line-height: 1.45;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text); font: inherit;
+  font-family: var(--mono); }
 .composer .cinput::placeholder { color: var(--dim); }
 .composer .cinput:focus { outline: none; border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent); }
+/* 回到底部：贴底跟随失效时浮现 */
+.jump-bottom { position: absolute; left: 50%; transform: translateX(-50%); bottom: 118px;
+  z-index: 5; font-size: 12px; padding: 4px 14px; color: var(--accent-ink);
+  background: var(--accent); border: 1px solid var(--accent);
+  box-shadow: var(--shadow-pop); }
+.jump-bottom:hover { outline: 1px solid var(--accent-ink); outline-offset: 2px; }
+/* 上传进度条上的取消按钮 */
+.xfer .cap { position: relative; }
+.xfer .xab { color: var(--dim); font-size: 12px; padding: 0 4px; margin-left: 8px; }
+.xfer .xab:hover { color: var(--err); }
+/* 日志错误行着色（控制台为固定深底） */
+.log-err { color: #ff7b90; }
+/* 图片灯箱 */
+.lightbox { position: fixed; inset: 0; z-index: 75; display: none; place-items: center;
+  background: rgba(4,7,10,.78); }
+.lightbox.show { display: grid; }
+.lightbox img { max-width: 92vw; max-height: 92vh; border: 1px solid var(--border);
+  background: var(--panel); }
 /* 进行中的传输：斜纹进度线框 */
 .xfer { background: var(--panel); border: 1px solid var(--border); padding: 8px 12px;
   min-width: 260px; animation: rise .15s linear; }
@@ -515,7 +538,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
   display: flex; flex-direction: column; gap: 6px; z-index: 80; align-items: center; }
 .toast { background: var(--bg); border: 1px solid var(--border); border-left: 3px solid var(--accent);
   padding: 7px 16px; box-shadow: var(--shadow-pop); font-size: 12.5px;
-  animation: rise .15s linear; max-width: 70vw; }
+  animation: rise .15s linear; max-width: 70vw; cursor: pointer; }
 .toast.err { border-left-color: var(--err); color: var(--err); }
 .toast.err::before { content: "[!] "; font-weight: 700; }
 
@@ -534,6 +557,8 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
   .dev-card { min-width: 230px; }
   .stage { padding: 10px 12px 0; }
   .chat-row { max-width: 92%; }
+  .bubble { min-width: 0; } /* 极窄窗口防横向溢出 */
+  .fcard { min-width: 0; }
   .sheet { width: 96vw; height: 88vh; }
   .sheet-body { flex-direction: column; overflow-y: auto; }
   .sheet .cat-nav { position: static; flex-direction: row; width: 100%;
@@ -589,20 +614,14 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
         <line x1="12" y1="13.5" x2="21" y2="3"/>
         <line x1="6.5" y1="18.5" x2="9" y2="16" stroke-linecap="round" stroke-width="2"/>
       </svg>发送文件</button>
-    <button class="btn" id="sendTextBtn">
-      <svg class="ic" viewBox="0 0 24 24" style="width:16px;height:16px">
-        <path d="M14 3H5.5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2V9.5L14 3z"/>
-        <path d="M14 3v6.5h6.5"/>
-        <path d="M7 13.5h10M7 17h6" stroke-linecap="round"/>
-      </svg>发送文本</button>
-    <button class="iconbtn" id="consoleBtn" title="运行日志">
+    <button class="iconbtn" id="consoleBtn" title="运行日志" aria-label="运行日志">
       <svg class="ic" viewBox="0 0 24 24">
         <rect x="2.5" y="4" width="19" height="16" rx="2.5"/>
         <path d="m6.5 8.5 4 3.5-4 3.5M13.5 15.5h4" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       <span class="badge" id="consoleBadge" hidden></span></button>
-    <button class="iconbtn" id="themeBtn" title="切换主题"></button>
-    <button class="iconbtn" id="settingsBtn" title="设置">
+    <button class="iconbtn" id="themeBtn" title="切换主题" aria-label="切换主题"></button>
+    <button class="iconbtn" id="settingsBtn" title="设置" aria-label="设置">
       <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/>
         <path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2-1.2L14.2 3h-4l-.4 2.7a7 7 0 0 0-2 1.2l-2.3-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 2 1.2l.4 2.7h4l.4-2.7a7 7 0 0 0 2-1.2l2.3 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2Z"/></svg></button>
   </div>
@@ -626,12 +645,13 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
       <div id="feed" style="display:contents"></div>
       <div id="xferStrip" style="display:contents"></div>
     </div>
+    <button class="jump-bottom" id="jumpBottom" hidden>↓ 回到最新</button>
     <div class="composer">
-      <button class="iconbtn" id="composerAttach" title="选择文件发送">
+      <button class="iconbtn" id="composerAttach" title="选择文件发送" aria-label="选择文件发送">
         <svg class="ic" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
       </button>
-      <input class="cinput" id="composerInput" placeholder="输入文本，回车发送到所有在线节点…"
-        autocomplete="off" spellcheck="false">
+      <textarea class="cinput" id="composerInput" rows="1" placeholder="输入文本，回车发送到所有在线节点…"
+        autocomplete="off" spellcheck="false"></textarea>
       <button class="btn primary" id="composerSend">发送</button>
     </div>
   </section>
@@ -820,6 +840,23 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
   <pre id="consoleBody"></pre>
 </div>
 
+<!-- 通用确认弹窗 -->
+<div class="modal" id="confirmModal">
+  <div class="box">
+    <h3 id="confirmTitle">确认</h3>
+    <p class="hint" id="confirmText" style="margin:0 0 4px"></p>
+    <div class="row">
+      <button class="btn" id="confirmNo">取消</button>
+      <button class="btn primary" id="confirmYes">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- 图片灯箱 -->
+<div class="lightbox" id="lightbox">
+  <img id="lightboxImg" alt="">
+</div>
+
 <!-- 配对请求确认框 -->
 <div class="modal" id="pairModal">
   <div class="box">
@@ -913,14 +950,51 @@ function toast(msg, err) {
   const t = document.createElement("div");
   t.className = "toast" + (err ? " err" : "");
   t.textContent = msg;
+  t.title = "点击关闭";
+  t.onclick = () => t.remove();
   $("toasts").appendChild(t);
-  setTimeout(() => t.remove(), 3200);
+  // 错误信息驻留更久（8s），普通提示 3.2s；均可点击关闭
+  setTimeout(() => t.remove(), err ? 8000 : 3200);
 }
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
   if (!r.ok) throw new Error((await r.text().catch(() => "")) || r.status);
   return r.json();
+}
+
+// 记录时间戳（毫秒）：用于清空后过滤重放的旧记录，无法解析时返回 0
+function recTs(r) {
+  if (!r || !r.date || !r.time) return 0;
+  const t = Date.parse(`${r.date}T${r.time}`);
+  return Number.isNaN(t) ? 0 : t;
+}
+
+let feedClearedAt = 0; // 「清空记录」时刻：重连补拉时跳过此前的服务端记录
+
+// mergeRecords 把服务端记录按键合并进 feed（已存在/已被清空的跳过），
+// 返回是否有新增。本地持久化记录与运行期记录的整合都走这里。
+function mergeRecords(records) {
+  const seen = new Set(feed.map(dedupeKey));
+  let added = false;
+  records.forEach(r => {
+    if (seen.has(dedupeKey(r))) return;
+    if (feedClearedAt && recTs(r) && recTs(r) <= feedClearedAt) return;
+    seen.add(dedupeKey(r));
+    addFeed(r);
+    added = true;
+  });
+  if (feed.length > 300) feed.splice(0, feed.length - 300); // 与运行期上限一致
+  saveFeedStore();
+  return added;
+}
+
+// 重连/首连后补拉漏掉的记录（断线期间的传输不再静默丢失）
+async function refreshRecords() {
+  try {
+    const rc = await api("/api/records");
+    if (mergeRecords(rc.records)) renderFeed(); // 实时增量走 addFeedLive，无需全量重绘
+  } catch (_) {}
 }
 
 // ---------- 初始加载 ----------
@@ -931,31 +1005,27 @@ async function load() {
   // 先恢复本地持久化的历史记录，再合并本次运行产生的记录（按键去重，
   // 避免刷新页面后同一传输出现两条）
   feed.push(...loadFeedStore());
-  const seen = new Set(feed.map(dedupeKey));
-  rc.records.forEach(r => {
-    if (!seen.has(dedupeKey(r))) { feed.push(r); seen.add(dedupeKey(r)); }
-  });
-  if (feed.length > 300) feed.splice(0, feed.length - 300); // 与运行期上限一致
-  saveFeedStore();
+  mergeRecords(rc.records);
   renderFeed();
   // 历史日志一次性载入控制台并视为已读（不触发 badge）：
   // badge 只统计面板打开后新到达的消息，保证"无未读消息时气泡必隐藏"
   if (Array.isArray(lg.lines) && lg.lines.length) {
     logs.push(...lg.lines);
     if (logs.length > 1000) logs.splice(0, logs.length - 1000);
-    $("consoleBody").textContent = logs.join("\n");
-    $("consoleCount").textContent = `${logs.length} 行`;
+    rebuildLogBox();
   }
   scrollTimeline(true); // 首屏直接定位到最新消息
+  $("jumpBottom").hidden = true;
 }
 
 // ---------- SSE ----------
 function connect() {
   const es = new EventSource("/api/events");
+  es.onopen = () => refreshRecords(); // 断线重连后补拉漏掉的记录
   es.onmessage = e => {
     const ev = JSON.parse(e.data);
     if (ev.type === "log") pushLog(ev.data.line);
-    else if (ev.type === "file") { addFeed(ev.data); renderFeed(); }
+    else if (ev.type === "file") addFeedLive(ev.data); // 增量渲染，不整表重建
     else if (ev.type === "progress") applyProgress(ev.data);
     else if (ev.type === "peers") renderPeers(ev.data);
     else if (ev.type === "state") applyState(ev.data);
@@ -987,8 +1057,8 @@ function applyState(st) {
   $("feedSub").textContent = st.peer_count > 0
     ? `${st.peer_count} 个节点在线 · 复制即同步` : "暂无在线节点";
   $("composerInput").placeholder = st.peer_count > 0
-    ? `输入文本，回车发送到 ${st.peer_count} 个在线节点…`
-    : "当前无在线节点：输入文本暂存，发送文件可用拖拽或附件按钮";
+    ? `输入文本，回车发送到 ${st.peer_count} 个在线节点…（Shift+Enter 换行）`
+    : "当前无在线节点，暂时无法发送；节点上线后即可发送文本与文件";
   const kvmTxt = !st.kvm_enabled ? "跨屏未启用"
     : `跨屏：左「${st.kvm_left || "-"}」右「${st.kvm_right || "-"}」`;
   $("sbKvm").textContent = kvmTxt;
@@ -1004,7 +1074,7 @@ let dockSig = ""; // 内容签名：无变化不重建卡片，避免周期快�
 function renderDock() {
   const left = state.kvm_left || "", right = state.kvm_right || "";
   const sig = JSON.stringify([state.paused, state.peer_count, state.node_name, state.self_ip,
-    state.kvm_enabled, left, right,
+    state.kvm_enabled, left, right, pairPendingId,
     lastPeers.map(p => [p.id, p.name, p.ips.join(","), p.paired, p.blocked, p.tcp_port])]);
   if (sig === dockSig) {
     // 结构未变：仅刷新各卡片的活跃时间文本（每 2s 都会变，但无需重建 DOM）
@@ -1042,8 +1112,10 @@ function renderDock() {
     const card = document.createElement("div");
     card.className = "dev-card";
     card.dataset.id = p.id;
-    const stateTag = p.blocked ? `<span class="tag warn">已被拒</span>`
+    const stateTag = p.blocked
+      ? `<span class="tag warn" title="对端已解除配对或令牌失效，本机已暂停向其发送；在对端重新配对即可恢复">已被拒</span>`
       : (p.paired ? `<span class="tag ok">已配对</span>` : `<span class="tag mute">未配对</span>`);
+    const pendingTag = p.id === pairPendingId ? `<span class="tag">待确认</span>` : "";
     const sideTag = p.name === left ? `<span class="tag">左邻</span>`
       : (p.name === right ? `<span class="tag">右邻</span>` : "");
     let acts = "";
@@ -1060,7 +1132,7 @@ function renderDock() {
       <div class="head">
         <div class="avatar plain">${esc((p.name || "?")[0].toUpperCase())}</div>
         <div class="who">
-          <div class="nm"><span class="nm-txt">${esc(p.name)}</span>${stateTag}${sideTag}</div>
+          <div class="nm"><span class="nm-txt">${esc(p.name)}</span>${stateTag}${sideTag}${pendingTag}</div>
           <div class="sub">${esc(p.ips[0] || "")}</div>
         </div>
       </div>
@@ -1079,7 +1151,7 @@ function renderDock() {
   }
 }
 
-// ---------- 动态流（单行紧凑列表） ----------
+// ---------- 动态流（对话消息界面） ----------
 
 function addFeed(r) {
   const k = dedupeKey(r);
@@ -1100,10 +1172,57 @@ function addFeed(r) {
 // 清空本地传输记录（同时清除 localStorage 持久化）
 function clearFeed() {
   feed.length = 0;
+  feedClearedAt = Date.now(); // 重连补拉时跳过清空前的服务端记录
   try { localStorage.removeItem(FEED_KEY); } catch (_) {}
   renderFeed();
 }
-$("feedClear").onclick = () => { clearFeed(); toast("已清空传输记录"); };
+$("feedClear").onclick = () => askConfirm("清空传输记录",
+  "将清除本面板保存的全部传输历史（仅本地浏览器，不影响对端与日志）。此操作不可撤销。",
+  "清空", () => { clearFeed(); toast("已清空传输记录"); });
+
+// 日期分隔条：相邻记录日期不同时插入（今天 / 昨天 / 具体日期）
+function localDateStr(d) {
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") +
+    "-" + String(d.getDate()).padStart(2, "0");
+}
+function dateSeparator(prev, cur) {
+  if (!cur || !cur.date) return null;
+  if (prev && prev.date === cur.date) return null;
+  const now = new Date();
+  const today = localDateStr(now);
+  const yest = localDateStr(new Date(now.getTime() - 864e5));
+  const label = cur.date === today ? "今天" : cur.date === yest ? "昨天"
+    : cur.date.replaceAll("-", "/");
+  const div = document.createElement("div");
+  div.className = "fdate";
+  div.textContent = label;
+  return div;
+}
+
+// 实时增量渲染：新记录追加到时间线（合并 ×N 时原地更新末行），不整表重建，
+// 避免打断用户的悬停操作与文本选区
+function addFeedLive(r) {
+  const prevLast = feed.length ? feed[feed.length - 1] : null;
+  addFeed(r); // 核心合并/追加（含 localStorage 持久化）
+  if (feed.length > 300) { renderFeed(); return; } // 触发淘汰时整表对齐一次
+  const el = $("feed");
+  const last = feed[feed.length - 1];
+  if (prevLast && last === prevLast) {
+    const rows = el.querySelectorAll(".chat-row");
+    const lastRow = rows[rows.length - 1];
+    if (lastRow) lastRow.replaceWith(feedRow(last));
+    else renderFeed();
+  } else if (el.querySelector(".empty")) {
+    renderFeed(); // 从空状态恢复
+  } else {
+    const sep = dateSeparator(prevLast, last);
+    if (sep) el.appendChild(sep);
+    el.appendChild(feedRow(last));
+  }
+  if (!nearTimelineBottom()) missedNew++;
+  updateJumpBtn();
+  scrollTimeline();
+}
 
 function renderFeed() {
   const el = $("feed");
@@ -1116,8 +1235,15 @@ function renderFeed() {
     </div>`;
     return;
   }
-  // 时间升序：旧 → 新，最新记录在底部
-  for (let i = 0; i < feed.length; i++) el.appendChild(feedRow(feed[i]));
+  // 时间升序：旧 → 新，最新记录在底部；日期变化处插入分隔条
+  let prev = null;
+  for (const r of feed) {
+    const sep = dateSeparator(prev, r);
+    if (sep) el.appendChild(sep);
+    el.appendChild(feedRow(r));
+    prev = r;
+  }
+  updateJumpBtn();
   scrollTimeline(); // 用户没有向上翻历史时跟随到底部
 }
 
@@ -1129,8 +1255,26 @@ function nearTimelineBottom() {
 }
 function scrollTimeline(force) {
   const el = $("timeline");
-  if (force || nearTimelineBottom()) el.scrollTop = el.scrollHeight;
+  if (force || nearTimelineBottom()) {
+    el.scrollTop = el.scrollHeight;
+    missedNew = 0;
+  }
+  updateJumpBtn();
 }
+
+// 回到底部按钮：向上翻历史时浮现，提示离开期间到达的新消息
+let missedNew = 0;
+function updateJumpBtn() {
+  const btn = $("jumpBottom");
+  if (!btn) return;
+  btn.hidden = nearTimelineBottom();
+  btn.textContent = missedNew > 0 ? `↓ 回到最新（${missedNew} 条新消息）` : "↓ 回到最新";
+}
+$("timeline").addEventListener("scroll", () => {
+  if (nearTimelineBottom()) missedNew = 0;
+  updateJumpBtn();
+});
+$("jumpBottom").onclick = () => { missedNew = 0; scrollTimeline(true); };
 
 const IMG_EXT = /\.(png|jpe?g|gif|bmp|webp)$/i;
 
@@ -1193,6 +1337,8 @@ function feedBody(r) {
     img.alt = r.name;
     img.loading = "lazy";
     img.src = "/api/file?path=" + encodeURIComponent(r.detail);
+    img.title = "点击放大 · 双击打开文件";
+    img.onclick = () => showLightbox(img.src, r.name); // 面板内灯箱放大
     img.onerror = () => wrap.replaceWith(fileCard(r)); // 文件被移动/删除时回退卡片
     wrap.appendChild(img);
     return { el: wrap, showSize: true };
@@ -1232,7 +1378,7 @@ function feedRow(r) {
   meta.className = "b-meta";
   let html = "";
   if ((r.count || 1) > 1)
-    html += `<span class="cnt" title="重复 ${r.count} 次">×${r.count}</span><span class="sep"></span>`;
+    html += `<span class="cnt" title="相同内容重复传输，已合并计数（仅对比相邻记录）">×${r.count}</span><span class="sep"></span>`;
   if (showSize) html += `<span>${fmtBytes(r.size)}</span><span class="sep"></span>`;
   // 平时不显示"已接收/已发送"；仅失败时保留红色状态提示
   if (failed) html += `<span class="pill fail">${esc(r.status)}</span>`;
@@ -1267,24 +1413,26 @@ function feedRow(r) {
   return row;
 }
 
-// ---------- 进行中传输（时间线顶部的实时气泡） ----------
+// ---------- 进行中传输（时间线底部的实时进度气泡，收发双向） ----------
+let xferGen = 0; // 气泡代际：避免完成后的收起定时器误删复用同 key 的新传输
 function applyProgress(p) {
-  const key = p.peer + "|" + p.name;
+  const key = (p.in ? "R|" : "S|") + p.peer + "|" + p.name;
+  const arrow = p.in ? "←" : "→";
   let x = xfers.get(key);
   if (p.sent < 0) { // 失败终态
     if (x) { x.el.remove(); xfers.delete(key); }
-    else if (pendingUpload) { // 上传条还没被接管，发送就失败了：一并收起
+    else if (pendingUpload && !p.in) { // 上传条还没被接管，发送就失败了：一并收起
       clearTimeout(pendingUpload.timer);
       xfers.delete(pendingUpload.key);
       pendingUpload.el.remove();
       pendingUpload = null;
     }
-    toast(`${p.name} → ${p.peer} 发送失败`, true);
+    toast(p.in ? `${p.peer} 发来的 ${p.name} 接收失败` : `${p.name} → ${p.peer} 发送失败`, true);
     return;
   }
   if (!x) {
     let el;
-    if (pendingUpload) {
+    if (pendingUpload && !p.in) {
       // 面板上传后紧接着的发送：让发送进度接管刚完成的上传气泡，
       // 避免先显示"上传文件"、再显示"发送文件"两条进度先后出现。
       clearTimeout(pendingUpload.timer);
@@ -1292,25 +1440,37 @@ function applyProgress(p) {
       el = pendingUpload.el;
       pendingUpload = null;
       el.querySelector(".cap").innerHTML =
-        `<b>${esc(p.name)}</b><span>→ ${esc(p.peer)} · <span class="pct"></span> · <span class="amt"></span></span>`;
+        `<b>${esc(p.name)}</b><span>${arrow} ${esc(p.peer)} · <span class="pct"></span> · <span class="amt"></span></span>`;
     } else {
       el = document.createElement("div");
       el.className = "xfer";
-      el.innerHTML = `<div class="cap"><b>${esc(p.name)}</b><span>→ ${esc(p.peer)} · <span class="pct"></span> · <span class="amt"></span></span></div>
+      el.innerHTML = `<div class="cap"><b>${esc(p.name)}</b><span>${arrow} ${esc(p.peer)} · <span class="pct"></span> · <span class="amt"></span></span></div>
         <div class="bar"><i></i></div>`;
       $("xferStrip").appendChild(el);
     }
-    x = { el, bar: el.querySelector("i"), pct: el.querySelector(".pct"), amt: el.querySelector(".amt") };
+    x = { el, bar: el.querySelector("i"), pct: el.querySelector(".pct"), amt: el.querySelector(".amt"), gen: ++xferGen };
     xfers.set(key, x);
+    if (!nearTimelineBottom()) missedNew++;
     scrollTimeline(); // 新气泡在时间线底部，跟随可见
+  } else if (x.done) {
+    // 上一轮已完成但尚未收起：同名传输再次开始，换新代以免被旧定时器误删
+    x.done = false;
+    x.gen = ++xferGen;
   }
   const pct = p.total > 0 ? Math.min(100, p.sent / p.total * 100) : 100;
   x.bar.style.width = pct + "%";
   x.pct.textContent = pct.toFixed(0) + "%";
   x.amt.textContent = `${fmtBytes(p.sent)} / ${fmtBytes(p.total)}`;
-  if (p.total > 0 && p.sent >= p.total) {
-    setTimeout(() => { x.el.remove(); xfers.delete(key); }, 2500);
+  // 完成（含零字节传输：total=0 时进度即完成）后延迟收起；带代际校验防止误删
+  if (p.total > 0 && p.sent >= p.total || p.total <= 0) {
+    x.done = true;
+    const gen = x.gen;
+    setTimeout(() => {
+      const cur = xfers.get(key);
+      if (cur && cur.gen === gen) { cur.el.remove(); xfers.delete(key); }
+    }, 2500);
   }
+  updateJumpBtn();
 }
 
 // ---------- 节点（保持接口，刷新设备坞与布局画布） ----------
@@ -1472,6 +1632,31 @@ $("kvmEnabled2").addEventListener("change", e => {
   saveKvm(state.kvm_left || "", state.kvm_right || "", e.target.checked);
 });
 
+// ---------- 通用确认弹窗（替代原生 confirm） ----------
+let confirmFn = null;
+function askConfirm(title, text, okLabel, fn) {
+  $("confirmTitle").textContent = title;
+  $("confirmText").textContent = text;
+  $("confirmYes").textContent = okLabel || "确定";
+  confirmFn = fn;
+  $("confirmModal").classList.add("show");
+}
+$("confirmYes").onclick = () => {
+  $("confirmModal").classList.remove("show");
+  const f = confirmFn; confirmFn = null;
+  if (f) f();
+};
+$("confirmNo").onclick = () => { $("confirmModal").classList.remove("show"); confirmFn = null; };
+
+// ---------- 图片灯箱 ----------
+function showLightbox(src, name) {
+  const img = $("lightboxImg");
+  img.src = src;
+  img.alt = name || "";
+  $("lightbox").classList.add("show");
+}
+$("lightbox").onclick = () => $("lightbox").classList.remove("show");
+
 // ---------- 配对 ----------
 async function pairWith(id, name) {
   try {
@@ -1495,6 +1680,7 @@ async function respondPair(accept) {
       headers: { "Content-Type": "application/json" }, body: JSON.stringify({ accept }) });
     toast(accept ? "已接受配对，双方现在可以互相同步" : "已拒绝配对请求");
   } catch (e) { toast("操作失败: " + e.message, true); }
+  pairPendingId = ""; // 清除设备坞上的"待确认"标记
   $("pairModal").classList.remove("show");
 }
 
@@ -1527,7 +1713,6 @@ $("syncSwitch2").addEventListener("change", e => toggleSync(!e.target.checked));
 // ---------- 发送文件（选择 + 全局拖拽） ----------
 function openFilePicker() { $("pick").click(); }
 $("sendFileBtn").onclick = openFilePicker;
-$("sendTextBtn").onclick = openTextModal; // 聚焦底部对话输入框（见发送文本一节）
 $("pick").onchange = e => { if (e.target.files.length) upload(e.target.files); e.target.value = ""; };
 
 let dragDepth = 0;
@@ -1562,14 +1747,15 @@ function upload(files) {
   if (!x) {
     const el = document.createElement("div");
     el.className = "xfer";
-    el.innerHTML = `<div class="cap"><b>上传 ${esc(files.length)} 个文件</b><span><span class="pct"></span> · <span class="amt"></span></span></div>
+    el.innerHTML = `<div class="cap"><b>上传 ${esc(files.length)} 个文件</b><span><span class="pct"></span> · <span class="amt"></span></span><button class="xab" title="取消上传">✕</button></div>
       <div class="bar"><i></i></div>`;
     $("xferStrip").appendChild(el);
-    x = { el, bar: el.querySelector("i"), pct: el.querySelector(".pct"), amt: el.querySelector(".amt") };
+    x = { el, bar: el.querySelector("i"), pct: el.querySelector(".pct"), amt: el.querySelector(".amt"), gen: ++xferGen };
     xfers.set(key, x);
     scrollTimeline(); // 上传气泡在时间线底部，跟随可见
   }
   const xhr = new XMLHttpRequest();
+  x.el.querySelector(".xab").onclick = () => xhr.abort(); // 上传可取消
   xhr.open("POST", "/api/upload");
   xhr.upload.onprogress = e => {
     if (!e.lengthComputable) return;
@@ -1584,14 +1770,19 @@ function upload(files) {
       x.pct.textContent = "已上传";
       x.amt.textContent = "正在发送到在线节点";
       // 不再定时收起：等待发送进度接管同一条气泡（见 applyProgress）；
-      // 若始终没有发送进度（如节点均未配对被跳过），兜底 15s 后收起。
+      // 若始终没有发送进度（如节点均未配对被跳过），兜底 15s 后收起并提示。
       if (pendingUpload) { // 上一条还没被接管（罕见）：先清掉，避免残留
         clearTimeout(pendingUpload.timer);
         xfers.delete(pendingUpload.key);
         pendingUpload.el.remove();
       }
       pendingUpload = { key, el: x.el,
-        timer: setTimeout(() => { x.el.remove(); xfers.delete(key); pendingUpload = null; }, 15000) };
+        timer: setTimeout(() => {
+          const cur = xfers.get(key);
+          if (cur && cur.gen === x.gen) { cur.el.remove(); xfers.delete(key); }
+          pendingUpload = null;
+          toast("上传完成，但未检测到发送进度：请检查节点是否已配对", true);
+        }, 15000) };
       toast("上传完成，已开始发送");
     } else {
       x.el.remove(); xfers.delete(key);
@@ -1599,30 +1790,53 @@ function upload(files) {
     }
   };
   xhr.onerror = () => { x.el.remove(); xfers.delete(key); toast("上传失败（网络错误）", true); };
+  xhr.onabort = () => {
+    clearTimeout(pendingUpload && pendingUpload.timer);
+    if (pendingUpload && pendingUpload.key === key) pendingUpload = null;
+    const cur = xfers.get(key);
+    if (cur && cur.el === x.el) { cur.el.remove(); xfers.delete(key); }
+    toast("已取消上传");
+  };
   xhr.send(fd);
 }
 
 // ---------- 对话输入框（发送文本 / 附件） ----------
-// 顶栏「发送文本」与命令面板都聚焦到这里，不再弹窗
-function openTextModal() { switchView("workspace"); $("composerInput").focus(); }
+// 命令面板「发送文本…」等入口聚焦到这里
+function focusComposer() { switchView("workspace"); $("composerInput").focus(); }
 
 async function sendComposerText() {
   const input = $("composerInput");
   const text = input.value;
   if (!text.trim()) return;
+  if (!state.peer_count) {
+    // 与占位符承诺一致：无节点时明确告知，而非默默失败
+    toast("当前无在线节点，无法发送", true);
+    return;
+  }
   try {
     await api("/api/send-text", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
     input.value = "";
+    autoSizeComposer();
     input.focus(); // 发送成功留在输入框，便于连续发送
   } catch (e) { toast("发送失败: " + e.message, true); }
 }
 $("composerSend").onclick = sendComposerText;
 $("composerAttach").onclick = openFilePicker;
-// 回车发送；中文输入法选词时的 Enter（isComposing）不触发
+// 回车发送，Shift+Enter 换行；中文输入法选词时的 Enter（isComposing）不触发
 $("composerInput").addEventListener("keydown", e => {
-  if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); sendComposerText(); }
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    sendComposerText();
+  }
 });
+// 多行输入时输入框自动增高（上限见 CSS max-height）
+function autoSizeComposer() {
+  const t = $("composerInput");
+  t.style.height = "auto";
+  t.style.height = Math.min(t.scrollHeight, 132) + "px";
+}
+$("composerInput").addEventListener("input", autoSizeComposer);
 
 // ---------- 打开路径 ----------
 async function openPath(body) {
@@ -1634,6 +1848,18 @@ async function openPath(body) {
 // ---------- 控制台抽屉 ----------
 let unread = 0;
 const logs = [];
+let logBoxInSync = true; // 控制台 DOM 是否已包含 logs 全部内容
+
+function logLineHTML(line) {
+  // 含失败/错误的行着色，便于扫读
+  const cls = /失败|错误|error/i.test(line) ? ' class="log-err"' : "";
+  return `<span${cls}>${esc(line)}</span>`;
+}
+function rebuildLogBox() {
+  $("consoleBody").innerHTML = logs.map(logLineHTML).join("\n");
+  logBoxInSync = true;
+  $("consoleCount").textContent = `${logs.length} 行`;
+}
 // 统一维护未读数与右上角气泡：无未读消息时气泡必须隐藏
 function setUnread(n) {
   unread = n;
@@ -1643,13 +1869,18 @@ function setUnread(n) {
 }
 function pushLog(line) {
   logs.push(line);
-  if (logs.length > 1000) logs.shift();
-  const box = $("consoleBody");
-  box.textContent = logs.join("\n");
+  if (logs.length > 1000) {
+    logs.shift();
+    rebuildLogBox(); // 超出缓存上限：整体重建
+  } else if (logBoxInSync) {
+    $("consoleBody").insertAdjacentHTML("beforeend", logLineHTML(line) + "\n");
+  } else {
+    rebuildLogBox(); // DOM 与缓存不一致（如启动载入历史后）：整体重建
+  }
   $("consoleCount").textContent = `${logs.length} 行`;
   if ($("console").classList.contains("open")) {
     // 控制台正开着：消息已属"已读"，只决定是否自动滚动
-    if ($("autoscroll").checked) box.scrollTop = box.scrollHeight;
+    if ($("autoscroll").checked) $("consoleBody").scrollTop = $("consoleBody").scrollHeight;
   } else {
     setUnread(unread + 1);
   }
@@ -1664,10 +1895,15 @@ $("aboutConsoleBtn").onclick = openConsole;
 $("consoleClose").onclick = () => $("console").classList.remove("open");
 $("consoleClear").onclick = () => {
   logs.length = 0;
+  logBoxInSync = true;
   $("consoleBody").textContent = "";
   $("consoleCount").textContent = "0 行";
   setUnread(0); // 清空后无消息：气泡一并隐藏
 };
+// 重新勾选自动滚动时立即回到最新，无需等下一条日志
+$("autoscroll").addEventListener("change", e => {
+  if (e.target.checked) $("consoleBody").scrollTop = $("consoleBody").scrollHeight;
+});
 
 // ---------- 设置大面板 ----------
 function openSettings() {
@@ -1743,6 +1979,11 @@ async function saveFields(body, okMsg) {
 $("cfg_node_name").addEventListener("change", e => {
   const v = e.target.value.trim();
   if (v) saveFields({ node_name: v }, "节点名已保存（下一次广播约几秒内生效）");
+  else {
+    const m = $("cfgMsg");
+    m.className = "msg err";
+    m.textContent = "节点名不能为空，本次修改未保存";
+  }
 });
 $("cfg_text_sync").addEventListener("change", e => saveFields({ text_sync: e.target.checked }));
 $("cfg_auto_paste").addEventListener("change", e => saveFields({ auto_paste: e.target.checked }));
@@ -1802,13 +2043,15 @@ async function loadPaired() {
 }
 
 async function unpairDevice(d) {
-  if (!confirm(`解除与「${d.name || d.id.slice(0, 8)}」的配对？双方将无法再互相同步。`)) return;
-  try {
-    await api("/api/unpair", { method: "POST",
-      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: d.id }) });
-    toast("已解除配对");
-    loadPaired();
-  } catch (e) { toast("解除失败: " + e.message, true); }
+  askConfirm("解除配对", `解除与「${d.name || d.id.slice(0, 8)}」的配对？双方将无法再互相同步。`,
+    "解除配对", async () => {
+      try {
+        await api("/api/unpair", { method: "POST",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: d.id }) });
+        toast("已解除配对");
+        loadPaired();
+      } catch (e) { toast("解除失败: " + e.message, true); }
+    });
 }
 
 // ---------- 命令面板（Ctrl+K） ----------
@@ -1820,7 +2063,7 @@ function buildCommands() {
   palCmds.length = 0;
   palCmds.push(
     { t: "发送文件…", kw: "send file 文件", fn: openFilePicker },
-    { t: "发送文本…", kw: "send text 文本", fn: openTextModal },
+    { t: "发送文本…", kw: "send text 文本 写消息", fn: focusComposer },
     { t: state.paused ? "恢复自动同步" : "暂停自动同步", kw: "pause resume 暂停 恢复 同步", fn: () => toggleSync(!state.paused) },
     { t: state.kvm_enabled ? "停用鼠标键盘跨屏" : "启用鼠标键盘跨屏", kw: "kvm 跨屏", fn: () => saveKvm(state.kvm_left || "", state.kvm_right || "", !state.kvm_enabled) },
     { t: "打开接收目录", kw: "open folder 目录 接收", fn: () => openPath({ dir: "receive" }) },
@@ -1894,10 +2137,18 @@ document.addEventListener("keydown", e => {
     $("palette").classList.contains("show") ? closePalette() : openPalette();
     return;
   }
+  // Ctrl+1 / Ctrl+2：切换工作台 / 屏幕布局
+  if ((e.ctrlKey || e.metaKey) && (e.key === "1" || e.key === "2")) {
+    e.preventDefault();
+    switchView(e.key === "1" ? "workspace" : "layout");
+    return;
+  }
   if (e.key === "Escape") {
     if ($("palette").classList.contains("show")) { closePalette(); return; }
+    if ($("lightbox").classList.contains("show")) { $("lightbox").classList.remove("show"); return; }
+    if ($("confirmModal").classList.contains("show")) { $("confirmModal").classList.remove("show"); confirmFn = null; return; }
     closeSettings();
-    $("pairModal").classList.remove("show");
+    // 配对请求不响应 Esc：必须明确接受或拒绝（设备坞有"待确认"标记）
     $("dropzone").classList.remove("show"); dragDepth = 0;
   }
 });

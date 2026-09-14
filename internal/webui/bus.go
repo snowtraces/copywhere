@@ -37,6 +37,7 @@ const (
 // fileJSON 是 ui.FileRecord 的 JSON 视图。
 type fileJSON struct {
 	Time   string `json:"time"`
+	Date   string `json:"date"` // 日期（2006-01-02），供面板做日期分组
 	In     bool   `json:"in"`
 	Peer   string `json:"peer"`
 	Name   string `json:"name"`
@@ -158,6 +159,7 @@ func (b *Bus) publishLocked(ev Event, targets map[chan Event]struct{}) {
 func fileToJSON(r ui.FileRecord) fileJSON {
 	return fileJSON{
 		Time:   r.Time.Format("15:04:05"),
+		Date:   r.Time.Format("2006-01-02"),
 		In:     r.In,
 		Peer:   r.Peer,
 		Name:   r.Name,
