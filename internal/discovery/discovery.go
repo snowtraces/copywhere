@@ -258,7 +258,18 @@ type announceMsg struct {
 }
 
 // Run 启动发现服务：广播本机公告并接收其他节点的公告，直到 ctx 结束。
+// name 为固定节点名；需要节点名热更新（面板改名即时生效）请用 RunDynamic。
 func Run(ctx context.Context, udpPort, tcpPort int, interval time.Duration, name, selfID string, store *Store) error {
+	return RunDynamic(ctx, udpPort, tcpPort, interval, func() string { return name }, selfID, store)
+}
+
+// RunDynamic 与 Run 相同，但每次广播时通过 nameFn 取当前节点名：
+// 面板改名后下一次广播即用新名字，无需重启。
+func RunDynamic(ctx context.Context, udpPort, tcpPort int, interval time.Duration,
+	nameFn func() string, selfID string, store *Store) error {
+	if nameFn == nil {
+		nameFn = func() string { return "" }
+	}
 	if interval <= 0 {
 		interval = 2 * time.Second
 	}
@@ -274,10 +285,14 @@ func Run(ctx context.Context, udpPort, tcpPort int, interval time.Duration, name
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
 
-	msg, _ := json.Marshal(announceMsg{
-		Magic: announceMagic, ID: selfID, Name: name, TCPPort: tcpPort, Session: session,
-	})
+	marshal := func() []byte {
+		msg, _ := json.Marshal(announceMsg{
+			Magic: announceMagic, ID: selfID, Name: nameFn(), TCPPort: tcpPort, Session: session,
+		})
+		return msg
+	}
 	sendAnnounce := func() {
+		msg := marshal()
 		dsts := broadcastAddrs(udpPort)
 		dsts = append(dsts, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: udpPort})
 		for _, d := range dsts {

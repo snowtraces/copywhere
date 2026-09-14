@@ -586,7 +586,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
     <div class="layout-canvas" id="layoutCanvas"></div>
     <div class="kvm-bar">
       <label class="check" style="padding:0"><input type="checkbox" id="kvmEnabled"> 启用鼠标键盘跨屏</label>
-      <span class="hint">邻居配置<b>即时生效</b>并自动同步到对端 · 启用/停用跨屏需重启 · 手感调参见「设置 → 跨屏控制」 · 被控时按 <b>Ctrl+Alt+Shift+X</b> 紧急退出</span>
+      <span class="hint">邻居配置<b>即时生效</b>并自动同步到对端 · 启用/停用跨屏即时生效 · 手感调参见「设置 → 跨屏控制」 · 被控时按 <b>Ctrl+Alt+Shift+X</b> 紧急退出</span>
     </div>
     <div class="sect">在线设备（拖到上方空位，或点选后使用快捷按钮）</div>
     <div class="tray" id="deviceTray"></div>
@@ -604,7 +604,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
 <div class="scrim" id="scrim"></div>
 <section class="sheet" id="settings">
   <div class="sheet-head"><h2>设置</h2>
-    <span class="hint" style="margin-right:auto;margin-left:14px">标记 <span class="badge">重启生效</span> 的项保存后需重启 copywhere，其余立即生效</span>
+    <span class="hint" style="margin-right:auto;margin-left:14px">所有修改即时保存并生效，无需重启</span>
     <button class="iconbtn" id="settingsClose">
       <svg class="ic" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12" stroke-linecap="round"/></svg></button></div>
   <div class="sheet-body">
@@ -621,7 +621,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
         <h3>通用</h3>
         <div class="set-row">
           <div class="info"><b>节点名</b>
-            <div class="hint">局域网内展示的设备名称 <span class="badge">重启生效</span></div></div>
+            <div class="hint">局域网内展示的设备名称（改完移开焦点即生效，下一次广播约几秒内同步到对端）</div></div>
           <div class="ctl"><input type="text" id="cfg_node_name" spellcheck="false"></div>
         </div>
         <div class="set-row">
@@ -679,7 +679,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
         <h3>跨屏控制（KVM）</h3>
         <div class="set-row">
           <div class="info"><b>启用鼠标键盘跨屏</b>
-            <div class="hint">把本机鼠标键盘推向左右邻居设备 <span class="badge">重启生效</span> · 被控时按 <b>Ctrl+Alt+Shift+X</b> 紧急退出</div></div>
+            <div class="hint">把本机鼠标键盘推向左右邻居设备（开关即时生效，无需重启） · 被控时按 <b>Ctrl+Alt+Shift+X</b> 紧急退出</div></div>
           <div class="ctl"><label class="switch"><input type="checkbox" id="kvmEnabled2"><span class="knob"></span></label></div>
         </div>
         <div class="set-row">
@@ -689,7 +689,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
         <div class="set-row col">
           <div class="srow"><b>移动合拍间隔</b><span class="sval" id="v_move">默认 8ms</span></div>
           <input type="range" id="cfg_kvm_move_ms" min="0" max="50" step="1" oninput="syncKvmScales()">
-          <div class="hint">主控端把原始移动攒成一次发送的频率（0 = 默认 8，越小越跟手、越耗带宽）。保存后立即生效，无需重启。</div>
+          <div class="hint">主控端把原始移动攒成一次发送的频率（0 = 默认 8，越小越跟手、越耗带宽）。拖动松手即保存生效。</div>
         </div>
         <div class="set-row col">
           <div class="srow"><b>重排注入节拍</b><span class="sval" id="v_reflow">默认 4ms</span></div>
@@ -732,7 +732,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
       </div>
 
       <div class="save-bar">
-        <button class="btn primary" onclick="saveCfg()">保存配置</button>
+        <span class="hint">所有修改即时保存并生效，无需手动保存</span>
         <span class="msg" id="cfgMsg"></span>
       </div>
     </div>
@@ -1238,7 +1238,7 @@ function assignSide(side, name) {
 }
 
 async function saveKvm(left, right, enabled) {
-  // 邻居配置即时热生效；只有启用/停用跨屏（kvm_enabled）需要重启
+  // 邻居配置与跨屏开关均即时热生效，无需重启
   const enableChanged = enabled !== !!state.kvm_enabled;
   const body = { kvm_left: left, kvm_right: right };
   if (enableChanged) body.kvm_enabled = enabled;
@@ -1251,7 +1251,7 @@ async function saveKvm(left, right, enabled) {
     renderDock();
     renderLayout();
     setKvmUI(enabled);
-    toast(enableChanged ? "布局已保存（启用/停用跨屏重启后生效）" : "布局已保存，已即时生效并同步到对端");
+    toast("布局已保存，已即时生效并同步到对端");
   } catch (e) { toast("保存失败: " + e.message, true); }
 }
 
@@ -1497,29 +1497,43 @@ async function loadCfg() {
   }
 }
 
-async function saveCfg() {
+// 单项配置即时保存：设置面板无保存按钮，每个控件改动后立即提交生效。
+async function saveFields(body, okMsg) {
   const m = $("cfgMsg");
-  const body = {
-    node_name: $("cfg_node_name").value.trim(),
-    max_auto_copy_mb: Number($("cfg_max_auto_copy_mb").value || 0),
-    receive_dir: $("cfg_receive_dir").value.trim(),
-    auto_paste: $("cfg_auto_paste").checked,
-    text_sync: $("cfg_text_sync").checked,
-    kvm_move_interval_ms: Number($("cfg_kvm_move_ms").value || 0),
-    kvm_reflow_step_ms: Number.isNaN(Number($("cfg_kvm_reflow_ms").value)) ? 0 : Number($("cfg_kvm_reflow_ms").value),
-    kvm_speed_percent: Number($("cfg_kvm_speed_pct").value || 100),
-  };
   try {
-    const r = await api("/api/config", { method: "POST",
+    await api("/api/config", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     m.className = "msg ok";
-    m.textContent = r.restart_required?.length
-      ? `已保存；节点名等需重启生效（${r.restart_required.join(", ")}）` : "已保存，立即生效";
-    toast("配置已保存");
+    m.textContent = okMsg || "已保存并生效";
+    return true;
   } catch (e) {
     m.className = "msg err";
     m.textContent = "保存失败: " + e.message;
+    toast("保存失败: " + e.message, true);
+    return false;
   }
+}
+
+// 各设置项改动即保存（文本/数字在失焦或回车时提交，开关与滑块在改变时提交）
+$("cfg_node_name").addEventListener("change", e => {
+  const v = e.target.value.trim();
+  if (v) saveFields({ node_name: v }, "节点名已保存（下一次广播约几秒内生效）");
+});
+$("cfg_text_sync").addEventListener("change", e => saveFields({ text_sync: e.target.checked }));
+$("cfg_auto_paste").addEventListener("change", e => saveFields({ auto_paste: e.target.checked }));
+$("cfg_max_auto_copy_mb").addEventListener("change", e =>
+  saveFields({ max_auto_copy_mb: Number(e.target.value || 0) }));
+$("cfg_receive_dir").addEventListener("change", e => {
+  const v = e.target.value.trim();
+  if (v) saveFields({ receive_dir: v });
+});
+// 跨屏手感滑块：oninput 只刷新数值气泡，change（松手）时保存
+for (const [id, key] of [
+  ["cfg_kvm_move_ms", "kvm_move_interval_ms"],
+  ["cfg_kvm_reflow_ms", "kvm_reflow_step_ms"],
+  ["cfg_kvm_speed_pct", "kvm_speed_percent"],
+]) {
+  $(id).addEventListener("change", e => saveFields({ [key]: Number(e.target.value || 0) }));
 }
 
 // 实时刷新跨屏手感滑块的数值气泡（拖动即更新显示，不写后端）。
@@ -1583,7 +1597,7 @@ function buildCommands() {
     { t: "发送文件…", kw: "send file 文件", fn: openFilePicker },
     { t: "发送文本…", kw: "send text 文本", fn: openTextModal },
     { t: state.paused ? "恢复自动同步" : "暂停自动同步", kw: "pause resume 暂停 恢复 同步", fn: () => toggleSync(!state.paused) },
-    { t: state.kvm_enabled ? "停用鼠标键盘跨屏（重启生效）" : "启用鼠标键盘跨屏（重启生效）", kw: "kvm 跨屏", fn: () => saveKvm(state.kvm_left || "", state.kvm_right || "", !state.kvm_enabled) },
+    { t: state.kvm_enabled ? "停用鼠标键盘跨屏" : "启用鼠标键盘跨屏", kw: "kvm 跨屏", fn: () => saveKvm(state.kvm_left || "", state.kvm_right || "", !state.kvm_enabled) },
     { t: "打开接收目录", kw: "open folder 目录 接收", fn: () => openPath({ dir: "receive" }) },
     { t: "打开运行日志", kw: "log console 日志", fn: openConsole },
     { t: "打开屏幕布局", kw: "layout kvm 布局", fn: () => { switchView("layout"); } },

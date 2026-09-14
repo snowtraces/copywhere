@@ -119,7 +119,10 @@ type App struct {
 	opts   Options
 	ctx    context.Context
 	cancel context.CancelFunc
-	kvmSvc *kvm.Service // 已启动的 KVM 服务（布局可热更新）
+	kvmSvc *kvm.Service // 当前 KVM 服务（面板可热启停，未启用时为 nil）
+
+	kvmMu     sync.Mutex         // 保护 kvmSvc / kvmCancel 的热启停
+	kvmCancel context.CancelFunc // KVM 服务子 context（停用时取消以关闭监听）
 
 	pendingMu sync.Mutex
 	pending   []pendingEntry
@@ -305,51 +308,48 @@ func Start(ctx context.Context, cfg *config.Config, opts Options) (*App, error) 
 	}()
 	go func() {
 		interval := time.Duration(cfg.AnnounceSec) * time.Second
-		if err := discovery.Run(runCtx, cfg.DiscoveryPort, cfg.TransferPort, interval, cfg.NodeName, a.selfID, a.store); err != nil {
+		// 节点名经 nameFn 每次广播时取当前值：面板改名下一次广播即生效
+		if err := discovery.RunDynamic(runCtx, cfg.DiscoveryPort, cfg.TransferPort, interval,
+			func() string { return a.cfg.NodeName }, a.selfID, a.store); err != nil {
 			log.Printf("节点发现异常退出: %v", err)
 		}
 	}()
 	go a.flushLoop(runCtx)
 
 	printBanner(cfg)
-	var kvmSvc *kvm.Service
-	if cfg.KVMOn() {
-		kvmSvc = kvm.NewService(
-			kvm.Config{
-				Port:         cfg.KVMPort,
-				Left:         cfg.KVMLeft,
-				Right:        cfg.KVMRight,
-				EntryMonitor: cfg.KVMEntryMonitorIdx(),
-				SelfID:       a.selfID,
-				MoveInterval: cfg.KVMMoveInterval(),
-				ReflowStep:   cfg.KVMReflowStep(),
-				SpeedPercent: cfg.KVMSpeedFactor(),
-				TokenForPeer: func(id string) (string, bool) {
-					e, ok := a.trust.Get(id)
-					return e.PeerToken, ok && e.PeerToken != ""
-				},
-				PairTokenFor: func(id string) (string, bool) {
-					e, ok := a.trust.Get(id)
-					return e.PairToken, ok && e.PairToken != ""
-				},
-			},
-			cfg.NodeName, a.store, a.ttl(), input.DefaultInjector{})
-		a.kvmSvc = kvmSvc
-		if err := kvmSvc.Start(runCtx); err != nil {
-			log.Printf("KVM 服务启动失败: %v", err)
-		} else {
-			if err := input.Start(input.Callbacks{
-				OnMouseMove:     kvmSvc.OnMouseMove,
-				OnMouseButton:   kvmSvc.OnMouseButton,
-				OnWheel:         kvmSvc.OnWheel,
-				OnKey:           kvmSvc.OnKey,
-				OnLocalActivity: kvmSvc.OnLocalActivity,
-			}); err != nil {
-				log.Printf("输入钩子启动失败: %v", err)
+	// 输入钩子进程级安装一次（代价极小）；回调经门禁转发给当前 KVM 服务，
+	// 未启用（或热停用）时为空操作——这是跨屏开关即时生效的基础。
+	if err := input.Start(input.Callbacks{
+		OnMouseMove: func(dx, dy int) {
+			if s := a.currentKVM(); s != nil {
+				s.OnMouseMove(dx, dy)
 			}
-			log.Printf("KVM 跨屏已启用：左邻 %q，右邻 %q，端口 %d/tcp（Ctrl+Alt+Shift+X 紧急退出）",
-				cfg.KVMLeft, cfg.KVMRight, cfg.KVMPort)
-		}
+		},
+		OnMouseButton: func(down bool, button int, x, y int) {
+			if s := a.currentKVM(); s != nil {
+				s.OnMouseButton(down, button, x, y)
+			}
+		},
+		OnWheel: func(delta int32, horizontal bool) {
+			if s := a.currentKVM(); s != nil {
+				s.OnWheel(delta, horizontal)
+			}
+		},
+		OnKey: func(vk, scan uint32, down, ext bool) {
+			if s := a.currentKVM(); s != nil {
+				s.OnKey(vk, scan, down, ext)
+			}
+		},
+		OnLocalActivity: func() {
+			if s := a.currentKVM(); s != nil {
+				s.OnLocalActivity()
+			}
+		},
+	}); err != nil {
+		log.Printf("输入钩子启动失败: %v", err)
+	}
+	if cfg.KVMOn() {
+		a.startKVM()
 	}
 	if opts.Interactive || opts.GUI {
 		go monitor.Run(runCtx, monitor.Guard{OwnSeq: &a.ownSeq, LastReceivedAt: &a.lastRecv, Paused: &a.paused},
@@ -401,6 +401,93 @@ func (a *App) SetPaused(p bool) {
 
 // IsPaused 返回自动同步是否处于暂停状态。
 func (a *App) IsPaused() bool { return a.paused.Load() }
+
+// ---------- KVM 热启停（跨屏开关即时生效，无需重启） ----------
+
+// currentKVM 返回当前 KVM 服务（未启用时为 nil）；输入钩子线程经此门禁转发。
+func (a *App) currentKVM() *kvm.Service {
+	a.kvmMu.Lock()
+	defer a.kvmMu.Unlock()
+	return a.kvmSvc
+}
+
+// parentOrBackground 返回 KVM 子 context 的父 context；App 未经过 Start
+// 构造（如单测）时 ctx 为 nil，退化为 Background。
+func (a *App) parentOrBackground() context.Context {
+	if a.ctx == nil {
+		return context.Background()
+	}
+	return a.ctx
+}
+
+// SetKVMEnabled 热启用/停用跨屏：监听与活动会话即时启停，无需重启。
+// 配置落盘由面板的 apiConfig 负责，这里只管运行态。
+func (a *App) SetKVMEnabled(on bool) {
+	if on {
+		a.startKVM()
+	} else {
+		a.stopKVM()
+	}
+}
+
+// startKVM 创建并启动 KVM 服务（幂等：已在运行时不重复启动）。
+func (a *App) startKVM() {
+	a.kvmMu.Lock()
+	defer a.kvmMu.Unlock()
+	if a.kvmSvc != nil {
+		return
+	}
+	cfg := a.cfg
+	svc := kvm.NewService(
+		kvm.Config{
+			Port:         cfg.KVMPort,
+			Left:         cfg.KVMLeft,
+			Right:        cfg.KVMRight,
+			EntryMonitor: cfg.KVMEntryMonitorIdx(),
+			SelfID:       a.selfID,
+			MoveInterval: cfg.KVMMoveInterval(),
+			ReflowStep:   cfg.KVMReflowStep(),
+			SpeedPercent: cfg.KVMSpeedFactor(),
+			TokenForPeer: func(id string) (string, bool) {
+				e, ok := a.trust.Get(id)
+				return e.PeerToken, ok && e.PeerToken != ""
+			},
+			PairTokenFor: func(id string) (string, bool) {
+				e, ok := a.trust.Get(id)
+				return e.PairToken, ok && e.PairToken != ""
+			},
+		},
+		cfg.NodeName, a.store, a.ttl(), input.DefaultInjector{})
+	ctx, cancel := context.WithCancel(a.parentOrBackground())
+	if err := svc.Start(ctx); err != nil {
+		cancel()
+		log.Printf("KVM 服务启动失败: %v", err)
+		return
+	}
+	a.kvmSvc = svc
+	a.kvmCancel = cancel
+	log.Printf("KVM 跨屏已启用：左邻 %q，右邻 %q，端口 %d/tcp（Ctrl+Alt+Shift+X 紧急退出）",
+		cfg.KVMLeft, cfg.KVMRight, cfg.KVMPort)
+}
+
+// stopKVM 停用 KVM：关闭被控端监听并结束活动会话（幂等）。
+func (a *App) stopKVM() {
+	a.kvmMu.Lock()
+	if a.kvmSvc == nil {
+		a.kvmMu.Unlock()
+		return
+	}
+	svc, cancel := a.kvmSvc, a.kvmCancel
+	a.kvmSvc, a.kvmCancel = nil, nil
+	a.kvmMu.Unlock()
+	cancel()   // 关闭被控端监听等
+	svc.Stop() // 结束活动会话（内部自行取服务锁，须在 a.kvmMu 外调用）
+	// 兜底复位输入抑制：Svc.Stop 已对快照到的主控会话复位，但若停用
+	// 瞬间恰有在途切换（拨号/握手窗口），suppress 可能在 Stop 快照之后
+	// 才被僵尸会话置位——这里无条件复位，确保本机输入绝不被吞。
+	input.SetSuppress(false)
+	log.Printf("KVM 跨屏已停用")
+}
 
 // RejectedWith 返回节点是否因鉴权被拒处于暂停发送状态。
 func (a *App) RejectedWith(id string) bool {
@@ -577,17 +664,35 @@ func (a *App) PendingPair() (id, name string, ok bool) {
 // SyncKVM 把当前布局落地并推送：本机 KVM 服务热更新邻居；
 // 同时告知每个在线且已配对的邻居"把我放到你的另一侧"，实现多机自动同步。
 // （A 是 B 的左邻 ⟺ B 是 A 的右邻，两端只需在一端配置。）
+// 无旧布局可对照（仅推送当前设置）；面板保存布局请用 SyncKVMFrom，
+// 以便邻居被取消或换人时同步通知旧邻居解除。
 func (a *App) SyncKVM() {
-	if a.kvmSvc != nil {
-		a.kvmSvc.UpdateNeighbors(a.cfg.KVMLeft, a.cfg.KVMRight)
-		a.kvmSvc.UpdateTunables(a.cfg.KVMMoveInterval(), a.cfg.KVMReflowStep(), a.cfg.KVMSpeedFactor())
-	}
-	a.syncKVMOne(a.cfg.KVMLeft, "right")
-	a.syncKVMOne(a.cfg.KVMRight, "left")
+	a.SyncKVMFrom(a.cfg.KVMLeft, a.cfg.KVMRight)
 }
 
-// syncKVMOne 把"本机应作为对方的 remoteSide 邻居"推送给名为 neighbor 的节点。
-func (a *App) syncKVMOne(neighbor, remoteSide string) {
+// SyncKVMFrom 与 SyncKVM 类似，但携带改动前的左右邻居：
+// 某侧被取消（清空）或换成其他节点时，向旧邻居推送"把我从你那边移除"，
+// 保证取消/换人的信息与设置一样能同步到对端，避免对端残留过期邻居。
+func (a *App) SyncKVMFrom(oldLeft, oldRight string) {
+	if svc := a.currentKVM(); svc != nil {
+		svc.UpdateNeighbors(a.cfg.KVMLeft, a.cfg.KVMRight)
+		svc.UpdateTunables(a.cfg.KVMMoveInterval(), a.cfg.KVMReflowStep(), a.cfg.KVMSpeedFactor())
+	}
+	// 旧左邻不再是我的左邻 → 我不再是它的右邻；右邻同理
+	if oldLeft != "" && oldLeft != a.cfg.KVMLeft {
+		a.pushKVM(oldLeft, "right", true)
+	}
+	if oldRight != "" && oldRight != a.cfg.KVMRight {
+		a.pushKVM(oldRight, "left", true)
+	}
+	a.pushKVM(a.cfg.KVMLeft, "right", false)
+	a.pushKVM(a.cfg.KVMRight, "left", false)
+}
+
+// pushKVM 把布局信息推送给名为 neighbor 的节点（在线且已配对时）：
+// clear=false 告知"把我放到你的 remoteSide 侧"，
+// clear=true 告知"把我从你的 remoteSide 侧移除"（取消配置的同步）。
+func (a *App) pushKVM(neighbor, remoteSide string, clear bool) {
 	if neighbor == "" {
 		return
 	}
@@ -600,7 +705,7 @@ func (a *App) syncKVMOne(neighbor, remoteSide string) {
 			return
 		}
 		payload, err := json.Marshal(transport.KVMSync{
-			PeerID: a.selfID, PeerName: a.cfg.NodeName, Side: remoteSide,
+			PeerID: a.selfID, PeerName: a.cfg.NodeName, Side: remoteSide, Clear: clear,
 		})
 		if err != nil {
 			return
@@ -616,6 +721,9 @@ func (a *App) syncKVMOne(neighbor, remoteSide string) {
 			}
 			if _, err := a.sendToPeer(pp, hh, makePayload, 15*time.Second); err != nil {
 				log.Printf("KVM 布局同步到 %q 失败: %v", pp.Name, err)
+			} else if clear {
+				log.Printf("KVM 布局已同步到 %q（已通知其移除本机%s邻）", pp.Name,
+					map[string]string{"left": "左", "right": "右"}[remoteSide])
 			} else {
 				log.Printf("KVM 布局已同步到 %q（本机为其%s邻）", pp.Name,
 					map[string]string{"left": "右", "right": "左"}[remoteSide])
@@ -626,8 +734,8 @@ func (a *App) syncKVMOne(neighbor, remoteSide string) {
 	log.Printf("KVM 布局同步跳过 %q：当前不在线（对端上线后在面板重新保存布局即可同步）", neighbor)
 }
 
-// onKVMSync 处理邻居推来的布局同步：把对方登记为指定侧邻居，
-// 落盘并热更新本机 KVM 服务（无需重启）。
+// onKVMSync 处理邻居推来的布局同步：把对方登记为指定侧邻居（或按 Clear
+// 标记把对方从该侧移除），落盘并热更新本机 KVM 服务（无需重启）。
 func (a *App) onKVMSync(kv transport.KVMSync) error {
 	if kv.Side != "left" && kv.Side != "right" {
 		return fmt.Errorf("无效的侧别 %q", kv.Side)
@@ -635,19 +743,37 @@ func (a *App) onKVMSync(kv transport.KVMSync) error {
 	if kv.PeerID == a.selfID {
 		return fmt.Errorf("不能与本机配对布局")
 	}
-	if kv.Side == "left" {
-		a.cfg.KVMLeft = kv.PeerName
-	} else {
-		a.cfg.KVMRight = kv.PeerName
+	dst, sideName := &a.cfg.KVMLeft, "左"
+	if kv.Side == "right" {
+		dst, sideName = &a.cfg.KVMRight, "右"
 	}
+	if kv.Clear {
+		// 对端取消配置：仅当该侧当前确实是对端时才清除，
+		// 迟到的取消消息不会覆盖本机较新的布局。
+		// 注意守卫按节点名比对（邻居配置即以名存储）：节点名可改、
+		// 理论上可重名，身份严格性受此既有设计限制。
+		if *dst != kv.PeerName {
+			log.Printf("布局同步：忽略 %q 的取消请求（本机%s邻已不是该节点）", kv.PeerName, sideName)
+			return nil
+		}
+		*dst = ""
+		if err := a.cfg.Save(a.cfgPath()); err != nil {
+			return fmt.Errorf("保存配置失败: %w", err)
+		}
+		if svc := a.currentKVM(); svc != nil {
+			svc.UpdateNeighbors(a.cfg.KVMLeft, a.cfg.KVMRight)
+		}
+		log.Printf("布局同步：已移除本机%s邻 %q 并即时生效", sideName, kv.PeerName)
+		return nil
+	}
+	*dst = kv.PeerName
 	if err := a.cfg.Save(a.cfgPath()); err != nil {
 		return fmt.Errorf("保存配置失败: %w", err)
 	}
-	if a.kvmSvc != nil {
-		a.kvmSvc.UpdateNeighbors(a.cfg.KVMLeft, a.cfg.KVMRight)
+	if svc := a.currentKVM(); svc != nil {
+		svc.UpdateNeighbors(a.cfg.KVMLeft, a.cfg.KVMRight)
 	}
-	log.Printf("布局同步：已将节点 %q 设为本机%s邻并即时生效", kv.PeerName,
-		map[string]string{"left": "左", "right": "右"}[kv.Side])
+	log.Printf("布局同步：已将节点 %q 设为本机%s邻并即时生效", kv.PeerName, sideName)
 	return nil
 }
 

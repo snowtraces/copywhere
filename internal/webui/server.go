@@ -37,8 +37,11 @@ type Core interface {
 	RespondPair(accept bool) error
 	PendingPair() (id, name string, ok bool)
 	Unpair(id string) error
-	// KVM 布局：本机热更新 + 推送到对端（互为镜像）
-	SyncKVM()
+	// KVM 布局：本机热更新 + 推送到对端（互为镜像）；
+	// 携带改动前的布局，取消/换人时同步通知旧邻居解除
+	SyncKVMFrom(oldLeft, oldRight string)
+	// KVM 热启停：跨屏开关即时生效，无需重启
+	SetKVMEnabled(on bool)
 }
 
 // Server 是本地控制面板 HTTP 服务（仅监听 127.0.0.1）。
@@ -256,19 +259,18 @@ func (s *Server) apiGetConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"config": s.cfg,
 		"path":   s.cfgPath,
-		"hint":   "端口、node_name 与 KVM 开关修改后需重启 copywhere 生效；其余字段保存后立即生效（KVM 邻居会自动同步到对端）",
+		"hint":   "所有配置修改后立即保存并即时生效，无需重启（KVM 邻居会自动同步到对端；端口类字段面板未开放编辑）",
 	})
 }
 
-// apiSetConfig 更新并保存配置；可即时生效的字段直接改内存配置，
-// 需要重启的字段只写盘并在应答中提示。
+// apiSetConfig 更新并保存配置：所有字段即时生效（KVM 开关热启停、
+// 节点名下一次广播生效、邻居自动同步到对端），无需重启。
 func (s *Server) apiSetConfig(w http.ResponseWriter, r *http.Request) {
 	var in map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, "请求体不是合法 JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	var restart []string
 	var errs []string
 	applyStr := func(key string, dst *string) {
 		if v, ok := in[key]; ok {
@@ -281,10 +283,13 @@ func (s *Server) apiSetConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	applyStr("receive_dir", &s.cfg.ReceiveDir)
+	nodeNameChanged := false
 	if v, ok := in["node_name"]; ok {
 		if sv, ok := v.(string); ok && strings.TrimSpace(sv) != "" {
+			if s.cfg.NodeName != sv {
+				nodeNameChanged = true
+			}
 			s.cfg.NodeName = sv
-			restart = append(restart, "node_name")
 		}
 	}
 	if v, ok := in["max_auto_copy_mb"]; ok {
@@ -308,7 +313,9 @@ func (s *Server) apiSetConfig(w http.ResponseWriter, r *http.Request) {
 			errs = append(errs, "text_sync 需要布尔值")
 		}
 	}
-	// KVM 布局：允许空串（清除某一侧）；邻居名本机即时热更新，并推送到对端
+	// KVM 布局：允许空串（清除某一侧）；邻居名本机即时热更新，并推送到对端。
+	// 记录改动前的值：取消（清空）或换人时向旧邻居推送移除通知。
+	oldKVMLeft, oldKVMRight := s.cfg.KVMLeft, s.cfg.KVMRight
 	kvmChanged := false
 	applyKVM := func(key string, dst *string) {
 		if v, ok := in[key]; ok {
@@ -323,10 +330,13 @@ func (s *Server) apiSetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	applyKVM("kvm_left", &s.cfg.KVMLeft)
 	applyKVM("kvm_right", &s.cfg.KVMRight)
+	kvmEnableChanged := false
 	if v, ok := in["kvm_enabled"]; ok {
 		if bv, ok := v.(bool); ok {
+			if s.cfg.KVMOn() != bv {
+				kvmEnableChanged = true
+			}
 			s.cfg.KVMEnabled = &bv
-			restart = append(restart, "kvm_enabled")
 		} else {
 			errs = append(errs, "kvm_enabled 需要布尔值")
 		}
@@ -367,11 +377,20 @@ func (s *Server) apiSetConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("配置已通过面板更新并保存")
-	if kvmChanged {
-		// 邻居改动即时生效（本机热更新 + 推送到对端，自动互为镜像）
-		go s.core.SyncKVM()
+	if nodeNameChanged {
+		// 广播名每次公告时取当前值：下一次广播（约 announce_interval 秒）即生效
+		log.Printf("节点名已更新为 %q，将在下一次广播生效", s.cfg.NodeName)
 	}
-	writeJSON(w, map[string]any{"ok": true, "restart_required": restart})
+	if kvmEnableChanged {
+		// 跨屏开关即时生效：热启动/停用 KVM 服务与监听，无需重启
+		s.core.SetKVMEnabled(s.cfg.KVMOn())
+	}
+	if kvmChanged {
+		// 邻居改动即时生效（本机热更新 + 推送到对端，自动互为镜像；
+		// 取消/换人时同步通知旧邻居解除）
+		go s.core.SyncKVMFrom(oldKVMLeft, oldKVMRight)
+	}
+	writeJSON(w, map[string]any{"ok": true})
 }
 
 // apiPause 切换自动同步开关。

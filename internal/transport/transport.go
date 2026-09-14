@@ -72,11 +72,17 @@ type PairDecision struct {
 }
 
 // KVMSync 是 KVM 布局同步负载：发送方告知接收方
-// "把我放到你的 Side 侧"（Side 为接收方视角的 left/right）。
+// "把我放到你的 Side 侧"（Side 为接收方视角的 left/right）；
+// Clear 为 true 时表示"把我从你的 Side 侧移除"（取消邻居配置的同步）。
+//
+// 兼容性注意：v0.2 及更早的对端不认识 clear 字段（encoding/json 忽略未知
+// 字段），会把取消消息误解为普通"设置"并写入错误布局——混合版本运行期间
+// 取消/换人同步不可用且有害，协议变更要求所有节点同步升级（见 release.md）。
 type KVMSync struct {
 	PeerID   string `json:"peer_id"`
 	PeerName string `json:"peer_name"`
 	Side     string `json:"side"` // "left" | "right"
+	Clear    bool   `json:"clear,omitempty"`
 }
 
 // Response 是接收方的 JSON 应答。
@@ -101,7 +107,8 @@ type Handlers struct {
 	// OnPair 处理配对请求：校验并等待本机用户裁决（可阻塞），
 	// 接受时返回已签发的 PairDecision，拒绝时返回 Accepted=false。
 	OnPair func(offer PairOffer) PairDecision
-	// OnKVM 处理布局同步：把发送方登记为指定侧的 KVM 邻居并即时生效。
+	// OnKVM 处理布局同步：把发送方登记为指定侧的 KVM 邻居并即时生效；
+	// 负载 Clear=true 时表示对端取消配置，应把该侧邻居移除。
 	OnKVM func(sync KVMSync) error
 }
 

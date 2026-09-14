@@ -178,6 +178,8 @@ type Service struct {
 	store    *discovery.Store
 	ttl      time.Duration
 	injector Injector
+	ctx      context.Context // Start 携带的 context；热停用后用于掐断在途切换
+	ln       net.Listener    // 被控端监听（Start 赋值，Stop 同步关闭以便立即重启用）
 
 	mu               sync.Mutex
 	master           *masterSession // 正在控制别人
@@ -209,6 +211,7 @@ func NewService(cfg Config, nodeName string, store *discovery.Store,
 	return &Service{
 		cfg: cfg, nodeName: nodeName,
 		store: store, ttl: ttl, injector: injector,
+		ctx:      context.Background(),
 		modsDown: map[uint32]bool{},
 	}
 }
@@ -232,6 +235,28 @@ func (s *Service) UpdateTunables(moveInterval, reflowStep time.Duration, speedPe
 	s.mu.Unlock()
 	log.Printf("KVM 手感参数已热更新：合拍 %v，重排 %v，速度系数 %d%%",
 		s.cfg.MoveInterval, s.cfg.ReflowStep, s.cfg.SpeedPercent)
+}
+
+// Stop 热停用 KVM：同步关闭被控端监听（保证 Stop 返回后端口可立即重新
+// 绑定，支持快速关-开切换）并结束全部活动会话（主控向对端发 leave，
+// 对端立即干净交还控制权）。
+func (s *Service) Stop() {
+	s.mu.Lock()
+	ln := s.ln
+	s.mu.Unlock()
+	if ln != nil {
+		ln.Close() // 与 Start 的 ctx.Done 关闭协程双保险，重复 Close 无害
+	}
+	s.mu.Lock()
+	m, sv := s.master, s.serving
+	s.mu.Unlock()
+	// end* 内部会再取 s.mu，必须在锁外调用
+	if m != nil {
+		s.endMasterSession(m, true, "跨屏已停用")
+	}
+	if sv != nil {
+		sv.end(false, "跨屏已停用")
+	}
 }
 
 // currentMoveInterval / currentReflowStep / currentSpeedPercent 在锁内读参数。
@@ -280,12 +305,16 @@ func inputSetSuppress(b bool) { input.SetSuppress(b) }
 
 // Start 启动被控端监听，直到 ctx 结束。返回错误表示端口被占用等启动失败。
 func (s *Service) Start(ctx context.Context) error {
+	s.ctx = ctx // 热停用后 trySwitch 据此放弃在途切换（见 trySwitch）
 	ln, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", s.cfg.Port))
 	if err != nil {
 		return fmt.Errorf("监听 KVM 端口 %d/tcp 失败: %w", s.cfg.Port, err)
 	}
 	log.Printf("KVM 被控端已监听 :%d/tcp", s.cfg.Port)
 	s.refreshMonitors()
+	s.mu.Lock()
+	s.ln = ln // 供 Stop 同步关闭（热停用后可立即重新启用）
+	s.mu.Unlock()
 	if mons := s.currentMonitors(); len(mons) > 0 {
 		parts := make([]string, len(mons))
 		for i, m := range mons {
@@ -727,6 +756,17 @@ func (s *Service) trySwitch(dir string) {
 		return
 	}
 
+	// 热停用后绝不能再建立会话：trySwitch 在独立 goroutine 中运行，
+	// 拨号+握手最长可达 3 秒，期间用户可能已关闭跨屏。若不检查，
+	// 僵尸服务会在停用后抢占 master 并置位输入抑制，而 App 层门禁
+	// 已不再把事件转给本服务，没有任何路径能复位——本机鼠标键盘被吞。
+	select {
+	case <-s.ctx.Done():
+		log.Printf("KVM：跨屏已停用，放弃切换到 %q（%s）", peer.Name, dir)
+		return
+	default:
+	}
+
 	var respErr error
 	var conn net.Conn
 	for _, ip := range peer.IPs {
@@ -749,6 +789,16 @@ func (s *Service) trySwitch(dir string) {
 		log.Printf("KVM：与 %q 握手失败: %v", peer.Name, err)
 		s.setCooldown(1500 * time.Millisecond)
 		return
+	}
+
+	// 注册前再查一次（拨号+握手期间可能已停用）：此刻尚未注册 master、
+	// 未置位输入抑制，直接关连接即可干净放弃。
+	select {
+	case <-s.ctx.Done():
+		conn.Close()
+		log.Printf("KVM：跨屏已停用，放弃切换到 %q（%s）", peer.Name, dir)
+		return
+	default:
 	}
 
 	s.mu.Lock()

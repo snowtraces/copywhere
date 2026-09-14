@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +23,18 @@ type fakeCore struct {
 	peers  []discovery.Peer
 	sent   []string
 	files  [][]string
+
+	mu            sync.Mutex // 保护以下字段（apiSetConfig 的 goroutine 异步写入）
+	kvmOldLeft    string
+	kvmOldRight   string
+	kvmSyncCalls  int
+	kvmEnabledSet []bool
+}
+
+func (f *fakeCore) kvmSyncSnapshot() (left, right string, calls int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.kvmOldLeft, f.kvmOldRight, f.kvmSyncCalls
 }
 
 func (f *fakeCore) Peers() []discovery.Peer { return f.peers }
@@ -29,9 +42,21 @@ func (f *fakeCore) SelfName() string        { return "test-node" }
 func (f *fakeCore) SelfIP() string          { return "10.0.0.1" }
 func (f *fakeCore) SetPaused(p bool)        { f.paused = p }
 func (f *fakeCore) IsPaused() bool          { return f.paused }
-func (f *fakeCore) SendText(text string)    { f.sent = append(f.sent, text) }
+func (f *fakeCore) SendText(text string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sent = append(f.sent, text)
+}
 func (f *fakeCore) SendFiles(paths []string, total int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.files = append(f.files, paths)
+}
+
+func (f *fakeCore) sentSnapshot() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.sent...)
 }
 func (f *fakeCore) PairedWith(id string) bool     { return false }
 func (f *fakeCore) RejectedWith(id string) bool   { return false }
@@ -42,7 +67,18 @@ func (f *fakeCore) PendingPair() (string, string, bool) {
 	return "", "", false
 }
 func (f *fakeCore) Unpair(id string) error { return nil }
-func (f *fakeCore) SyncKVM()               {}
+func (f *fakeCore) SyncKVMFrom(oldLeft, oldRight string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.kvmOldLeft, f.kvmOldRight = oldLeft, oldRight
+	f.kvmSyncCalls++
+}
+
+func (f *fakeCore) SetKVMEnabled(on bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.kvmEnabledSet = append(f.kvmEnabledSet, on)
+}
 
 func newTestServer(t *testing.T) (*Server, *fakeCore) {
 	t.Helper()
@@ -165,13 +201,15 @@ func TestSendText(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("有节点发送文本应 200，实际 %d", resp.StatusCode)
 	}
-	// SendText 在 goroutine 中执行
+	// SendText 在 goroutine 中执行（经锁快照读取，避免数据竞争）
 	deadline := time.Now().Add(2 * time.Second)
-	for len(core.sent) == 0 && time.Now().Before(deadline) {
+	sent := core.sentSnapshot()
+	for len(sent) == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
+		sent = core.sentSnapshot()
 	}
-	if len(core.sent) != 1 || core.sent[0] != "hello" {
-		t.Fatalf("文本应被转发给 Core，实际 %v", core.sent)
+	if len(sent) != 1 || sent[0] != "hello" {
+		t.Fatalf("文本应被转发给 Core，实际 %v", sent)
 	}
 }
 
@@ -189,17 +227,15 @@ func TestConfigSave(t *testing.T) {
 	if out["ok"] != true {
 		t.Fatalf("保存配置应成功: %v", out)
 	}
-	if rr, _ := out["restart_required"].([]any); len(rr) != 1 || rr[0] != "node_name" {
-		t.Fatalf("node_name 应标记为需重启: %v", out)
-	}
-	// 内存配置生效验证（save 落盘到 t.TempDir）
+	// 内存配置生效验证（save 落盘到 t.TempDir）；
+	// 节点名等所有字段均即时生效，不再需要重启
 	if srv.cfg.MaxAutoCopyMB != 5 || srv.cfg.AutoPaste || srv.cfg.NodeName != "renamed" {
 		t.Fatalf("配置未生效: %+v", srv.cfg)
 	}
 }
 
 func TestKVMConfigSave(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, core := newTestServer(t)
 	base, key := splitURL(srv)
 	resp, err := http.Post(base+"api/config?key="+key, "application/json",
 		strings.NewReader(`{"kvm_left":"LeftPC","kvm_right":"","kvm_enabled":false}`))
@@ -212,23 +248,57 @@ func TestKVMConfigSave(t *testing.T) {
 	if out["ok"] != true {
 		t.Fatalf("保存 KVM 配置应成功: %v", out)
 	}
-	rr, _ := out["restart_required"].([]any)
-	got := map[string]bool{}
-	for _, v := range rr {
-		got[v.(string)] = true
-	}
-	// 左右邻居已改为热更新（不重启生效），只有开关需要重启
-	if got["kvm_left"] || got["kvm_right"] {
-		t.Fatalf("邻居配置不应标记需重启: %v", out)
-	}
-	if !got["kvm_enabled"] {
-		t.Fatalf("kvm_enabled 应标记需重启: %v", out)
+	// 所有字段即时生效，不应再有重启标记
+	if rr, ok := out["restart_required"]; ok && rr != nil {
+		t.Fatalf("不应返回重启标记: %v", out)
 	}
 	if srv.cfg.KVMLeft != "LeftPC" || srv.cfg.KVMRight != "" {
 		t.Fatalf("KVM 邻居未生效: %+v", srv.cfg)
 	}
 	if srv.cfg.KVMEnabled == nil || *srv.cfg.KVMEnabled {
 		t.Fatalf("kvm_enabled 未生效: %+v", srv.cfg.KVMEnabled)
+	}
+	// 跨屏开关应热停用（SetKVMEnabled(false)）
+	if len(core.kvmEnabledSet) != 1 || core.kvmEnabledSet[0] != false {
+		t.Fatalf("kvm_enabled 应触发热启停回调，实际 %v", core.kvmEnabledSet)
+	}
+}
+
+func TestKVMConfigClearCapturesOldNeighbor(t *testing.T) {
+	srv, core := newTestServer(t)
+	srv.cfg.KVMLeft = "OldPC"
+	base, key := splitURL(srv)
+	resp, err := http.Post(base+"api/config?key="+key, "application/json",
+		strings.NewReader(`{"kvm_left":""}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	json.NewDecoder(resp.Body).Decode(&out)
+	if out["ok"] != true {
+		t.Fatalf("保存配置应成功: %v", out)
+	}
+	// SyncKVMFrom 经 goroutine 异步调用，轮询等待（经锁快照读取，避免数据竞争）
+	deadline := time.Now().Add(2 * time.Second)
+	var oldLeft, oldRight string
+	var calls int
+	for time.Now().Before(deadline) {
+		if _, _, calls = core.kvmSyncSnapshot(); calls > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	oldLeft, oldRight, calls = core.kvmSyncSnapshot()
+	if calls != 1 {
+		t.Fatalf("邻居改动应触发 1 次 SyncKVMFrom，实际 %d", calls)
+	}
+	// 旧左邻应传给核心，供其向旧邻居推送取消同步
+	if oldLeft != "OldPC" || oldRight != "" {
+		t.Fatalf("应捕获改动前的布局（左邻 OldPC），实际 left=%q right=%q", oldLeft, oldRight)
+	}
+	if srv.cfg.KVMLeft != "" {
+		t.Fatalf("左邻应已清空，实际 %q", srv.cfg.KVMLeft)
 	}
 }
 
@@ -368,4 +438,3 @@ func TestFaviconsServed(t *testing.T) {
 		}
 	}
 }
-
