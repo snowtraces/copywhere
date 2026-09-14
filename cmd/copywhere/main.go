@@ -30,7 +30,7 @@ func usage() {
 	fmt.Print(`copywhere — 局域网剪贴板/文件自动同步工具
 
 用法:
-  copywhere init                            生成默认配置（含随机 token）
+  copywhere init                            生成默认配置
   copywhere run [-config 路径] [-plain]     启动服务（节点发现 + 传输 + 剪贴板监控）
   copywhere gui [-config 路径]              启动服务 + 系统托盘 + 浏览器控制面板
   copywhere nodes [-config 路径] [-wait 4s] 扫描并列出局域网在线节点
@@ -295,7 +295,7 @@ func cmdNodes(args []string) error {
 	defer cancel()
 	peers := app.ScanPeers(ctx, cfg)
 	if len(peers) == 0 {
-		fmt.Println("未发现其他在线节点（确认对端已运行 copywhere run，且 token 一致、防火墙放行）")
+		fmt.Println("未发现其他在线节点（确认对端已运行 copywhere，且已在面板完成配对、防火墙放行）")
 		return nil
 	}
 	fmt.Printf("发现 %d 个在线节点:\n", len(peers))

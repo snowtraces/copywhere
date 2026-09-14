@@ -940,7 +940,7 @@ func (a *App) SendText(text string) {
 }
 
 // SendImage 同步剪贴板截图：先落盘到接收目录的「截图」子目录
-//（本机留存一份，也便于失败重试），再按普通文件通道发送。
+// （本机留存一份，也便于失败重试），再按普通文件通道发送。
 func (a *App) SendImage(png []byte) {
 	dir := filepath.Join(a.cfg.ReceiveDir, "截图")
 	if err := os.MkdirAll(dir, 0o755); err != nil {

@@ -151,8 +151,15 @@ A（发起方）                              B（被请求方）
 
 ## 4. 剪贴板同步与防回环
 
-- 轮询 `GetClipboardSequenceNumber`（400ms）；变化即读取 CF_HDROP（文件）
-  或 CF_UNICODETEXT（文本）。
+- 轮询 `GetClipboardSequenceNumber`（400ms）；变化即按 **文件 → 文本 → 截图** 的
+  优先级读取：CF_HDROP（文件）、CF_UNICODETEXT（文本）、图片（截图）。
+- 带文本的位图（Excel/Word 等复制时附带的预览位图）按文本处理，不会误当截图发送。
+- 截图同步：无文件无文本时读取图片——优先取应用直接放入的 "PNG" 注册格式
+  （Win+Shift+S 等截图工具常提供），否则将 CF_DIB 位图就地转换为 PNG
+  （支持 24/32bpp 的 BI_RGB / BI_BITFIELDS）。PNG 字节落盘到接收目录的
+  「截图」子目录（`截图_<时间戳>.png`）后按普通文件通道发送与重试；
+  同一张截图（内容 sha256 前 8 字节指纹）不重复发送，受 `max_auto_copy_mb`
+  阈值约束。
 - 防回环双重防护：
   1. 本进程写剪贴板后记录新的序号（OwnSeq），轮询时跳过；
   2. 收到远端内容后 3 秒冷却期内忽略剪贴板变化（兜底竞态窗口）。
