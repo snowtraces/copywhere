@@ -36,44 +36,52 @@
 }
 :root[data-theme="dark"] {
   --bg: #0a0e13;
-  --panel: #0e141b;
-  --panel-2: #111923;
-  --border: #26323e;
-  --border-dim: #1a232d;
-  --text: #d5e0e8;
-  --dim: #7c8e9c;
+  --panel: #18222e;
+  --panel-2: #1d2a37;
+  --border: #3d4f5e;
+  --border-dim: #2c3b49;
+  --text: #dde7ef;
+  --dim: #8ba0af;
   --accent: #00d0c8;
   --accent-ink: #06131a;
-  --accent-weak: #0f2629;
+  --accent-weak: #164049;
   --in: #3ddc97;
-  --in-weak: #0e2b21;
+  --in-weak: #17402e;
   --err: #ff5c74;
-  --err-weak: #2c141a;
+  --err-weak: #3a1a22;
   --warn: #ffc247;
-  --track: #1a232d;
-  --gridline: rgba(213,224,232,.045);
+  --track: #2c3b49;
+  --gridline: rgba(221,231,239,.06);
   --shadow-pop: 0 14px 44px rgba(0,0,0,.55);
+  /* 对话气泡（深色专属）：收/发气泡与页面背景拉开层次 */
+  --bubble-in-bg: #1c2836;
+  --bubble-out-bg: #123a41;
+  --bubble-out-border: var(--accent);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     --bg: #0a0e13;
-    --panel: #0e141b;
-    --panel-2: #111923;
-    --border: #26323e;
-    --border-dim: #1a232d;
-    --text: #d5e0e8;
-    --dim: #7c8e9c;
+    --panel: #18222e;
+    --panel-2: #1d2a37;
+    --border: #3d4f5e;
+    --border-dim: #2c3b49;
+    --text: #dde7ef;
+    --dim: #8ba0af;
     --accent: #00d0c8;
     --accent-ink: #06131a;
-    --accent-weak: #0f2629;
+    --accent-weak: #164049;
     --in: #3ddc97;
-    --in-weak: #0e2b21;
+    --in-weak: #17402e;
     --err: #ff5c74;
-    --err-weak: #2c141a;
+    --err-weak: #3a1a22;
     --warn: #ffc247;
-    --track: #1a232d;
-    --gridline: rgba(213,224,232,.045);
+    --track: #2c3b49;
+    --gridline: rgba(221,231,239,.06);
     --shadow-pop: 0 14px 44px rgba(0,0,0,.55);
+    /* 对话气泡（深色专属）：收/发气泡与页面背景拉开层次 */
+    --bubble-in-bg: #1c2836;
+    --bubble-out-bg: #123a41;
+    --bubble-out-border: var(--accent);
   }
 }
 * { box-sizing: border-box; border-radius: 0 !important; }
@@ -231,8 +239,9 @@ kbd { font: 11px var(--mono); padding: 0 5px; border: 1px solid var(--border);
 .m-head .m-time { font-variant-numeric: tabular-nums; flex: none; }
 .bubble { background: var(--panel); border: 1px solid var(--border); padding: 6px 10px 7px;
   min-width: 150px; max-width: 100%; }
-.chat-row.in .bubble { border-left: 3px solid var(--in); }
-.chat-row.out .bubble { border-right: 3px solid var(--accent); background: var(--accent-weak); }
+.chat-row.in .bubble { border-left: 3px solid var(--in); background: var(--bubble-in-bg, var(--panel)); }
+.chat-row.out .bubble { border-color: var(--bubble-out-border, var(--border));
+  border-right: 3px solid var(--accent); background: var(--bubble-out-bg, var(--accent-weak)); }
 .chat-row.fail .bubble { border-left-color: var(--err); border-right-color: var(--err); }
 /* 文本消息：内容即消息体，超长折叠、点击展开 */
 .b-text { font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
