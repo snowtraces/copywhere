@@ -9,9 +9,12 @@
 package clip
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
 	"syscall"
 	"time"
 	"unsafe"
@@ -22,6 +25,7 @@ import (
 const (
 	cfUnicodeText = 13
 	cfHDROP       = 15
+	cfDIB         = 8
 	gmemMoveable  = 0x0002
 )
 
@@ -35,17 +39,32 @@ var (
 	procGetClipboardData           = user32.NewProc("GetClipboardData")
 	procSetClipboardData           = user32.NewProc("SetClipboardData")
 	procGetClipboardSequenceNumber = user32.NewProc("GetClipboardSequenceNumber")
+	procIsClipboardFormatAvailable = user32.NewProc("IsClipboardFormatAvailable")
+	procRegisterClipboardFormat    = user32.NewProc("RegisterClipboardFormatW")
 	procGlobalAlloc                = kernel32.NewProc("GlobalAlloc")
 	procGlobalLock                 = kernel32.NewProc("GlobalLock")
 	procGlobalUnlock               = kernel32.NewProc("GlobalUnlock")
 	procGlobalFree                 = kernel32.NewProc("GlobalFree")
+	procGlobalSize                 = kernel32.NewProc("GlobalSize")
 )
+
+// cfPNG 是 "PNG" 注册剪贴板格式（截图工具等应用会直接放入现成 PNG）。
+var cfPNG uintptr
+
+func init() {
+	if p, err := windows.UTF16PtrFromString("PNG"); err == nil {
+		r, _, _ := procRegisterClipboardFormat.Call(uintptr(unsafe.Pointer(p)))
+		cfPNG = r
+	}
+}
 
 var (
 	// ErrNoFiles 表示剪贴板当前没有文件列表（CF_HDROP）。
 	ErrNoFiles = errors.New("剪贴板中没有文件列表 (CF_HDROP)")
 	// ErrNoText 表示剪贴板当前没有文本（CF_UNICODETEXT）。
 	ErrNoText = errors.New("剪贴板中没有文本 (CF_UNICODETEXT)")
+	// ErrNoImage 表示剪贴板当前没有图片（PNG / CF_DIB）。
+	ErrNoImage = errors.New("剪贴板中没有图片 (PNG/CF_DIB)")
 )
 
 // dropfiles 对应 Win32 DROPFILES 结构。
@@ -94,6 +113,129 @@ func getClipboardData(format uintptr) (uintptr, bool) {
 func setClipboardData(format uintptr, h uintptr) bool {
 	r, _, _ := syscall.Syscall(procSetClipboardData.Addr(), 2, format, h, 0)
 	return r != 0
+}
+
+// globalData 锁定全局内存句柄并复制出全部字节。
+func globalData(h uintptr) ([]byte, bool) {
+	p, ok := globalLock(h)
+	if !ok {
+		return nil, false
+	}
+	defer procGlobalUnlock.Call(h)
+	size, _, _ := syscall.Syscall(procGlobalSize.Addr(), 1, h, 0, 0)
+	if size == 0 || size > 1<<31 {
+		return nil, false
+	}
+	return append([]byte(nil), unsafe.Slice((*byte)(p), size)...), true
+}
+
+// ReadImage 读取剪贴板中的图片，返回 PNG 编码字节。
+// 优先取应用直接放入的 "PNG" 注册格式（系统截图等工具常提供），
+// 否则将 CF_DIB 位图就地转换为 PNG。无图片时返回 ErrNoImage。
+func ReadImage() ([]byte, error) {
+	if err := openClipboard(); err != nil {
+		return nil, err
+	}
+	defer procCloseClipboard.Call()
+
+	if cfPNG != 0 {
+		if r, _, _ := procIsClipboardFormatAvailable.Call(cfPNG); r != 0 {
+			if h, ok := getClipboardData(cfPNG); ok {
+				if data, ok := globalData(h); ok && len(data) > 8 &&
+					bytes.Equal(data[1:4], []byte("PNG")) {
+					return data, nil // 已是完整 PNG 文件流
+				}
+			}
+		}
+	}
+
+	h, ok := getClipboardData(cfDIB)
+	if !ok {
+		return nil, ErrNoImage
+	}
+	data, ok := globalData(h)
+	if !ok {
+		return nil, errors.New("GlobalLock 失败")
+	}
+	return dibToPNG(data)
+}
+
+// dibToPNG 将 CF_DIB（BITMAPINFOHEADER + 调色板 + 像素）转换为 PNG。
+// 支持 BI_RGB / BI_BITFIELDS 的 24/32bpp 不压缩位图（截图场景的全部常见情形）。
+func dibToPNG(data []byte) ([]byte, error) {
+	if len(data) < 40 {
+		return nil, errors.New("DIB 数据过短")
+	}
+	hdrSize := int(binary.LittleEndian.Uint32(data[0:4]))
+	width := int64(int32(binary.LittleEndian.Uint32(data[4:8])))
+	height := int64(int32(binary.LittleEndian.Uint32(data[8:12])))
+	bpp := int(binary.LittleEndian.Uint16(data[14:16]))
+	compression := binary.LittleEndian.Uint32(data[16:20])
+
+	if width <= 0 || height == 0 || width > 1<<15 || height > 1<<15 {
+		return nil, fmt.Errorf("DIB 尺寸异常 %dx%d", width, height)
+	}
+	if compression != 0 && compression != 3 { // BI_RGB / BI_BITFIELDS
+		return nil, fmt.Errorf("不支持的 DIB 压缩类型 %d", compression)
+	}
+	if bpp != 24 && bpp != 32 {
+		return nil, fmt.Errorf("不支持的位深 %d", bpp)
+	}
+	topDown := height < 0
+	h := int(height)
+	if topDown {
+		h = -h
+	}
+
+	pixelOff := hdrSize
+	if compression == 3 && hdrSize <= 40 {
+		pixelOff += 12 // V4 以下头大小的 BI_BITFIELDS：掩码紧跟在头后
+	}
+
+	rowBytes := (int(width)*bpp + 31) / 32 * 4
+	if pixelOff+rowBytes*h > len(data) {
+		return nil, fmt.Errorf("DIB 数据不完整：需要 %d 字节，实际 %d", pixelOff+rowBytes*h, len(data))
+	}
+
+	// 32bpp 的 alpha 可能全为 0（很多来源不写 alpha）：先探测，全 0 视为不透明
+	hasAlpha := bpp == 32
+	if hasAlpha {
+		hasAlpha = false
+		for y := 0; y < h && !hasAlpha; y++ {
+			row := data[pixelOff+y*rowBytes:]
+			for x := 0; x < int(width); x++ {
+				if row[x*4+3] != 0 {
+					hasAlpha = true
+					break
+				}
+			}
+		}
+	}
+
+	img := image.NewNRGBA(image.Rect(0, 0, int(width), h))
+	for y := 0; y < h; y++ {
+		srcY := y
+		if !topDown {
+			srcY = h - 1 - y // DIB 默认自底向上存放
+		}
+		row := data[pixelOff+srcY*rowBytes:]
+		dst := img.Pix[y*img.Stride:]
+		for x := 0; x < int(width); x++ {
+			ofs := x * bpp / 8
+			b, g, r := row[ofs], row[ofs+1], row[ofs+2]
+			a := uint8(255)
+			if bpp == 32 && hasAlpha {
+				a = row[ofs+3]
+			}
+			dst[x*4], dst[x*4+1], dst[x*4+2], dst[x*4+3] = r, g, b, a
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // ReadFiles 读取剪贴板中的文件路径列表（Unicode DROPFILES）。

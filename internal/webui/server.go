@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -162,6 +163,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/pair/respond", s.apiPairRespond)
 	mux.HandleFunc("GET /api/paired", s.apiPairedList)
 	mux.HandleFunc("POST /api/unpair", s.apiUnpair)
+	mux.HandleFunc("GET /api/file", s.apiFile)
 	mux.HandleFunc("GET /", s.apiIndex)
 	return s.withAuth(mux)
 }
@@ -621,6 +623,52 @@ func (s *Server) apiEvents(w http.ResponseWriter, r *http.Request) {
 			fl.Flush()
 		}
 	}
+}
+
+// imageExts 列出允许预览的图片扩展名 → Content-Type。
+var imageExts = map[string]string{
+	".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+	".gif": "image/gif", ".bmp": "image/bmp", ".webp": "image/webp",
+}
+
+// apiFile 为面板提供接收目录内图片的缩略图预览数据源。
+// 安全边界：面板本身仅监听 127.0.0.1 且需访问令牌；此处再限定
+// 只允许「接收目录内 + 常见图片扩展名」的文件，杜绝任意文件读取。
+func (s *Server) apiFile(w http.ResponseWriter, r *http.Request) {
+	p := r.URL.Query().Get("path")
+	if p == "" {
+		http.Error(w, "缺少 path", http.StatusBadRequest)
+		return
+	}
+	ct, ok := imageExts[strings.ToLower(filepath.Ext(p))]
+	if !ok {
+		http.Error(w, "仅支持图片预览", http.StatusBadRequest)
+		return
+	}
+	root, err := filepath.Abs(s.cfg.ReceiveDir)
+	if err != nil || root == "" {
+		http.Error(w, "接收目录不可用", http.StatusForbidden)
+		return
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		http.Error(w, "路径非法", http.StatusBadRequest)
+		return
+	}
+	rel, err := filepath.Rel(root, abs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		http.Error(w, "仅允许预览接收目录内的文件", http.StatusForbidden)
+		return
+	}
+	f, err := os.Open(abs)
+	if err != nil {
+		http.Error(w, "文件不存在", http.StatusNotFound)
+		return
+	}
+	defer f.Close()
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	io.Copy(w, f)
 }
 
 func (s *Server) apiIndex(w http.ResponseWriter, r *http.Request) {

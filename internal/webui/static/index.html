@@ -159,7 +159,7 @@ kbd { font: 11px var(--mono); padding: 0 5px; border: 1px solid var(--border);
 @keyframes spaceIn { from { opacity: 0; } to { opacity: 1; } }
 .space.enter-right, .space.enter-left { animation: spaceIn .16s linear; }
 @media (prefers-reduced-motion: reduce) {
-  .space.enter-right, .space.enter-left, .row, .xfer, .toast { animation: none !important; }
+  .space.enter-right, .space.enter-left, .chat-row, .xfer, .toast { animation: none !important; }
 }
 
 .dock { width: 292px; flex: none; display: flex; flex-direction: column; gap: 8px;
@@ -199,7 +199,7 @@ kbd { font: 11px var(--mono); padding: 0 5px; border: 1px solid var(--border);
 .dock-empty { text-align: center; color: var(--dim); font-size: 12px; padding: 16px 10px;
   border: 1px dashed var(--border); }
 
-/* ---------- 传输时间线 ---------- */
+/* ---------- 传输时间线（对话消息界面） ---------- */
 .stage { min-width: 0; flex-direction: column; padding: 14px 20px 0; }
 .stage-head { display: flex; align-items: baseline; gap: 12px; padding: 2px 4px 10px;
   border-bottom: 1px solid var(--border-dim); }
@@ -207,9 +207,11 @@ kbd { font: 11px var(--mono); padding: 0 5px; border: 1px solid var(--border);
   letter-spacing: 1px; }
 .stage-head h1::before { content: "▍"; color: var(--accent); margin-right: 6px; }
 .stage-head .sub { color: var(--dim); font-size: 12px; }
-.timeline { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;
-  padding: 10px 6px 22px; }
-.chat-row { display: flex; gap: 10px; max-width: min(76%, 640px); animation: rise .15s linear; }
+.stage-head .grow { align-self: center; }
+.timeline { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
+  padding: 12px 6px 14px; }
+/* 消息行：收在左（头像-气泡），发在右（气泡-头像），与主流聊天一致 */
+.chat-row { display: flex; gap: 8px; max-width: min(76%, 600px); animation: rise .15s linear; }
 .chat-row.out { align-self: flex-end; flex-direction: row-reverse; }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
 .ava { width: 26px; height: 26px; border: 1px solid var(--border); display: grid;
@@ -217,22 +219,67 @@ kbd { font: 11px var(--mono); padding: 0 5px; border: 1px solid var(--border);
   color: var(--dim); background: var(--panel); }
 .chat-row.in .ava { border-color: var(--in); color: var(--in); background: var(--in-weak); }
 .chat-row.out .ava { border-color: var(--accent); color: var(--accent); background: var(--accent-weak); }
-.bubble { background: var(--panel); border: 1px solid var(--border); padding: 8px 12px;
-  min-width: 220px; }
+.msg-col { display: flex; flex-direction: column; gap: 3px; min-width: 0; max-width: 100%; }
+.chat-row.out .msg-col { align-items: flex-end; }
+/* 消息头：发送者名 + 时间（通栏聊天样式） */
+.m-head { display: flex; align-items: baseline; gap: 8px; padding: 0 2px;
+  font-size: 11px; color: var(--dim); max-width: 100%; }
+.m-head .m-name { font-weight: 600; color: var(--text); min-width: 0;
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-head .m-time { font-variant-numeric: tabular-nums; flex: none; }
+.bubble { background: var(--panel); border: 1px solid var(--border); padding: 6px 10px 7px;
+  min-width: 150px; max-width: 100%; }
 .chat-row.in .bubble { border-left: 3px solid var(--in); }
-.chat-row.out .bubble { border-right: 3px solid var(--accent); }
-.b-title { font-weight: 600; word-break: break-all; }
-.b-title::before { content: "─ "; color: var(--border); }
-.b-meta { font-size: 11.5px; color: var(--dim); display: flex; gap: 6px; flex-wrap: wrap;
-  align-items: center; margin-top: 2px; }
-.b-meta .sep::before { content: "·"; }
-.b-meta b { color: var(--text); font-weight: 600; }
-.b-acts { display: flex; gap: 6px; margin-top: 7px; }
+.chat-row.out .bubble { border-right: 3px solid var(--accent); background: var(--accent-weak); }
+.chat-row.fail .bubble { border-left-color: var(--err); border-right-color: var(--err); }
+/* 文本消息：内容即消息体，超长折叠、点击展开 */
+.b-text { font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+  display: -webkit-box; -webkit-line-clamp: 12; -webkit-box-orient: vertical; overflow: hidden;
+  cursor: pointer; }
+.b-text.open { display: block; overflow: visible; }
+/* 图片消息：缩略图预览（仅接收目录内文件，经 /api/file 读取） */
+.b-imgwrap { max-width: 100%; }
+.b-img { display: block; max-width: min(240px, 100%); max-height: 200px;
+  border: 1px solid var(--border); background: var(--bg); cursor: pointer; }
+/* 文件消息卡片：扩展名彩色徽标 + 名称 + 大小（企业微信风格） */
+.fcard { display: flex; gap: 9px; align-items: center; min-width: 210px; max-width: 340px; }
+.fcard .fico { width: 34px; height: 34px; flex: none; display: grid; place-items: center;
+  font-size: 9px; font-weight: 700; letter-spacing: .5px; color: #fff; }
+.fcard .finfo { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.fcard .fcard-name { font-weight: 600; font-size: 12.5px; line-height: 1.4;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  word-break: break-all; }
+.fcard .fcard-size { font-size: 11px; color: var(--dim); }
+.fico-doc { background: #3572d6; } .fico-xls { background: #1e7f4c; }
+.fico-ppt { background: #d2691e; } .fico-pdf { background: #c0392b; }
+.fico-zip { background: #8a6d1f; } .fico-img { background: #0b7285; }
+.fico-aud { background: #7d3f98; } .fico-vid { background: #a83279; }
+.fico-exe { background: #5a6570; } .fico-txt { background: #4f5a64; }
+.fico-cod { background: #2b6f6a; } .fico-def { background: var(--border); }
+.b-meta { font-size: 11px; color: var(--dim); display: flex; gap: 6px; align-items: center;
+  margin-top: 3px; overflow: hidden; white-space: nowrap; }
+.b-meta .sep::before { content: "·"; opacity: .7; }
+.b-meta .cnt { color: var(--accent); font-weight: 700; }
+.b-meta .pill { font-size: 10.5px; padding: 0 5px; flex: none; }
+/* 小图标操作（打开文件 / 打开所在目录）：常显，嵌在文件卡片或元信息行内 */
+.iact { width: 18px; height: 18px; flex: none; display: grid; place-items: center;
+  color: var(--dim); padding: 0; }
+.iact:hover { color: var(--accent); }
 .pill { font-size: 11px; padding: 0 6px; display: inline-flex; align-items: center;
   white-space: nowrap; border: 1px solid currentColor; }
-.pill.ok, .pill.in { color: var(--in); background: var(--in-weak); }
 .pill.fail { color: var(--err); background: var(--err-weak); }
-.pill.out { color: var(--accent); background: var(--accent-weak); }
+/* 双击可操作的消息（收到的文件/文本）给出手型提示 */
+.chat-row.act { cursor: pointer; }
+
+/* ---------- 对话输入框（发送文本 / 附件） ---------- */
+.composer { flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px 14px; border-top: 1px solid var(--border-dim); }
+.composer .iconbtn { border: 1px solid var(--border); background: var(--panel); }
+.composer .cinput { flex: 1; min-width: 0; height: 34px; padding: 0 12px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text); font: inherit; }
+.composer .cinput::placeholder { color: var(--dim); }
+.composer .cinput:focus { outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent); }
 /* 进行中的传输：斜纹进度线框 */
 .xfer { background: var(--panel); border: 1px solid var(--border); padding: 8px 12px;
   min-width: 260px; animation: rise .15s linear; }
@@ -570,12 +617,22 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
     <div id="peerDock"></div>
   </aside>
 
-  <!-- 空间一：传输时间线 -->
+  <!-- 空间一：传输动态（对话消息界面） -->
   <section class="space stage active" id="view-workspace">
-    <div class="stage-head"><h1>传输动态</h1><span class="sub" id="feedSub"></span></div>
+    <div class="stage-head"><h1>传输动态</h1><span class="sub" id="feedSub"></span>
+      <span class="grow"></span>
+      <button class="chipbtn" id="feedClear" title="清空本地面板中的传输记录（不影响对端）">清空记录</button></div>
     <div class="timeline" id="timeline">
       <div id="feed" style="display:contents"></div>
       <div id="xferStrip" style="display:contents"></div>
+    </div>
+    <div class="composer">
+      <button class="iconbtn" id="composerAttach" title="选择文件发送">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+      </button>
+      <input class="cinput" id="composerInput" placeholder="输入文本，回车发送到所有在线节点…"
+        autocomplete="off" spellcheck="false">
+      <button class="btn primary" id="composerSend">发送</button>
     </div>
   </section>
 
@@ -763,18 +820,6 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
   <pre id="consoleBody"></pre>
 </div>
 
-<!-- 发送文本弹窗 -->
-<div class="modal" id="textModal">
-  <div class="box">
-    <h3>发送文本到所有在线节点</h3>
-    <textarea id="sendTextArea" placeholder="输入要发送的文本，对端 Ctrl+V 即可粘贴…"></textarea>
-    <div class="row">
-      <button class="btn" onclick="closeTextModal()">取消</button>
-      <button class="btn primary" onclick="sendText()">发送</button>
-    </div>
-  </div>
-</div>
-
 <!-- 配对请求确认框 -->
 <div class="modal" id="pairModal">
   <div class="box">
@@ -819,6 +864,28 @@ const feed = [];            // 传输记录（旧 → 新）
 const xfers = new Map();    // 进行中传输 peer|name → 元素引用
 let pendingUpload = null;   // 面板上传刚完成、等待被发送进度接管的那条进度条
 
+// ---------- 传输记录本地持久化（localStorage） ----------
+const FEED_KEY = "cw-feed"; // localStorage 键
+const FEED_KEEP = 200;      // 本地最多保留的记录条数
+
+// 记录去重键：同方向 + 同对端 + 同名同大小视为同一内容（重复 copy 合并计数）
+function dedupeKey(r) { return [r.in ? 1 : 0, r.peer || "", r.name || "", r.size || 0].join("|"); }
+
+function loadFeedStore() {
+  try {
+    const a = JSON.parse(localStorage.getItem(FEED_KEY) || "[]");
+    return Array.isArray(a) ? a.filter(r => r && r.name) : [];
+  } catch (_) { return []; }
+}
+function saveFeedStore() {
+  try {
+    // 文本消息的完整内容预览截断后再持久化，避免超大文本撑爆 localStorage
+    const slim = feed.slice(-FEED_KEEP).map(r =>
+      r.detail && r.detail.length > 2000 ? { ...r, detail: r.detail.slice(0, 2000) } : r);
+    localStorage.setItem(FEED_KEY, JSON.stringify(slim));
+  } catch (_) {}
+}
+
 // ---------- 空间切换（工作台 / 屏幕布局） ----------
 const SPACE_ORDER = ["workspace", "layout"];
 let currentSpace = "workspace";
@@ -858,10 +925,27 @@ async function api(path, opts) {
 
 // ---------- 初始加载 ----------
 async function load() {
-  const [st, rc] = await Promise.all([api("/api/state"), api("/api/records")]);
+  const [st, rc, lg] = await Promise.all([
+    api("/api/state"), api("/api/records"), api("/api/logs")]);
   applyState(st);
-  rc.records.forEach(addFeed);
+  // 先恢复本地持久化的历史记录，再合并本次运行产生的记录（按键去重，
+  // 避免刷新页面后同一传输出现两条）
+  feed.push(...loadFeedStore());
+  const seen = new Set(feed.map(dedupeKey));
+  rc.records.forEach(r => {
+    if (!seen.has(dedupeKey(r))) { feed.push(r); seen.add(dedupeKey(r)); }
+  });
+  if (feed.length > 300) feed.splice(0, feed.length - 300); // 与运行期上限一致
+  saveFeedStore();
   renderFeed();
+  // 历史日志一次性载入控制台并视为已读（不触发 badge）：
+  // badge 只统计面板打开后新到达的消息，保证"无未读消息时气泡必隐藏"
+  if (Array.isArray(lg.lines) && lg.lines.length) {
+    logs.push(...lg.lines);
+    if (logs.length > 1000) logs.splice(0, logs.length - 1000);
+    $("consoleBody").textContent = logs.join("\n");
+    $("consoleCount").textContent = `${logs.length} 行`;
+  }
   scrollTimeline(true); // 首屏直接定位到最新消息
 }
 
@@ -902,6 +986,9 @@ function applyState(st) {
   $("aboutSelf").textContent = st.node_name + " · " + st.self_ip;
   $("feedSub").textContent = st.peer_count > 0
     ? `${st.peer_count} 个节点在线 · 复制即同步` : "暂无在线节点";
+  $("composerInput").placeholder = st.peer_count > 0
+    ? `输入文本，回车发送到 ${st.peer_count} 个在线节点…`
+    : "当前无在线节点：输入文本暂存，发送文件可用拖拽或附件按钮";
   const kvmTxt = !st.kvm_enabled ? "跨屏未启用"
     : `跨屏：左「${st.kvm_left || "-"}」右「${st.kvm_right || "-"}」`;
   $("sbKvm").textContent = kvmTxt;
@@ -992,9 +1079,31 @@ function renderDock() {
   }
 }
 
-// ---------- 动态流（聊天式时间线） ----------
+// ---------- 动态流（单行紧凑列表） ----------
 
-function addFeed(r) { feed.push(r); if (feed.length > 300) feed.shift(); }
+function addFeed(r) {
+  const k = dedupeKey(r);
+  const last = feed[feed.length - 1];
+  if (last && dedupeKey(last) === k) {
+    // 重复 copy 去重：与末条相同内容合并为一条，仅累加次数并刷新时间/状态
+    last.count = (last.count || 1) + 1;
+    last.time = r.time;
+    last.status = r.status;
+    if (r.detail) last.detail = r.detail;
+  } else {
+    feed.push(r);
+    if (feed.length > 300) feed.shift();
+  }
+  saveFeedStore();
+}
+
+// 清空本地传输记录（同时清除 localStorage 持久化）
+function clearFeed() {
+  feed.length = 0;
+  try { localStorage.removeItem(FEED_KEY); } catch (_) {}
+  renderFeed();
+}
+$("feedClear").onclick = () => { clearFeed(); toast("已清空传输记录"); };
 
 function renderFeed() {
   const el = $("feed");
@@ -1007,7 +1116,7 @@ function renderFeed() {
     </div>`;
     return;
   }
-  // 时间升序：旧 → 新，最新消息在底部（聊天式阅读顺序）
+  // 时间升序：旧 → 新，最新记录在底部
   for (let i = 0; i < feed.length; i++) el.appendChild(feedRow(feed[i]));
   scrollTimeline(); // 用户没有向上翻历史时跟随到底部
 }
@@ -1023,38 +1132,139 @@ function scrollTimeline(force) {
   if (force || nearTimelineBottom()) el.scrollTop = el.scrollHeight;
 }
 
+const IMG_EXT = /\.(png|jpe?g|gif|bmp|webp)$/i;
+
+// fileBadge 按扩展名归类文件类型，返回徽标配色与展示文字
+function fileBadge(name) {
+  const m = String(name).toLowerCase().match(/\.([a-z0-9]+)/);
+  const ext = m ? m[1] : "";
+  const kinds = {
+    doc: "doc", docx: "doc", rtf: "doc", wps: "doc",
+    xls: "xls", xlsx: "xls", csv: "xls", et: "xls",
+    ppt: "ppt", pptx: "ppt", dps: "ppt",
+    pdf: "pdf",
+    zip: "zip", rar: "zip", "7z": "zip", tar: "zip", gz: "zip", bz2: "zip",
+    png: "img", jpg: "img", jpeg: "img", gif: "img", bmp: "img", webp: "img", svg: "img", ico: "img",
+    mp3: "aud", wav: "aud", flac: "aud", ogg: "aud", m4a: "aud", aac: "aud",
+    mp4: "vid", mkv: "vid", avi: "vid", mov: "vid", wmv: "vid", flv: "vid",
+    exe: "exe", msi: "exe", bat: "exe", cmd: "exe",
+    txt: "txt", md: "txt", log: "txt",
+    js: "cod", ts: "cod", jsx: "cod", tsx: "cod", go: "cod", py: "cod", java: "cod",
+    c: "cod", h: "cod", cpp: "cod", hpp: "cod", cs: "cod", rs: "cod", vb: "cod",
+    html: "cod", htm: "cod", css: "cod", less: "cod", scss: "cod",
+    json: "cod", xml: "cod", yml: "cod", yaml: "cod", sql: "cod", sh: "cod", ps1: "cod",
+  };
+  const kind = kinds[ext] || "def";
+  const label = (ext || "file").slice(0, 4).toUpperCase();
+  return { cls: "fico-" + kind, label };
+}
+
+// fileCard 企业微信式文件消息卡片：彩色扩展名徽标 + 文件名 + 大小
+function fileCard(r) {
+  const { cls, label } = fileBadge(r.name);
+  const card = document.createElement("div");
+  card.className = "fcard";
+  card.innerHTML = `
+    <div class="fico ${cls}">${esc(label)}</div>
+    <div class="finfo">
+      <div class="fcard-name" title="${esc(r.name)}">${esc(r.name)}</div>
+      <div class="fcard-size">${fmtBytes(r.size)}</div>
+    </div>`;
+  return card;
+}
+
+// feedBody 按消息类型渲染气泡主体：
+// 文本 → 内容预览；接收目录内图片 → 缩略图；其余 → 文件卡片。
+// 返回 { el, showSize }，showSize=false 表示卡片已含大小、元信息行不再重复。
+function feedBody(r) {
+  if (r.text) {
+    const d = document.createElement("div");
+    d.className = "b-text";
+    d.textContent = (r.detail && r.detail.trim()) || r.name;
+    d.title = "点击展开 / 收起";
+    d.onclick = () => d.classList.toggle("open");
+    return { el: d, showSize: true };
+  }
+  if (r.in && r.detail && IMG_EXT.test(r.name)) {
+    const wrap = document.createElement("div");
+    wrap.className = "b-imgwrap";
+    const img = document.createElement("img");
+    img.className = "b-img";
+    img.alt = r.name;
+    img.loading = "lazy";
+    img.src = "/api/file?path=" + encodeURIComponent(r.detail);
+    img.onerror = () => wrap.replaceWith(fileCard(r)); // 文件被移动/删除时回退卡片
+    wrap.appendChild(img);
+    return { el: wrap, showSize: true };
+  }
+  return { el: fileCard(r), showSize: false };
+}
+
+// mkIcon 元信息行内的小图标按钮（不单独占行）
+function mkIcon(title, svgPath, fn) {
+  const b = document.createElement("button");
+  b.className = "iact";
+  b.title = title;
+  b.innerHTML = `<svg class="ic" viewBox="0 0 24 24" style="width:13px;height:13px">${svgPath}</svg>`;
+  b.onclick = e => { e.stopPropagation(); fn(); };
+  return b;
+}
+
 function feedRow(r) {
   const dir = r.in ? "in" : "out";
   const failed = String(r.status).includes("失败");
   const row = document.createElement("div");
-  row.className = "chat-row " + dir;
+  row.className = "chat-row " + (failed ? "fail" : dir);
+  const who = r.in ? r.peer : (state.node_name || "本机");
   row.innerHTML = `
-    <div class="ava" title="${esc(r.peer)}">${esc((r.peer || "?")[0].toUpperCase())}</div>
-    <div class="bubble">
-      <div class="b-title">${esc(r.name)}</div>
-      <div class="b-meta">
-        <span>${r.in ? "来自" : "发往"} <b>${esc(r.peer)}</b></span>
-        <span class="sep"></span><span>${esc(r.time)}</span>
-        <span class="sep"></span><span>${fmtBytes(r.size)}</span>
-        <span class="pill ${failed ? "fail" : dir}">${esc(r.status)}</span>
+    <div class="ava" title="${esc(who)}">${esc((who || "?")[0].toUpperCase())}</div>
+    <div class="msg-col">
+      <div class="m-head">
+        <span class="m-name" title="${esc(who)}">${esc(who)}</span>
+        <span class="m-time">${esc(r.time)}</span>
+        ${r.in ? "" : `<span class="m-dir">→ ${esc(r.peer)}</span>`}
       </div>
+      <div class="bubble"></div>
     </div>`;
-  if (r.in && r.detail) {
-    const acts = document.createElement("div");
-    acts.className = "b-acts";
-    acts.appendChild(mkBtn("打开", () => openPath({ path: r.detail })));
-    acts.appendChild(mkBtn("所在目录", () => openPath({ path: r.detail, select: true })));
-    row.querySelector(".bubble").appendChild(acts);
+  const bubble = row.querySelector(".bubble");
+  const { el: body, showSize } = feedBody(r);
+  const meta = document.createElement("div");
+  meta.className = "b-meta";
+  let html = "";
+  if ((r.count || 1) > 1)
+    html += `<span class="cnt" title="重复 ${r.count} 次">×${r.count}</span><span class="sep"></span>`;
+  if (showSize) html += `<span>${fmtBytes(r.size)}</span><span class="sep"></span>`;
+  // 平时不显示"已接收/已发送"；仅失败时保留红色状态提示
+  if (failed) html += `<span class="pill fail">${esc(r.status)}</span>`;
+  meta.innerHTML = html;
+  // 收到的文件：两个小图标（打开文件 / 打开所在目录）嵌入现有行内——
+  // 文本/图片等有元信息行的放行尾；文件卡片则直接嵌进卡片行，
+  // 不为图标单独占一行（元信息行无内容时整个省略）
+  if (r.in && r.detail && !r.text) {
+    const open = mkIcon("打开文件",
+      '<path d="M14 4h6v6M20 4l-9 9M18 13v7H4V6h6"/>',
+      () => openPath({ path: r.detail }));
+    const dirBtn = mkIcon("打开所在目录",
+      '<path d="M3 6h6l2 2h10v11H3z"/>',
+      () => openPath({ path: r.detail, select: true }));
+    open.style.marginLeft = "auto"; // 推到行尾
+    if (showSize) {
+      meta.appendChild(open);
+      meta.appendChild(dirBtn);
+    } else {
+      body.appendChild(open);
+      body.appendChild(dirBtn);
+    }
+  }
+  bubble.appendChild(body);
+  if (meta.childNodes.length) bubble.appendChild(meta);
+  // 双击直达：收到的文件双击打开
+  if (r.in && r.detail && !r.text) {
+    row.classList.add("act");
+    row.title = "双击打开文件";
+    row.addEventListener("dblclick", () => openPath({ path: r.detail }));
   }
   return row;
-}
-
-function mkBtn(text, fn) {
-  const b = document.createElement("button");
-  b.className = "chipbtn";
-  b.textContent = text;
-  b.onclick = fn;
-  return b;
 }
 
 // ---------- 进行中传输（时间线顶部的实时气泡） ----------
@@ -1316,9 +1526,8 @@ $("syncSwitch2").addEventListener("change", e => toggleSync(!e.target.checked));
 
 // ---------- 发送文件（选择 + 全局拖拽） ----------
 function openFilePicker() { $("pick").click(); }
-function openTextModal() { $("textModal").classList.add("show"); $("sendTextArea").focus(); }
 $("sendFileBtn").onclick = openFilePicker;
-$("sendTextBtn").onclick = openTextModal;
+$("sendTextBtn").onclick = openTextModal; // 聚焦底部对话输入框（见发送文本一节）
 $("pick").onchange = e => { if (e.target.files.length) upload(e.target.files); e.target.value = ""; };
 
 let dragDepth = 0;
@@ -1393,20 +1602,27 @@ function upload(files) {
   xhr.send(fd);
 }
 
-// ---------- 发送文本 ----------
-$("textModal").addEventListener("click", e => { if (e.target === $("textModal")) closeTextModal(); });
-function closeTextModal() { $("textModal").classList.remove("show"); $("sendTextArea").value = ""; }
+// ---------- 对话输入框（发送文本 / 附件） ----------
+// 顶栏「发送文本」与命令面板都聚焦到这里，不再弹窗
+function openTextModal() { switchView("workspace"); $("composerInput").focus(); }
 
-async function sendText() {
-  const text = $("sendTextArea").value;
+async function sendComposerText() {
+  const input = $("composerInput");
+  const text = input.value;
   if (!text.trim()) return;
   try {
     await api("/api/send-text", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
-    closeTextModal();
-    toast("文本已开始发送");
+    input.value = "";
+    input.focus(); // 发送成功留在输入框，便于连续发送
   } catch (e) { toast("发送失败: " + e.message, true); }
 }
+$("composerSend").onclick = sendComposerText;
+$("composerAttach").onclick = openFilePicker;
+// 回车发送；中文输入法选词时的 Enter（isComposing）不触发
+$("composerInput").addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); sendComposerText(); }
+});
 
 // ---------- 打开路径 ----------
 async function openPath(body) {
@@ -1418,31 +1634,40 @@ async function openPath(body) {
 // ---------- 控制台抽屉 ----------
 let unread = 0;
 const logs = [];
+// 统一维护未读数与右上角气泡：无未读消息时气泡必须隐藏
+function setUnread(n) {
+  unread = n;
+  const b = $("consoleBadge");
+  b.hidden = unread <= 0;
+  b.textContent = unread > 99 ? "99+" : unread;
+}
 function pushLog(line) {
   logs.push(line);
   if (logs.length > 1000) logs.shift();
   const box = $("consoleBody");
   box.textContent = logs.join("\n");
   $("consoleCount").textContent = `${logs.length} 行`;
-  if ($("console").classList.contains("open") && $("autoscroll").checked) {
-    box.scrollTop = box.scrollHeight;
+  if ($("console").classList.contains("open")) {
+    // 控制台正开着：消息已属"已读"，只决定是否自动滚动
+    if ($("autoscroll").checked) box.scrollTop = box.scrollHeight;
   } else {
-    unread++;
-    const b = $("consoleBadge");
-    b.hidden = false;
-    b.textContent = unread > 99 ? "99+" : unread;
+    setUnread(unread + 1);
   }
 }
 function openConsole() {
   $("console").classList.add("open");
-  unread = 0;
-  $("consoleBadge").hidden = true;
+  setUnread(0);
   $("consoleBody").scrollTop = $("consoleBody").scrollHeight;
 }
 $("consoleBtn").onclick = openConsole;
 $("aboutConsoleBtn").onclick = openConsole;
 $("consoleClose").onclick = () => $("console").classList.remove("open");
-$("consoleClear").onclick = () => { logs.length = 0; $("consoleBody").textContent = ""; };
+$("consoleClear").onclick = () => {
+  logs.length = 0;
+  $("consoleBody").textContent = "";
+  $("consoleCount").textContent = "0 行";
+  setUnread(0); // 清空后无消息：气泡一并隐藏
+};
 
 // ---------- 设置大面板 ----------
 function openSettings() {
@@ -1671,7 +1896,7 @@ document.addEventListener("keydown", e => {
   }
   if (e.key === "Escape") {
     if ($("palette").classList.contains("show")) { closePalette(); return; }
-    closeSettings(); closeTextModal();
+    closeSettings();
     $("pairModal").classList.remove("show");
     $("dropzone").classList.remove("show"); dragDepth = 0;
   }

@@ -876,11 +876,40 @@ func (a *App) onTextReceived(sender, text string) {
 			a.ownSeq.Store(clip.Seq())
 		}
 	}
-	preview := text
-	if len(preview) > 40 {
-		preview = preview[:40] + "…"
-	}
+	preview := textPreview(text)
 	log.Printf("已接收文本（来自 %s）：%q，可直接 Ctrl+V", sender, preview)
+	if a.ui != nil || a.sink != nil {
+		// 文本同步也计入传输动态，与文件记录同栏展示；
+		// Detail 携带限长的完整内容供面板做消息预览/一键复制
+		a.addFile(ui.FileRecord{
+			Time: time.Now(), In: true, Peer: sender,
+			Name: preview, Size: int64(len(text)), Status: "已接收",
+			Detail: textDetail(text), Text: true,
+		})
+	}
+}
+
+// textPreview 生成文本记录的展示名：取首行前 40 个字符，超长截断加省略号。
+func textPreview(text string) string {
+	s := strings.TrimSpace(text)
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		s = s[:i]
+	}
+	r := []rune(s)
+	if len(r) > 40 {
+		r = append(r[:40], '…')
+	}
+	return string(r)
+}
+
+// textDetail 限制文本消息预览体的长度（按字符截断），避免超大文本
+// 撑爆面板记录与内存；面板展示与一键复制均够用。
+func textDetail(text string) string {
+	r := []rune(text)
+	if len(r) > 4096 {
+		r = r[:4096]
+	}
+	return string(r)
 }
 
 // ---------- 发送 ----------
@@ -899,6 +928,27 @@ func (a *App) SendText(text string) {
 	res := a.sendTextPayload(text)
 	if a.hasRetryableFailure(res) {
 		a.pushPending(pendingEntry{kind: "text", text: text, expires: time.Now().Add(pendingTTL)})
+		log.Printf("部分节点不可达，%s 内将对在线节点重试", pendingTTL)
+	}
+}
+
+// SendImage 同步剪贴板截图：先落盘到接收目录的「截图」子目录
+//（本机留存一份，也便于失败重试），再按普通文件通道发送。
+func (a *App) SendImage(png []byte) {
+	dir := filepath.Join(a.cfg.ReceiveDir, "截图")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		log.Printf("创建截图目录失败: %v", err)
+		return
+	}
+	path := filepath.Join(dir, fmt.Sprintf("截图_%s.png", time.Now().Format("20060102_150405")))
+	if err := os.WriteFile(path, png, 0o644); err != nil {
+		log.Printf("保存截图失败: %v", err)
+		return
+	}
+	log.Printf("剪贴板截图已保存：%s，开始同步", path)
+	res := a.sendFilePayload([]string{path})
+	if a.hasRetryableFailure(res) {
+		a.pushPending(pendingEntry{kind: "files", paths: []string{path}, expires: time.Now().Add(pendingTTL)})
 		log.Printf("部分节点不可达，%s 内将对在线节点重试", pendingTTL)
 	}
 }
@@ -1046,6 +1096,7 @@ func (p *progressWriter) Write(b []byte) (int, error) {
 func (a *App) sendTextPayload(text string) []SendResult {
 	data := []byte(text)
 	sum := sha256.Sum256(data)
+	preview := textPreview(text)
 	var res []SendResult
 	for _, p := range a.sendablePeers() {
 		hdr := transport.Header{
@@ -1059,10 +1110,17 @@ func (a *App) sendTextPayload(text string) []SendResult {
 			}, nil
 		}
 		resp, err := a.sendToPeer(p, hdr, makePayload, transport.TimeoutFor(int64(len(data)))+15*time.Second)
-		r := resultOf(p, "text", int64(len(data)), resp, err)
+		r := resultOf(p, preview, int64(len(data)), resp, err)
 		if r.OK {
 			log.Printf("文本（%d 字符）已发送到 %s", len(text), r.Peer)
 		}
+		// 文本同步也计入传输动态，与文件记录同栏展示；Detail 供面板预览
+		a.addFile(ui.FileRecord{
+			Time: time.Now(), In: false, Peer: r.Peer,
+			Name: preview, Size: int64(len(data)),
+			Status: map[bool]string{true: "已发送", false: "失败"}[r.OK],
+			Detail: textDetail(text), Text: true,
+		})
 		res = append(res, r)
 	}
 	return res

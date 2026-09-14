@@ -43,6 +43,7 @@ type fileJSON struct {
 	Size   int64  `json:"size"`
 	Status string `json:"status"`
 	Detail string `json:"detail"`
+	Text   bool   `json:"text"` // true=文本同步记录（name 为内容预览）
 }
 
 // Bus 收集运行事件：缓存日志与文件记录供面板补齐历史，
@@ -163,5 +164,6 @@ func fileToJSON(r ui.FileRecord) fileJSON {
 		Size:   r.Size,
 		Status: r.Status,
 		Detail: r.Detail,
+		Text:   r.Text,
 	}
 }

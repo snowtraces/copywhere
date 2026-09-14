@@ -7,6 +7,8 @@ package monitor
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -30,6 +32,8 @@ type Guard struct {
 type Sender interface {
 	SendFiles(paths []string, total int64)
 	SendText(text string)
+	// SendImage 同步剪贴板截图（PNG 字节，由实现方负责落盘与发送）
+	SendImage(png []byte)
 }
 
 const pollInterval = 400 * time.Millisecond
@@ -38,7 +42,7 @@ const pollInterval = 400 * time.Millisecond
 // threshold/textSync 通过 getter 每次轮询读取，使面板修改配置后即时生效。
 func Run(ctx context.Context, guard Guard, threshold func() int64, textSync func() bool, sender Sender) {
 	lastSeq := clip.Seq() // 忽略启动时剪贴板里的既有内容
-	var lastFP, lastText string
+	var lastFP, lastText, lastImgFP string
 
 	log.Printf("剪贴板监控已启动（每 %s 轮询，自动同步阈值 %s）",
 		pollInterval, thresholdLabel(threshold()))
@@ -90,17 +94,33 @@ func Run(ctx context.Context, guard Guard, threshold func() int64, textSync func
 			continue
 		}
 
-		// 再处理文本
-		if !textSync() {
+		// 再处理文本：存在有效文本时按文本同步（带位图的文本多为
+		// Excel/Word 等复制时附带的预览位图，不应误当截图发送）
+		if text, terr := clip.ReadText(); terr == nil && text != "" {
+			if textSync() && text != lastText {
+				lastText = text
+				log.Printf("检测到剪贴板文本 %d 字符，开始同步", len(text))
+				sender.SendText(text)
+			}
 			continue
 		}
-		if text, err := clip.ReadText(); err == nil && text != "" {
-			if text == lastText {
+
+		// 最后兜底：无文件无文本，检测截图位图（Win+Shift+S / PrintScreen
+		// 等截图直接写入剪贴板、不落盘的情形）
+		if img, err := clip.ReadImage(); err == nil && len(img) > 0 {
+			sum := sha256.Sum256(img)
+			fp := hex.EncodeToString(sum[:8])
+			if fp == lastImgFP {
+				continue // 同一张截图，避免重复发送
+			}
+			lastImgFP = fp
+			if th := threshold(); th > 0 && int64(len(img)) > th {
+				log.Printf("剪贴板截图 %s，超过自动同步阈值 %s，已跳过",
+					bytesize.Human(int64(len(img))), bytesize.Human(th))
 				continue
 			}
-			lastText = text
-			log.Printf("检测到剪贴板文本 %d 字符，开始同步", len(text))
-			sender.SendText(text)
+			log.Printf("检测到剪贴板截图 %s，开始同步", bytesize.Human(int64(len(img))))
+			sender.SendImage(img)
 		}
 	}
 }

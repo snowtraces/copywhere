@@ -23,15 +23,16 @@ const (
 	tickEvery   = 1500 * time.Millisecond
 )
 
-// FileRecord 是一次文件收发记录。
+// FileRecord 是一次内容收发记录（文件或文本）。
 type FileRecord struct {
 	Time   time.Time
 	In     bool // true=接收，false=发送
 	Peer   string
-	Name   string
+	Name   string // 文件名；文本为内容预览
 	Size   int64
 	Status string
 	Detail string
+	Text   bool // true=文本同步记录（Name 为内容预览）
 }
 
 // Hub 收集 log 输出（log.SetOutput 的目标）；mirror 非 nil 时同步镜像输出。
@@ -355,10 +356,10 @@ func (m model) peersView(h int) []string {
 
 func (m model) filesView(h int) []string {
 	if len(m.files) == 0 {
-		return append([]string{"（暂无文件收发记录）"}, blank(h-1)...)
+		return append([]string{"（暂无内容收发记录）"}, blank(h-1)...)
 	}
 	lines := []string{fmt.Sprintf(" %-9s %-4s %-20s %-30s %9s  %s",
-		"时间", "方向", "对端", "文件", "大小", "状态")}
+		"时间", "方向", "对端", "文件/文本", "大小", "状态")}
 	for i := len(m.files) - 1; i >= 0; i-- {
 		r := m.files[i]
 		dir := "发送"
@@ -366,6 +367,9 @@ func (m model) filesView(h int) []string {
 			dir = "接收"
 		}
 		status := r.Status
+		if r.Text {
+			status += "（文本）"
+		}
 		lines = append(lines, fmt.Sprintf(" %-9s %-4s %-20s %-30s %9s  %s",
 			r.Time.Format("15:04:05"), dir, fit(r.Peer, 20), fit(r.Name, 30),
 			fit(bytesize.Human(r.Size), 9), status))

@@ -12,6 +12,9 @@ var ErrNoFiles = errors.New("剪贴板中没有文件列表 (CF_HDROP)")
 // ErrNoText 表示剪贴板当前没有文本。
 var ErrNoText = errors.New("剪贴板中没有文本 (CF_UNICODETEXT)")
 
+// ErrNoImage 表示剪贴板当前没有图片。
+var ErrNoImage = errors.New("剪贴板中没有图片 (PNG/CF_DIB)")
+
 func Seq() uint32 { return 0 }
 
 func ReadFiles() ([]string, error) {
@@ -20,6 +23,10 @@ func ReadFiles() ([]string, error) {
 
 func ReadText() (string, error) {
 	return "", errors.New("copywhere 的剪贴板功能仅支持 Windows")
+}
+
+func ReadImage() ([]byte, error) {
+	return nil, errors.New("copywhere 的剪贴板功能仅支持 Windows")
 }
 
 func SetFiles(paths []string) error {

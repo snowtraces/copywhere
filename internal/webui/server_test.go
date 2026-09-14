@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -387,6 +389,73 @@ func TestPairEndpoints(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("发起配对应 200，实际 %d", resp.StatusCode)
+	}
+}
+
+func TestAPIFileImagePreview(t *testing.T) {
+	srv, _ := newTestServer(t)
+	base, key := splitURL(srv)
+
+	// 接收目录里放一张极小的合法 PNG（1x1 像素）
+	img := []byte{
+		0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 'I', 'H', 'D', 'R',
+		0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 0x1f, 0x15, 0xc4, 0x89,
+		0, 0, 0, 0x0a, 'I', 'D', 'A', 'T', 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4,
+		0, 0, 0, 0, 'I', 'E', 'N', 'D', 0xae, 0x42, 0x60, 0x82,
+	}
+	imgPath := filepath.Join(srv.cfg.ReceiveDir, "preview.png")
+	if err := os.WriteFile(imgPath, img, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 接收目录内的图片 → 200 + image/png
+	resp, err := http.Get(base + "api/file?key=" + key + "&path=" + url.QueryEscape(imgPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("接收目录内图片应 200，实际 %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "image/png" {
+		t.Fatalf("Content-Type 应为 image/png，实际 %q", ct)
+	}
+	if string(body) != string(img) {
+		t.Fatal("图片内容不完整")
+	}
+
+	// 越权用例：接收目录外的路径必须全部拒绝（防任意文件读取）
+	outside := filepath.Join(t.TempDir(), "evil.png")
+	if err := os.WriteFile(outside, img, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{outside, srv.cfgPath, "C:\\Windows\\win.ini"} {
+		resp, err := http.Get(base + "api/file?key=" + key + "&path=" + url.QueryEscape(p))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			t.Fatalf("接收目录外路径 %q 应被拒绝", p)
+		}
+	}
+
+	// 非图片扩展名拒绝
+	txt := filepath.Join(srv.cfg.ReceiveDir, "note.txt")
+	if err := os.WriteFile(txt, []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.Get(base + "api/file?key=" + key + "&path=" + url.QueryEscape(txt))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("非图片扩展名应被拒绝")
 	}
 }
 
