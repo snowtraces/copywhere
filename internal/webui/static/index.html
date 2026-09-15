@@ -146,6 +146,7 @@ kbd { font: 11px var(--mono); padding: 0 5px; border: 1px solid var(--border);
   color: var(--dim); position: relative; flex: none;
   border: 1px solid transparent; }
 .iconbtn:hover { border-color: var(--border); color: var(--text); background: var(--panel); }
+.iconbtn.active { border-color: var(--accent); color: var(--accent); background: var(--panel); }
 .iconbtn .badge { position: absolute; top: -5px; right: -5px; min-width: 14px; height: 14px;
   background: var(--err); color: #fff; font-size: 10px; line-height: 14px;
   text-align: center; padding: 0 3px; }
@@ -429,13 +430,13 @@ kbd { font: 11px var(--mono); padding: 0 5px; border: 1px solid var(--border);
 .cat-nav button:hover { background: var(--panel-2); color: var(--text); }
 .cat-nav button.active { border-left-color: var(--accent); background: var(--accent-weak);
   color: var(--accent); font-weight: 600; }
-.cat-body { flex: 1; min-width: 0; overflow-y: auto; padding-top: 6px; }
-.cat { padding-bottom: 6px; margin-bottom: 10px; scroll-margin-top: 8px; }
-.cat > h3 { margin: 12px 0 2px; font-size: 12.5px; font-weight: 700;
-  text-transform: uppercase; letter-spacing: 1px; padding-bottom: 6px;
-  border-bottom: 1px solid var(--border); }
-.cat > h3::before { content: "── "; color: var(--border); }
-.cat > h3::after { content: " ──"; color: var(--border); }
+.cat-body { flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; padding-top: 6px; }
+/* 长滚动布局：分类间留白区分；标题吸附顶部，滚动时始终知道当前在哪一节 */
+.cat { padding-bottom: 10px; margin-bottom: 18px; scroll-margin-top: 0; }
+.cat > h3 { position: sticky; top: 0; z-index: 2; margin: 0 0 2px;
+  font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;
+  padding: 8px 2px 7px; background: var(--bg); border-bottom: 1px solid var(--border); }
+.cat > h3::before { content: "▍"; color: var(--accent); margin-right: 6px; }
 .set-row { display: flex; align-items: flex-start; gap: 18px; padding: 11px 0;
   border-bottom: 1px dashed var(--border-dim); }
 .set-row:last-child { border-bottom: none; }
@@ -476,6 +477,8 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
   border: none; border-radius: 0; }
 .msg { min-height: 18px; font-size: 12px; }
 .msg.ok { color: var(--in); } .msg.err { color: var(--err); } .msg.warn { color: var(--warn); }
+/* 配置文件路径是无空格长串，必须允许任意断行，否则撑出横向滚动 */
+#cfgPath { word-break: break-all; }
 .save-bar { position: sticky; bottom: -14px; padding: 12px 0 2px; margin-top: 6px;
   background: var(--bg); border-top: 1px solid var(--border);
   display: flex; align-items: center; gap: 14px; }
@@ -690,7 +693,6 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
 <div class="scrim" id="scrim"></div>
 <section class="sheet" id="settings">
   <div class="sheet-head"><h2>设置</h2>
-    <span class="hint" style="margin-right:auto;margin-left:14px">所有修改即时保存并生效，无需重启</span>
     <button class="iconbtn" id="settingsClose">
       <svg class="ic" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12" stroke-linecap="round"/></svg></button></div>
   <div class="sheet-body">
@@ -828,7 +830,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
       </div>
 
       <div class="save-bar">
-        <span class="hint">所有修改即时保存并生效，无需手动保存</span>
+        <span class="hint">所有修改即时保存并生效，无需重启</span>
         <span class="msg" id="cfgMsg"></span>
       </div>
     </div>
@@ -1906,12 +1908,20 @@ function pushLog(line) {
 }
 function openConsole() {
   $("console").classList.add("open");
+  $("consoleBtn").classList.add("active"); // 顶部按钮高亮：抽屉处于展开状态
   setUnread(0);
   $("consoleBody").scrollTop = $("consoleBody").scrollHeight;
 }
-$("consoleBtn").onclick = openConsole;
+function closeConsole() {
+  $("console").classList.remove("open");
+  $("consoleBtn").classList.remove("active");
+}
+function toggleConsole() {
+  $("console").classList.contains("open") ? closeConsole() : openConsole();
+}
+$("consoleBtn").onclick = toggleConsole; // 顶部按钮：开↔关 toggle
 $("aboutConsoleBtn").onclick = openConsole;
-$("consoleClose").onclick = () => $("console").classList.remove("open");
+$("consoleClose").onclick = closeConsole;
 $("consoleClear").onclick = () => {
   logs.length = 0;
   logBoxInSync = true;
@@ -1938,7 +1948,7 @@ $("settingsBtn").onclick = openSettings;
 $("settingsClose").onclick = closeSettings;
 $("scrim").onclick = closeSettings;
 
-// 分类导航：点击滚动定位 + 滚动时高亮当前分类
+// 分类导航：点击滚动定位到对应分类；滚动内容时反向高亮当前分类
 document.querySelectorAll("#cfgNav button").forEach(b => b.onclick = () => {
   const cat = $("cat-" + b.dataset.cat);
   if (cat) cat.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1948,7 +1958,8 @@ cfgScrollBox.addEventListener("scroll", () => {
   const boxTop = cfgScrollBox.getBoundingClientRect().top;
   let cur = "general";
   document.querySelectorAll("#cfgScroll .cat").forEach(c => {
-    if (c.getBoundingClientRect().top - boxTop <= 70) cur = c.dataset.cat;
+    // 阈值 = 吸顶标题高度，保证高亮切换与标题交接时刻一致
+    if (c.getBoundingClientRect().top - boxTop <= 36) cur = c.dataset.cat;
   });
   document.querySelectorAll("#cfgNav button").forEach(b =>
     b.classList.toggle("active", b.dataset.cat === cur));
@@ -2091,7 +2102,7 @@ function buildCommands() {
     { t: state.paused ? "恢复自动同步" : "暂停自动同步", kw: "pause resume 暂停 恢复 同步", fn: () => toggleSync(!state.paused) },
     { t: state.kvm_enabled ? "停用鼠标键盘跨屏" : "启用鼠标键盘跨屏", kw: "kvm 跨屏", fn: () => saveKvm(state.kvm_left || "", state.kvm_right || "", !state.kvm_enabled) },
     { t: "打开接收目录", kw: "open folder 目录 接收", fn: () => openPath({ dir: "receive" }) },
-    { t: "打开运行日志", kw: "log console 日志", fn: openConsole },
+    { t: $("console").classList.contains("open") ? "关闭运行日志" : "打开运行日志", kw: "log console 日志", fn: toggleConsole },
     { t: "打开屏幕布局", kw: "layout kvm 布局", fn: () => { switchView("layout"); } },
     { t: "回到工作台", kw: "workspace 工作台", fn: () => switchView("workspace") },
     { t: "打开设置…", kw: "settings 设置", fn: openSettings },
