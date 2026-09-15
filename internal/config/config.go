@@ -13,25 +13,27 @@ import (
 // Config 是 copywhere 的持久化配置。
 // 注意：已无共享 token 字段——传输鉴权只认配对令牌（peers.json）。
 type Config struct {
-	NodeName      string `json:"node_name"`                   // 本节点显示名，默认主机名
-	DiscoveryPort int    `json:"discovery_port"`              // UDP 发现端口
-	TransferPort  int    `json:"transfer_port"`               // TCP 传输端口
-	MaxAutoCopyMB int64  `json:"max_auto_copy_mb"`            // 剪贴板自动同步的容量阈值（MB），0 表示不限制
-	ReceiveDir    string `json:"receive_dir"`                 // 接收文件保存目录
-	AutoPaste     bool   `json:"auto_paste"`                  // 收到文件后自动写入本机剪贴板
-	TextSync      bool   `json:"text_sync"`                   // 同步剪贴板文本
-	AnnounceSec   int    `json:"announce_interval_sec"`       // 广播间隔（秒）
-	PeerTTLSec    int    `json:"peer_ttl_sec"`                // 节点存活时长（秒）
-	KVMEnabled    *bool  `json:"kvm_enabled,omitempty"`       // 鼠标键盘跨屏开关（缺省开启）
-	KVMPort       int    `json:"kvm_port"`                    // KVM 监听端口
-	KVMLeft       string `json:"kvm_left"`                    // 左边缘邻居节点名（光标推向左边缘时控制它）
-	KVMRight      string `json:"kvm_right"`                   // 右边缘邻居节点名
-	KVMEntryMon   *int   `json:"kvm_entry_monitor,omitempty"` // 被控入口显示器下标（缺省 -1=主显示器）
-	KVMMoveMs     int    `json:"kvm_move_interval_ms"`        // 主控移动合拍间隔（ms）；0=默认(8)，>0 自定义
-	KVMReflowMs   int    `json:"kvm_reflow_step_ms"`          // 被控重排注入节拍（ms）；0=默认(4)，-1=关闭直注，>0 自定义
-	KVMSpeedPct   int    `json:"kvm_speed_percent"`           // 本机作为主控的位移手调系数百分比（100=1.0x；<=0 视为 100）
-	WebPort       int    `json:"web_port"`                    // GUI 面板端口（gui 命令；0=默认，负数=随机）
-	Path          string `json:"-"`                           // 配置文件实际路径（Load 时填充；信任库/面板地址等派生文件放在同目录）
+	NodeName      string `json:"node_name"`                       // 本节点显示名，默认主机名
+	DiscoveryPort int    `json:"discovery_port"`                  // UDP 发现端口
+	TransferPort  int    `json:"transfer_port"`                   // TCP 传输端口
+	MaxAutoCopyMB int64  `json:"max_auto_copy_mb"`                // 剪贴板自动同步的容量阈值（MB），0 表示不限制
+	ReceiveDir    string `json:"receive_dir"`                     // 接收文件保存目录
+	AutoPaste     bool   `json:"auto_paste"`                      // 收到文件后自动写入本机剪贴板
+	TextSync      bool   `json:"text_sync"`                       // 同步剪贴板文本
+	AnnounceSec   int    `json:"announce_interval_sec"`           // 广播间隔（秒）
+	PeerTTLSec    int    `json:"peer_ttl_sec"`                    // 节点存活时长（秒）
+	KVMEnabled    *bool  `json:"kvm_enabled,omitempty"`           // 鼠标键盘跨屏开关（缺省开启）
+	KVMPort       int    `json:"kvm_port"`                        // KVM 监听端口
+	KVMLeft       string `json:"kvm_left"`                        // 左边缘邻居节点名（光标推向左边缘时控制它）
+	KVMRight      string `json:"kvm_right"`                       // 右边缘邻居节点名
+	KVMEntryMon   *int   `json:"kvm_entry_monitor,omitempty"`     // 被控入口显示器下标（缺省 -1=主显示器）
+	KVMMoveMs     int    `json:"kvm_move_interval_ms"`            // 主控移动合拍间隔（ms）；0=默认(8)，>0 自定义
+	KVMReflowMs   int    `json:"kvm_reflow_step_ms"`              // 被控重排注入节拍（ms）；0=默认(4)，-1=关闭直注，>0 自定义
+	KVMSpeedPct   int    `json:"kvm_speed_percent"`               // 本机作为主控的位移手调系数百分比（100=1.0x；<=0 视为 100）
+	KVMTouchpad   *bool  `json:"kvm_touchpad_gestures,omitempty"` // 实验性：触控板双指滚动跨屏识别（缺省关闭）
+	KVMTouchSpd   int    `json:"kvm_touchpad_speed"`              // 触控板滚动输出倍率百分比（100=基准；<=0 视为 100）
+	WebPort       int    `json:"web_port"`                        // GUI 面板端口（gui 命令；0=默认，负数=随机）
+	Path          string `json:"-"`                               // 配置文件实际路径（Load 时填充；信任库/面板地址等派生文件放在同目录）
 }
 
 // KVMEntryMonitorIdx 返回被控入口显示器下标（未配置 → -1 = 主显示器）。
@@ -162,6 +164,20 @@ func Load(path string) (*Config, error) {
 // KVMOn 返回 KVM 是否启用（字段缺省即启用）。
 func (c *Config) KVMOn() bool {
 	return c.KVMEnabled == nil || *c.KVMEnabled
+}
+
+// KVMTouchpadOn 返回触控板手势识别是否启用（实验性，缺省关闭）。
+// 见 docs/touchpad-gesture-rawinput-plan.md：影子监听方案，本机窗口仍会滚动。
+func (c *Config) KVMTouchpadOn() bool {
+	return c.KVMTouchpad != nil && *c.KVMTouchpad
+}
+
+// KVMTouchpadSpeedPct 返回触控板滚动输出倍率百分比（<=0 视为 100 基准）。
+func (c *Config) KVMTouchpadSpeedPct() int {
+	if c.KVMTouchSpd <= 0 {
+		return 100
+	}
+	return c.KVMTouchSpd
 }
 
 // Save 将配置写入指定路径（0600 权限）。

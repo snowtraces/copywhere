@@ -21,6 +21,9 @@ type Callbacks struct {
 // SetSuppress 无操作。
 func SetSuppress(bool) {}
 
+// SetTouchpadGestures 无操作（触控板手势识别仅 Windows）。
+func SetTouchpadGestures(bool) {}
+
 // Start 非 Windows 平台不可用。
 func Start(cb Callbacks) error {
 	return errNotSupported

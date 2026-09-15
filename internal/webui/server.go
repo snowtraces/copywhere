@@ -43,6 +43,10 @@ type Core interface {
 	SyncKVMFrom(oldLeft, oldRight string)
 	// KVM 热启停：跨屏开关即时生效，无需重启
 	SetKVMEnabled(on bool)
+	// 触控板手势识别热启停（实验性），无需重启
+	SetTouchpadGestures(on bool)
+	// 触控板滚动输出倍率热更新（实验性，100=基准），无需重启
+	SetTouchpadSpeed(pct int)
 }
 
 // Server 是本地控制面板 HTTP 服务（仅监听 127.0.0.1）。
@@ -78,6 +82,7 @@ type stateJSON struct {
 	TextSync    bool   `json:"text_sync"`
 	PeerCount   int    `json:"peer_count"`
 	KVMEnabled  bool   `json:"kvm_enabled"`
+	KVMTouchpad bool   `json:"kvm_touchpad_gestures"`
 	KVMLeft     string `json:"kvm_left"`
 	KVMRight    string `json:"kvm_right"`
 }
@@ -233,6 +238,7 @@ func (s *Server) stateView() stateJSON {
 		TextSync:    s.cfg.TextSync,
 		PeerCount:   len(s.core.Peers()),
 		KVMEnabled:  s.cfg.KVMOn(),
+		KVMTouchpad: s.cfg.KVMTouchpadOn(),
 		KVMLeft:     s.cfg.KVMLeft,
 		KVMRight:    s.cfg.KVMRight,
 	}
@@ -343,6 +349,28 @@ func (s *Server) apiSetConfig(w http.ResponseWriter, r *http.Request) {
 			errs = append(errs, "kvm_enabled 需要布尔值")
 		}
 	}
+	// 触控板手势识别（实验性）：开关与速度倍率均即时生效，无需重启
+	touchpadChanged := false
+	if v, ok := in["kvm_touchpad_gestures"]; ok {
+		if bv, ok := v.(bool); ok {
+			if s.cfg.KVMTouchpadOn() != bv {
+				touchpadChanged = true
+			}
+			s.cfg.KVMTouchpad = &bv
+		} else {
+			errs = append(errs, "kvm_touchpad_gestures 需要布尔值")
+		}
+	}
+	if v, ok := in["kvm_touchpad_speed"]; ok {
+		if fv, ok := v.(float64); ok && fv >= 10 && fv <= 1000 {
+			if s.cfg.KVMTouchpadSpeedPct() != int(fv) {
+				touchpadChanged = true
+			}
+			s.cfg.KVMTouchSpd = int(fv)
+		} else {
+			errs = append(errs, "kvm_touchpad_speed 需要 10~1000 的整数（100=基准）")
+		}
+	}
 	// KVM 手感调参：主控移动合拍间隔、被控重排节拍、速度补偿系数（毫秒/百分比）。
 	// 与邻居一致走热更新通道（保存即触发 core.SyncKVM → kvm.UpdateTunables），
 	// 无需重启。move>=0（0=默认8），reflow 可为 -1（关闭重排），speed 0~500。
@@ -386,6 +414,11 @@ func (s *Server) apiSetConfig(w http.ResponseWriter, r *http.Request) {
 	if kvmEnableChanged {
 		// 跨屏开关即时生效：热启动/停用 KVM 服务与监听，无需重启
 		s.core.SetKVMEnabled(s.cfg.KVMOn())
+	}
+	if touchpadChanged {
+		// 触控板手势识别与速度倍率即时生效（实验性），无需重启
+		s.core.SetTouchpadGestures(s.cfg.KVMTouchpadOn())
+		s.core.SetTouchpadSpeed(s.cfg.KVMTouchpadSpeedPct())
 	}
 	if kvmChanged {
 		// 邻居改动即时生效（本机热更新 + 推送到对端，自动互为镜像；

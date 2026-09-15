@@ -82,6 +82,10 @@ func (f *fakeCore) SetKVMEnabled(on bool) {
 	f.kvmEnabledSet = append(f.kvmEnabledSet, on)
 }
 
+func (f *fakeCore) SetTouchpadGestures(on bool) {}
+
+func (f *fakeCore) SetTouchpadSpeed(pct int) {}
+
 func newTestServer(t *testing.T) (*Server, *fakeCore) {
 	t.Helper()
 	cfg, err := config.Default()

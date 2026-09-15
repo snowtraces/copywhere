@@ -355,6 +355,8 @@ func Start(ctx context.Context, cfg *config.Config, opts Options) (*App, error) 
 	}); err != nil {
 		log.Printf("输入钩子启动失败: %v", err)
 	}
+	input.SetTouchpadGestures(cfg.KVMTouchpadOn())
+	input.SetTouchpadSpeed(cfg.KVMTouchpadSpeedPct())
 	if cfg.KVMOn() {
 		a.startKVM()
 	}
@@ -434,6 +436,24 @@ func (a *App) SetKVMEnabled(on bool) {
 		a.startKVM()
 	} else {
 		a.stopKVM()
+	}
+}
+
+// SetTouchpadSpeed 热更新触控板滚动输出倍率（实验性，即时生效）。
+func (a *App) SetTouchpadSpeed(pct int) {
+	input.SetTouchpadSpeed(pct)
+	log.Printf("触控板滚动速度已设为 %d%%（100=基准）", pct)
+}
+
+// SetTouchpadGestures 热启用/停用触控板手势识别（实验性）。
+// 见 docs/touchpad-gesture-rawinput-plan.md：影子监听方案，仅 KVM 主控
+// 接管期间把识别出的双指滚动转发给副机，本机窗口仍会滚动。
+func (a *App) SetTouchpadGestures(on bool) {
+	input.SetTouchpadGestures(on)
+	if on {
+		log.Printf("触控板手势识别已启用（实验性）：接管期间双指滚动将转发给副机，本机窗口仍会滚动")
+	} else {
+		log.Printf("触控板手势识别已停用")
 	}
 }
 

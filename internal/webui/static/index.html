@@ -787,6 +787,16 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
           <input type="range" id="cfg_kvm_speed_pct" min="50" max="300" step="5" value="100" oninput="syncKvmScales()">
           <div class="hint">本机作主控时位移 × 此值 / 100。A→B 偏慢调高 A 机系数、B→A 偏慢调高 B 机系数（各机自设）；运行日志有 KVM 切换的标定参考。</div>
         </div>
+        <div class="set-row">
+          <div class="info"><b>触控板双指滚动（实验性）</b>
+            <div class="hint">接管期间把本机触控板双指滚动转发给副机（默认关闭）。影子监听：本机窗口仍会滚动；部分机型不适用，外接鼠标滚轮始终可用</div></div>
+          <div class="ctl"><label class="switch"><input type="checkbox" id="cfg_kvm_touchpad"><span class="knob"></span></label></div>
+        </div>
+        <div class="set-row col">
+          <div class="srow"><b>触控板滚动速度</b><span class="sval" id="v_touchspeed">100%</span></div>
+          <input type="range" id="cfg_kvm_touchpad_speed" min="50" max="400" step="10" value="100" oninput="syncKvmScales()">
+          <div class="hint">双指滚动的输出倍率（100 = 基准，越大越快），松手即保存生效。识别进行中时触控板独占滚动转发，外接鼠标滚轮不受影响。</div>
+        </div>
       </div>
 
       <div class="cat" data-cat="paired" id="cat-paired">
@@ -1959,6 +1969,8 @@ async function loadCfg() {
     $("cfg_kvm_move_ms").value = c.kvm_move_interval_ms ?? 0;
     $("cfg_kvm_reflow_ms").value = c.kvm_reflow_step_ms ?? 0;
     $("cfg_kvm_speed_pct").value = c.kvm_speed_percent || 100;
+    $("cfg_kvm_touchpad").checked = !!c.kvm_touchpad_gestures;
+    $("cfg_kvm_touchpad_speed").value = c.kvm_touchpad_speed || 100;
     syncKvmScales();
     $("cfgPath").textContent = r.path;
   } catch (e) {
@@ -1996,6 +2008,7 @@ $("cfg_node_name").addEventListener("change", e => {
 });
 $("cfg_text_sync").addEventListener("change", e => saveFields({ text_sync: e.target.checked }));
 $("cfg_auto_paste").addEventListener("change", e => saveFields({ auto_paste: e.target.checked }));
+$("cfg_kvm_touchpad").addEventListener("change", e => saveFields({ kvm_touchpad_gestures: e.target.checked }));
 $("cfg_max_auto_copy_mb").addEventListener("change", e =>
   saveFields({ max_auto_copy_mb: Number(e.target.value || 0) }));
 $("cfg_receive_dir").addEventListener("change", e => {
@@ -2007,6 +2020,7 @@ for (const [id, key] of [
   ["cfg_kvm_move_ms", "kvm_move_interval_ms"],
   ["cfg_kvm_reflow_ms", "kvm_reflow_step_ms"],
   ["cfg_kvm_speed_pct", "kvm_speed_percent"],
+  ["cfg_kvm_touchpad_speed", "kvm_touchpad_speed"],
 ]) {
   $(id).addEventListener("change", e => saveFields({ [key]: Number(e.target.value || 0) }));
 }
@@ -2018,6 +2032,7 @@ function syncKvmScales() {
   const rv = Number($("cfg_kvm_reflow_ms").value);
   $("v_reflow").textContent = rv < 0 ? "已关闭" : (rv === 0 ? "默认 4ms" : rv + "ms");
   $("v_speed").textContent = Number($("cfg_kvm_speed_pct").value || 100) + "%";
+  $("v_touchspeed").textContent = Number($("cfg_kvm_touchpad_speed").value || 100) + "%";
 }
 
 // ---------- 已配对设备 ----------

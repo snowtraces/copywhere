@@ -421,9 +421,14 @@ func hookThread() {
 		return
 	}
 
-	// 注册 Raw Input：即使不在前台也接收鼠标原始输入
-	dev := rawinputdevice{usUsagePage: 1, usUsage: 2, dwFlags: ridevInputSink, hwndTarget: hwnd}
-	procRegisterRawInputDevices.Call(uintptr(unsafe.Pointer(&dev)), 1, unsafe.Sizeof(dev))
+	// 注册 Raw Input：即使不在前台也接收鼠标原始输入；第二条注册精确式
+	// 触控板（数字化器集合，Page 0x0D / Usage 0x05），供触控板手势识别
+	// 旁路监听（见 touchpad_windows.go）。设备不存在时注册亦无害。
+	devs := [2]rawinputdevice{
+		{usUsagePage: 1, usUsage: 2, dwFlags: ridevInputSink, hwndTarget: hwnd},
+		{usUsagePage: usagePageDigitizer, usUsage: dgTouchpad, dwFlags: ridevInputSink, hwndTarget: hwnd},
+	}
+	procRegisterRawInputDevices.Call(uintptr(unsafe.Pointer(&devs[0])), 2, unsafe.Sizeof(devs[0]))
 
 	hMouse, _, _ := procSetWindowsHookExW.Call(whMouseLL, windows.NewCallback(mouseHookProc), 0, 0)
 	hKey, _, _ := procSetWindowsHookExW.Call(whKeyboardLL, windows.NewCallback(keyHookProc), 0, 0)
@@ -458,19 +463,26 @@ func wndProc(hwnd, uMsg, wParam, lParam uintptr) uintptr {
 
 func handleRawInput(lParam uintptr) {
 	defer func() { _ = recover() }() // 钩子线程绝不能 panic（会带崩整个进程）
-	if cbs.OnMouseMove == nil {
-		return
-	}
-	var buf [128]byte
+	var buf [1024]byte
 	size := uint32(len(buf))
 	r, _, _ := procGetRawInputData.Call(lParam, ridInput,
 		uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)),
 		uintptr(unsafe.Sizeof(rawinputHeader{})))
-	if r == ^uintptr(0) || size < uint32(unsafe.Sizeof(rawmouse{})) {
+	if r == ^uintptr(0) {
 		return
 	}
 	h := (*rawinputHeader)(unsafe.Pointer(&buf[0]))
-	if h.dwType != 0 { // 只处理鼠标
+	if h.dwType == rimTypeHid {
+		// 触控板数字化器集合的 HID 报告（RAWHID：dwSizeHid + dwCount + 数据）
+		if size > uint32(unsafe.Sizeof(rawinputHeader{}))+8 {
+			handleTouchpadInput(h, buf[unsafe.Sizeof(rawinputHeader{}):size])
+		}
+		return
+	}
+	if cbs.OnMouseMove == nil {
+		return
+	}
+	if size < uint32(unsafe.Sizeof(rawinputHeader{}))+uint32(unsafe.Sizeof(rawmouse{})) {
 		return
 	}
 	// 注意：不要按 hDevice==0 过滤注入事件——部分物理鼠标（蓝牙/合成设备）
@@ -512,6 +524,13 @@ func mouseHookProc(nCode int, wParam, lParam uintptr) uintptr {
 				cbs.OnMouseButton(down, btn, int(ms.x), int(ms.y))
 			}
 		case wmMouseWheel, wmMouseHWheel:
+			// 钩子滚轮是权威源，始终转发。若正处双指手势中（最近见过
+			// 两指帧），说明系统已把该手势合成为 legacy 滚轮——记下标记
+			// 让触控板识别器本手势内让位（两路同时存在时只要钩子滚轮）。
+			// 详见 touchpad_windows.go 的 touchNoteHookWheel。
+			if touchpadTwoFingerRecent() {
+				touchNoteHookWheel()
+			}
 			if cbs.OnWheel != nil {
 				cbs.OnWheel(int32(int16(ms.mouseData>>16)), wParam == wmMouseHWheel)
 			}
