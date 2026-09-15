@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"runtime"
 	"syscall"
 	"time"
 	"unsafe"
@@ -56,6 +57,7 @@ func init() {
 		r, _, _ := procRegisterClipboardFormat.Call(uintptr(unsafe.Pointer(p)))
 		cfPNG = r
 	}
+	go clipboardThread()
 }
 
 var (
@@ -67,6 +69,48 @@ var (
 	ErrNoImage = errors.New("剪贴板中没有图片 (PNG/CF_DIB)")
 )
 
+// ---------- 专用剪贴板线程 ----------
+//
+// Windows 剪贴板按线程持有：OpenClipboard 把剪贴板锁定到调用线程，
+// CloseClipboard 必须由当初 Open 的同一线程执行才生效。Go 调度器不保证
+// 同一 goroutine 的两次系统调用落在同一 OS 线程——临界区内一旦抢占/迁移，
+// Close 会静默失败，剪贴板被本进程一个再也不会关闭的线程长期占用并逐步
+// 累积，表现为「Windows 过一段时间无法复制文件、退出 copywhere 后恢复」
+// （进程退出时 OS 回收全部占用）。
+//
+// 解决办法：所有需要打开/关闭剪贴板的读写，统一投递给这个常驻、且
+// 永久锁定在单一 OS 线程上的 worker goroutine 串行执行。这样既保证
+// open/close 永远同线程，又天然串行化并发调用（同一时刻只有一个
+// OpenClipboard 在途），一举消除争用。Seq 不打开剪贴板，无需经此线程。
+
+// clipRequest 是一次投递到剪贴板线程执行的请求。
+type clipRequest struct {
+	do   func()          // 在剪贴板线程上执行，结果写入其闭包捕获的变量
+	done chan struct{}   // 关闭表示 do 已执行完毕（与调用方建立 happens-before）
+}
+
+// clipReq 是串行化队列；非缓冲通道确保同一时刻只有一个请求在途。
+var clipReq = make(chan clipRequest)
+
+// clipboardThread 常驻运行，永久锁定单一 OS 线程，逐条执行剪贴板请求。
+// 全程不 UnlockOSThread：该 goroutine 一生只做剪贴板工作，其线程被进程
+// 持有至退出，符合「固定线程亲和」的标准用法。
+func clipboardThread() {
+	runtime.LockOSThread()
+	for r := range clipReq {
+		r.do()
+		close(r.done)
+	}
+}
+
+// runClipboard 在剪贴板线程上同步执行 fn，并等待其完成。
+// 通过通道收发建立 happens-before：调用方在 fn 内写入的结果，返回后可安全读取。
+func runClipboard(fn func()) {
+	r := clipRequest{do: fn, done: make(chan struct{})}
+	clipReq <- r
+	<-r.done
+}
+
 // dropfiles 对应 Win32 DROPFILES 结构。
 type dropfiles struct {
 	pFiles uint32
@@ -76,6 +120,7 @@ type dropfiles struct {
 }
 
 // Seq 返回剪贴板序号，内容每次变化都会递增。
+// GetClipboardSequenceNumber 无需打开剪贴板且线程安全，故不经剪贴板线程。
 func Seq() uint32 {
 	r, _, _ := procGetClipboardSequenceNumber.Call()
 	return uint32(r)
@@ -133,6 +178,14 @@ func globalData(h uintptr) ([]byte, bool) {
 // 优先取应用直接放入的 "PNG" 注册格式（系统截图等工具常提供），
 // 否则将 CF_DIB 位图就地转换为 PNG。无图片时返回 ErrNoImage。
 func ReadImage() ([]byte, error) {
+	var img []byte
+	var err error
+	runClipboard(func() { img, err = readImageLocked() })
+	return img, err
+}
+
+// readImageLocked 在剪贴板线程上执行读图，open/close 必在同一线程配对。
+func readImageLocked() ([]byte, error) {
 	if err := openClipboard(); err != nil {
 		return nil, err
 	}
@@ -240,6 +293,14 @@ func dibToPNG(data []byte) ([]byte, error) {
 
 // ReadFiles 读取剪贴板中的文件路径列表（Unicode DROPFILES）。
 func ReadFiles() ([]string, error) {
+	var files []string
+	var err error
+	runClipboard(func() { files, err = readFilesLocked() })
+	return files, err
+}
+
+// readFilesLocked 在剪贴板线程上执行读文件列表。
+func readFilesLocked() ([]string, error) {
 	if err := openClipboard(); err != nil {
 		return nil, err
 	}
@@ -283,6 +344,14 @@ func ReadFiles() ([]string, error) {
 
 // ReadText 读取剪贴板文本。
 func ReadText() (string, error) {
+	var text string
+	var err error
+	runClipboard(func() { text, err = readTextLocked() })
+	return text, err
+}
+
+// readTextLocked 在剪贴板线程上执行读文本。
+func readTextLocked() (string, error) {
 	if err := openClipboard(); err != nil {
 		return "", err
 	}
@@ -354,6 +423,15 @@ func SetText(s string) error {
 }
 
 func setClipboardBuffer(format uintptr, data []byte) error {
+	var err error
+	runClipboard(func() { err = setClipboardBufferLocked(format, data) })
+	return err
+}
+
+// setClipboardBufferLocked 在剪贴板线程上分配内存并写入剪贴板。
+// 打开失败（未进入临界区）时不注册 close-defer、直接释放句柄；一旦打开，
+// 关闭一定在同线程执行（本函数即在剪贴板线程上运行）。
+func setClipboardBufferLocked(format uintptr, data []byte) error {
 	h, ok := globalAlloc(gmemMoveable, uintptr(len(data)))
 	if !ok {
 		return errors.New("GlobalAlloc 失败")
@@ -370,10 +448,9 @@ func setClipboardBuffer(format uintptr, data []byte) error {
 		procGlobalFree.Call(h)
 		return err
 	}
+	defer procCloseClipboard.Call()
 	procEmptyClipboard.Call()
-	ok = setClipboardData(format, h)
-	procCloseClipboard.Call()
-	if !ok {
+	if !setClipboardData(format, h) {
 		procGlobalFree.Call(h)
 		return errors.New("SetClipboardData 失败")
 	}
