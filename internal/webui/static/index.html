@@ -30,7 +30,7 @@
   --err-weak: #f7e2e7;
   --warn: #7d5708;
   --track: #dcd9cd;
-  --gridline: rgba(22,29,35,.10);
+  --gridline: rgba(22,29,35,.07);
   --mono: "Cascadia Mono", "JetBrains Mono", Consolas, "Courier New", "Microsoft YaHei", monospace;
   --shadow-pop: 0 10px 34px rgba(20,28,34,.22);
 }
@@ -84,7 +84,7 @@
     --bubble-out-border: var(--accent);
   }
 }
-* { box-sizing: border-box; border-radius: 0 !important; }
+* { box-sizing: border-box; border-radius: 0; } /* 线框皮肤：UA 默认样式无需 !important 即可覆盖 */
 html, body { height: 100%; }
 body { margin: 0; background: var(--bg); color: var(--text); overflow: hidden;
   font: 13px/1.6 var(--mono);
@@ -107,7 +107,7 @@ kbd { font: 11px var(--mono); padding: 0 5px; border: 1px solid var(--border);
 .topbar { position: relative; z-index: 10; height: 52px; flex: none;
   display: flex; align-items: center; gap: 12px; padding: 0 14px;
   background: var(--bg); border-bottom: 1px solid var(--border); }
-.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.brand { display: flex; align-items: center; gap: 10px; min-width: 0; line-height: 1.25; }
 .brand .mark { width: 28px; height: 28px; background: var(--accent);
   display: grid; place-items: center; }
 .brand .mark svg { width: 16px; height: 16px; }
@@ -169,6 +169,9 @@ kbd { font: 11px var(--mono); padding: 0 5px; border: 1px solid var(--border);
 .space.enter-right, .space.enter-left { animation: spaceIn .16s linear; }
 @media (prefers-reduced-motion: reduce) {
   .space.enter-right, .space.enter-left, .chat-row, .xfer, .toast { animation: none !important; }
+  .dot.on { animation: none; } /* 在线圆点不再闪烁 */
+  .switch .knob::after { transition: none; }
+  .bar > i { transition: none; }
 }
 
 .dock { width: 292px; flex: none; display: flex; flex-direction: column; gap: 8px;
@@ -217,6 +220,7 @@ kbd { font: 11px var(--mono); padding: 0 5px; border: 1px solid var(--border);
 .stage-head h1::before { content: "▍"; color: var(--accent); margin-right: 6px; }
 .stage-head .sub { color: var(--dim); font-size: 12px; }
 .stage-head .grow { align-self: center; }
+.stage-head .chipbtn { align-self: center; } /* 按钮不随 baseline 混排飘移 */
 .timeline { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
   padding: 12px 6px 14px; }
 /* 消息行：收在左（头像-气泡），发在右（气泡-头像），与主流聊天一致 */
@@ -238,12 +242,16 @@ kbd { font: 11px var(--mono); padding: 0 5px; border: 1px solid var(--border);
 .m-head .m-name { font-weight: 600; color: var(--text); min-width: 0;
   max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .m-head .m-time { font-variant-numeric: tabular-nums; flex: none; }
+.m-head .m-dir { color: var(--dim); flex: none; max-width: 160px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
 .bubble { background: var(--panel); border: 1px solid var(--border); padding: 6px 10px 7px;
   min-width: 150px; max-width: 100%; }
+.bubble:has(> .b-text) { min-width: 0; } /* 纯文本按内容收缩，短文本不撑空气泡 */
 .chat-row.in .bubble { border-left: 3px solid var(--in); background: var(--bubble-in-bg, var(--panel)); }
 .chat-row.out .bubble { border-color: var(--bubble-out-border, var(--border));
   border-right: 3px solid var(--accent); background: var(--bubble-out-bg, var(--accent-weak)); }
-.chat-row.fail .bubble { border-left-color: var(--err); border-right-color: var(--err); }
+.chat-row.in.fail .bubble { border-left-color: var(--err); }  /* 只染方向色条：失败=该侧红，仍单侧可辨方向 */
+.chat-row.out.fail .bubble { border-right-color: var(--err); }
 /* 文本消息：内容即消息体，超长折叠、点击展开 */
 .b-text { font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
   display: -webkit-box; -webkit-line-clamp: 12; -webkit-box-orient: vertical; overflow: hidden;
@@ -287,9 +295,12 @@ kbd { font: 11px var(--mono); padding: 0 5px; border: 1px solid var(--border);
 .stage { position: relative; }
 .composer { flex: none; display: flex; align-items: flex-end; gap: 8px;
   padding: 10px 14px 14px; border-top: 1px solid var(--border-dim); }
-.composer .iconbtn { border: 1px solid var(--border); background: var(--panel); }
+/* 单行统一高度 36px：> 行高19+padding14+border2=35，杜绝首行内部滚动条，且左右按钮与输入框等高 */
+.composer .iconbtn { border: 1px solid var(--border); background: var(--panel);
+  height: 36px; width: 36px; }
+.composer .btn { height: 36px; }
 .composer .cinput { flex: 1; min-width: 0; resize: none; height: auto;
-  min-height: 34px; max-height: 132px; padding: 7px 12px; line-height: 1.45;
+  min-height: 36px; max-height: 132px; padding: 7px 12px; line-height: 1.45;
   border: 1px solid var(--border); background: var(--panel); color: var(--text); font: inherit;
   font-family: var(--mono); }
 .composer .cinput::placeholder { color: var(--dim); }
@@ -346,7 +357,7 @@ kbd { font: 11px var(--mono); padding: 0 5px; border: 1px solid var(--border);
 .layout-canvas { border: 1px dashed var(--border); padding: 34px 20px 26px;
   display: flex; justify-content: center; align-items: flex-end; gap: 24px;
   flex-wrap: wrap; max-width: 980px; }
-.screen { width: 150px; user-select: none; }
+.screen { width: 150px; user-select: none; position: relative; } /* side-label 定位锚 */
 .screen .bezel { position: relative; height: 92px; border: 1px solid var(--border);
   background: var(--panel);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -388,8 +399,9 @@ kbd { font: 11px var(--mono); padding: 0 5px; border: 1px solid var(--border);
 .tray .dev.selected { border-color: var(--accent); }
 .tray .dev .quick { display: none; gap: 4px; }
 .tray .dev.selected .quick { display: flex; }
-.kvm-bar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+.kvm-bar { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap;
   margin-top: 14px; max-width: 980px; }
+.kvm-bar .check { margin-top: -2px; } /* 复选框基线与首行提示文字对齐 */
 .check { display: flex; align-items: center; gap: 9px; padding: 6px 0; cursor: pointer; }
 .check input { width: 14px; height: 14px; accent-color: var(--accent); }
 .hint { font-size: 11.5px; color: var(--dim); }
@@ -400,6 +412,10 @@ kbd { font: 11px var(--mono); padding: 0 5px; border: 1px solid var(--border);
   color: var(--dim); background: var(--bg);
   border-top: 1px solid var(--border); white-space: nowrap; overflow: hidden; }
 .statusbar .sep::before { content: "│"; margin: 0 2px; opacity: .6; }
+.statusbar .sep { line-height: 12px; } /* 竖线不再顶满 28px 行高，与 11px 文字同高 */
+/* 邻居名过长时截断，避免把版本信息挤出容器 */
+#selfInfo, #sbKvm { min-width: 0; overflow: hidden; text-overflow: ellipsis; flex: none; }
+#selfInfo { max-width: 260px; } #sbKvm { max-width: 340px; }
 .statusbar b { color: var(--text); font-weight: 600; }
 .statusbar .pal-hint { margin-left: auto; display: inline-flex; align-items: center;
   gap: 6px; cursor: pointer; border: 1px solid var(--border); padding: 1px 8px; }
@@ -412,10 +428,12 @@ kbd { font: 11px var(--mono); padding: 0 5px; border: 1px solid var(--border);
 .sheet { position: fixed; z-index: 51; top: 50%; left: 50%;
   width: min(940px, 94vw); height: min(86vh, 720px);
   transform: translate(-50%, -46%); opacity: 0; pointer-events: none;
-  transition: transform .14s linear, opacity .12s linear;
+  visibility: hidden;
+  transition: transform .14s linear, opacity .12s linear, visibility 0s linear .14s;
   background: var(--bg); border: 1px solid var(--border);
   box-shadow: var(--shadow-pop); display: flex; flex-direction: column; overflow: hidden; }
-.sheet.open { transform: translate(-50%, -50%); opacity: 1; pointer-events: auto; }
+.sheet.open { transform: translate(-50%, -50%); opacity: 1; pointer-events: auto;
+  visibility: visible; transition: transform .14s linear, opacity .12s linear, visibility 0s; }
 .sheet-head { display: flex; align-items: center; justify-content: space-between;
   padding: 12px 18px; border-bottom: 1px solid var(--border); }
 .sheet-head h2 { margin: 0; font-size: 14px; font-weight: 700; text-transform: uppercase;
@@ -437,6 +455,16 @@ kbd { font: 11px var(--mono); padding: 0 5px; border: 1px solid var(--border);
   font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;
   padding: 8px 2px 7px; background: var(--bg); border-bottom: 1px solid var(--border); }
 .cat > h3::before { content: "▍"; color: var(--accent); margin-right: 6px; }
+/* 纯说明行（无控件）：视觉降级，不与真实配置项同权重；保留 <b> 小标题 */
+.set-note { padding: 9px 0; border-bottom: 1px dashed var(--border-dim); font-size: 12px;
+  color: var(--dim); }
+.set-note > b { color: var(--text); font-weight: 600; font-size: 12.5px; }
+.set-note:last-child { border-bottom: none; }
+.paired-row { display: flex; align-items: center; gap: 10px; padding: 9px 0;
+  border-bottom: 1px solid var(--border-dim); }
+.paired-row .pinfo { flex: 1; min-width: 0; }
+.paired-row .pname { font-weight: 600; }
+.paired-row .pid { font-family: var(--mono); }
 .set-row { display: flex; align-items: flex-start; gap: 18px; padding: 11px 0;
   border-bottom: 1px dashed var(--border-dim); }
 .set-row:last-child { border-bottom: none; }
@@ -479,16 +507,17 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
 .msg.ok { color: var(--in); } .msg.err { color: var(--err); } .msg.warn { color: var(--warn); }
 /* 配置文件路径是无空格长串，必须允许任意断行，否则撑出横向滚动 */
 #cfgPath { word-break: break-all; }
-.save-bar { position: sticky; bottom: -14px; padding: 12px 0 2px; margin-top: 6px;
+.save-bar { position: sticky; bottom: 0; padding: 12px 0 4px; margin-top: 6px;
   background: var(--bg); border-top: 1px solid var(--border);
   display: flex; align-items: center; gap: 14px; }
 
 /* ---------- 控制台抽屉 ---------- */
 .console { position: fixed; left: 0; right: 0; bottom: 0; height: 44vh; z-index: 40;
   background: #05080c; color: #9fb4c4; display: flex; flex-direction: column;
-  border-top: 1px solid var(--accent); transform: translateY(100%);
-  transition: transform .16s linear; }
-.console.open { transform: translateY(0); }
+  border-top: 1px solid var(--accent); transform: translateY(100%); visibility: hidden;
+  transition: transform .16s linear, visibility 0s linear .16s; }
+.console.open { transform: translateY(0); visibility: visible;
+  transition: transform .16s linear, visibility 0s; }
 .console .chead { display: flex; align-items: center; gap: 12px; padding: 6px 14px;
   border-bottom: 1px solid #1a2530; font-size: 12px; color: #5f7484; }
 .console .chead .ttl { display: flex; align-items: center; gap: 8px; font-weight: 600;
@@ -525,6 +554,8 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
 .modal { position: fixed; inset: 0; z-index: 60; display: none; place-items: center;
   background: rgba(4,7,10,.55); }
 .modal.show { display: grid; }
+/* 配对请求高于通用确认框：两者同开时不互相遮蔽操作路径 */
+#pairModal { z-index: 62; }
 .modal .box { width: 460px; max-width: 92vw; background: var(--bg); padding: 18px;
   box-shadow: var(--shadow-pop); border: 1px solid var(--border); }
 .modal h3 { margin: 0 0 12px; font-size: 14px; font-weight: 700; }
@@ -604,7 +635,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
         <path d="M21 3L11 8.5l3 1.5z" fill="currentColor" fill-opacity="0.22"/>
         <path d="M21 3l-7 4.5 1.5 5.5z"/>
         <path d="M3 17l5-4.5 3 2.5 4-4"/>
-      </svg>工作台</button>
+      </svg>传输</button>
     <button data-view="layout">
       <svg class="ic" viewBox="0 0 24 24" style="width:15px;height:15px">
         <rect x="2.5" y="5" width="10" height="11" rx="1.8"/>
@@ -653,7 +684,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
     <div class="stage-head"><h1>传输动态</h1><span class="sub" id="feedSub"></span>
       <span class="grow"></span>
       <button class="chipbtn" id="feedClear" title="清空本地面板中的传输记录（不影响对端）">清空记录</button></div>
-    <div class="timeline" id="timeline">
+    <div class="timeline" id="timeline" role="log" aria-live="polite" aria-label="传输记录">
       <div id="feed" style="display:contents"></div>
       <div id="xferStrip" style="display:contents"></div>
     </div>
@@ -671,13 +702,13 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
   <!-- 空间二：屏幕布局 -->
   <section class="space layout-space" id="view-layout">
     <div class="layout-head"><h1>屏幕布局</h1>
-      <span class="sub">仿多显示器排列：把设备拖到本机左右两侧，配置鼠标键盘跨屏（KVM，实验性）</span></div>
+      <span class="sub">仿多显示器排列：把节点拖到本机左右两侧，配置鼠标键盘跨屏（KVM，实验性）</span></div>
     <div class="layout-canvas" id="layoutCanvas"></div>
     <div class="kvm-bar">
       <label class="check" style="padding:0"><input type="checkbox" id="kvmEnabled"> 启用鼠标键盘跨屏</label>
       <span class="hint">邻居配置<b>即时生效</b>并自动同步到对端 · 启用/停用跨屏即时生效 · 手感调参见「设置 → 跨屏控制」 · 被控时按 <b>Ctrl+Alt+Shift+X</b> 紧急退出</span>
     </div>
-    <div class="sect">在线设备（拖到上方空位，或点选后使用快捷按钮）</div>
+    <div class="sect">在线节点（拖到上方空位，或点选后使用快捷按钮）</div>
     <div class="tray" id="deviceTray"></div>
   </section>
 </div>
@@ -686,12 +717,12 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
   <span id="selfInfo"></span>
   <span class="sep hide-sm"></span><span id="sbKvm" class="hide-sm"></span>
   <span class="sep hide-sm"></span><span id="sbVer" class="hide-sm"></span>
-  <span class="pal-hint" id="palHint"><kbd>Ctrl</kbd>+<kbd>K</kbd> 快捷命令</span>
+  <span class="pal-hint" id="palHint" role="button" tabindex="0"><kbd id="modKey">Ctrl</kbd>+<kbd>K</kbd> 快捷命令</span>
 </footer>
 
 <!-- 遮罩 + 设置大面板 -->
 <div class="scrim" id="scrim"></div>
-<section class="sheet" id="settings">
+<section class="sheet" id="settings" role="dialog" aria-modal="true" aria-label="设置">
   <div class="sheet-head"><h2>设置</h2>
     <button class="iconbtn" id="settingsClose">
       <svg class="ic" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12" stroke-linecap="round"/></svg></button></div>
@@ -701,7 +732,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
       <button data-cat="sync">自动同步</button>
       <button data-cat="storage">存储</button>
       <button data-cat="kvm">跨屏控制</button>
-      <button data-cat="paired">已配对设备</button>
+      <button data-cat="paired">已配对节点</button>
       <button data-cat="about">关于</button>
     </aside>
     <div class="cat-body" id="cfgScroll">
@@ -709,7 +740,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
         <h3>通用</h3>
         <div class="set-row">
           <div class="info"><b>节点名</b>
-            <div class="hint">局域网内展示的设备名称（改完移开焦点即生效，下一次广播约几秒内同步到对端）</div></div>
+            <div class="hint">局域网内展示的节点名称（改完移开焦点即生效，下一次广播约几秒内同步到对端）</div></div>
           <div class="ctl"><input type="text" id="cfg_node_name" spellcheck="false"></div>
         </div>
         <div class="set-row">
@@ -721,10 +752,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
             <button data-theme-opt="dark">深色</button>
           </div>
         </div>
-        <div class="set-row">
-          <div class="info"><b>配对认证</b>
-            <div class="hint">认证采用配对制：在左侧设备坞或「屏幕布局」配对后即可互通，无需配置 token。</div></div>
-        </div>
+        <div class="set-note"><b>配对认证</b><br>认证采用配对制：在左侧设备坞或「屏幕布局」配对后即可互通，无需配置 token。</div>
       </div>
 
       <div class="cat" data-cat="sync" id="cat-sync">
@@ -770,10 +798,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
             <div class="hint">把本机鼠标键盘推向左右邻居设备（开关即时生效，无需重启） · 被控时按 <b>Ctrl+Alt+Shift+X</b> 紧急退出</div></div>
           <div class="ctl"><label class="switch"><input type="checkbox" id="kvmEnabled2"><span class="knob"></span></label></div>
         </div>
-        <div class="set-row">
-          <div class="info"><b>邻居布局</b>
-            <div class="hint">在「屏幕布局」或左侧设备坞把设备设为左邻/右邻；配置即时生效并自动同步到对端</div></div>
-        </div>
+        <div class="set-note"><b>邻居布局</b><br>在「屏幕布局」或左侧设备坞把节点设为左邻/右邻；配置即时生效并自动同步到对端</div>
         <div class="set-row col">
           <div class="srow"><b>移动合拍间隔</b><span class="sval" id="v_move">默认 8ms</span></div>
           <input type="range" id="cfg_kvm_move_ms" min="0" max="50" step="1" oninput="syncKvmScales()">
@@ -802,7 +827,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
       </div>
 
       <div class="cat" data-cat="paired" id="cat-paired">
-        <h3>已配对设备</h3>
+        <h3>已配对节点</h3>
         <div id="pairedList" class="hint">加载中…</div>
       </div>
 
@@ -838,9 +863,9 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
 </section>
 
 <!-- 命令面板 -->
-<div class="palette" id="palette">
+<div class="palette" id="palette" role="dialog" aria-modal="true" aria-label="命令面板">
   <div class="pal-box">
-    <input id="palInput" placeholder="输入命令：发送、暂停、布局、主题、解除配对…" autocomplete="off">
+    <input id="palInput" placeholder="输入命令：发送、暂停、布局、主题、解除配对…" autocomplete="off" aria-label="命令搜索">
     <div class="pal-list" id="palList"></div>
     <div class="pal-foot"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>Enter</kbd> 执行</span>
       <span><kbd>Esc</kbd> 关闭</span></div>
@@ -848,7 +873,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
 </div>
 
 <!-- 控制台抽屉 -->
-<div class="console" id="console">
+<div class="console" id="console" role="region" aria-label="运行日志">
   <div class="chead">
     <span class="ttl">
       <svg class="ic" viewBox="0 0 24 24" style="width:15px;height:15px"><rect x="2.5" y="4" width="19" height="16" rx="2.5"/><path d="m6.5 8.5 4 3.5-4 3.5M13.5 15.5h4" stroke-linecap="round"/></svg>运行日志</span>
@@ -856,13 +881,13 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
     <span class="grow" style="flex:1"></span>
     <label><input type="checkbox" id="autoscroll" checked> 自动滚动</label>
     <button id="consoleClear">清空</button>
-    <button id="consoleClose">收起 ✕</button>
+    <button id="consoleClose">收起</button>
   </div>
   <pre id="consoleBody"></pre>
 </div>
 
 <!-- 通用确认弹窗 -->
-<div class="modal" id="confirmModal">
+<div class="modal" id="confirmModal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
   <div class="box">
     <h3 id="confirmTitle">确认</h3>
     <p class="hint" id="confirmText" style="margin:0 0 4px"></p>
@@ -874,17 +899,17 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
 </div>
 
 <!-- 图片灯箱 -->
-<div class="lightbox" id="lightbox">
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="图片预览">
   <img id="lightboxImg" alt="">
 </div>
 
 <!-- 配对请求确认框 -->
-<div class="modal" id="pairModal">
+<div class="modal" id="pairModal" role="alertdialog" aria-modal="true" aria-label="配对请求">
   <div class="box">
     <h3>配对请求</h3>
     <p style="margin:0 0 4px">节点 <b id="pairName"></b> 请求与本机配对。</p>
     <p class="hint" id="pairFp"></p>
-    <p class="hint">接受后双方交换独立配对令牌，此后可互相同步剪贴板与文件；<br>可随时在「设置 → 已配对设备」中解除配对。</p>
+    <p class="hint">接受后双方交换独立配对令牌，此后可互相同步剪贴板与文件；<br>可随时在「设置 → 已配对节点」中解除配对。</p>
     <div class="row">
       <button class="btn" onclick="respondPair(false)">拒绝</button>
       <button class="btn primary" onclick="respondPair(true)">接受配对</button>
@@ -924,6 +949,7 @@ let pendingUpload = null;   // 面板上传刚完成、等待被发送进度接�
 
 // ---------- 传输记录本地持久化（localStorage） ----------
 const FEED_KEY = "cw-feed"; // localStorage 键
+const FEED_CLEARED_KEY = "cw-feed-cleared-at"; // 「清空记录」时刻持久化键
 const FEED_KEEP = 200;      // 本地最多保留的记录条数
 
 // 记录去重键：同方向 + 同对端 + 同名同大小视为同一内容（重复 copy 合并计数）
@@ -991,7 +1017,7 @@ function recTs(r) {
   return Number.isNaN(t) ? 0 : t;
 }
 
-let feedClearedAt = 0; // 「清空记录」时刻：重连补拉时跳过此前的服务端记录
+let feedClearedAt = Number(localStorage.getItem(FEED_CLEARED_KEY)) || 0; // 「清空记录」时刻：重连补拉时跳过此前的服务端记录
 
 // mergeRecords 把服务端记录按键合并进 feed（已存在/已被清空的跳过），
 // 返回是否有新增。本地持久化记录与运行期记录的整合都走这里。
@@ -1000,7 +1026,8 @@ function mergeRecords(records) {
   let added = false;
   records.forEach(r => {
     if (seen.has(dedupeKey(r))) return;
-    if (feedClearedAt && recTs(r) && recTs(r) <= feedClearedAt) return;
+    const ts = recTs(r);
+    if (feedClearedAt && ts && ts <= feedClearedAt) return;
     seen.add(dedupeKey(r));
     addFeed(r);
     added = true;
@@ -1193,8 +1220,9 @@ function addFeed(r) {
 // 清空本地传输记录（同时清除 localStorage 持久化）
 function clearFeed() {
   feed.length = 0;
+  openTexts.clear(); // 记录已清空：展开态集合一并清空，避免残留键
   feedClearedAt = Date.now(); // 重连补拉时跳过清空前的服务端记录
-  try { localStorage.removeItem(FEED_KEY); } catch (_) {}
+  try { localStorage.removeItem(FEED_KEY); localStorage.setItem(FEED_CLEARED_KEY, feedClearedAt); } catch (_) {}
   renderFeed();
 }
 $("feedClear").onclick = () => askConfirm("清空传输记录",
@@ -1341,13 +1369,19 @@ function fileCard(r) {
 // feedBody 按消息类型渲染气泡主体：
 // 文本 → 内容预览；接收目录内图片 → 缩略图；其余 → 文件卡片。
 // 返回 { el, showSize }，showSize=false 表示卡片已含大小、元信息行不再重复。
+// 长文本展开态：按去重键记录，跨 renderFeed 全量重建保持（否则偶尔"自己缩回去"）
+const openTexts = new Set();
 function feedBody(r) {
   if (r.text) {
     const d = document.createElement("div");
-    d.className = "b-text";
+    const key = dedupeKey(r);
+    d.className = "b-text" + (openTexts.has(key) ? " open" : "");
     d.textContent = (r.detail && r.detail.trim()) || r.name;
     d.title = "点击展开 / 收起";
-    d.onclick = () => d.classList.toggle("open");
+    d.onclick = () => {
+      const on = d.classList.toggle("open");
+      on ? openTexts.add(key) : openTexts.delete(key);
+    };
     return { el: d, showSize: true };
   }
   if (r.in && r.detail && IMG_EXT.test(r.name)) {
@@ -1372,7 +1406,8 @@ function mkIcon(title, svgPath, fn) {
   const b = document.createElement("button");
   b.className = "iact";
   b.title = title;
-  b.innerHTML = `<svg class="ic" viewBox="0 0 24 24" style="width:13px;height:13px">${svgPath}</svg>`;
+  b.setAttribute("aria-label", title);
+  b.innerHTML = `<svg class="ic" viewBox="0 0 24 24" style="width:13px;height:13px" aria-hidden="true">${svgPath}</svg>`;
   b.onclick = e => { e.stopPropagation(); fn(); };
   return b;
 }
@@ -1504,6 +1539,7 @@ function renderPeers(peers) {
 // ---------- 屏幕布局（KVM，仿多显示器排列） ----------
 let layoutSelected = "";
 let layoutSig = "";
+let layoutFocusName = ""; // 重绘后需把焦点复位到该设备的 chip（键盘选中）
 
 function findPeerByName(name) { return lastPeers.find(p => p.name === name); }
 
@@ -1526,9 +1562,9 @@ function screenTile(opt) {
   const label = opt.side
     ? `<span class="side-label">${opt.side === "left" ? "左邻（推向左边缘控制）" : "右邻（推向右边缘控制）"}</span>` : "";
   const clear = opt.name && opt.side
-    ? `<button class="scr-x" title="取消该侧配置">✕</button>` : "";
+    ? `<button class="scr-x" title="取消该侧配置" aria-label="取消该侧配置"><svg class="ic" viewBox="0 0 24 24" style="width:10px;height:10px"><path d="M18 6L6 18M6 6l12 12" stroke-linecap="round"/></svg></button>` : "";
   if (opt.empty) {
-    inner = `${label}<div class="bezel"><span style="font-size:20px">＋</span><span class="scr-sub">拖动设备到这${opt.side === "left" ? "左" : "右"}侧</span></div>
+    inner = `${label}<div class="bezel"><svg class="ic" viewBox="0 0 24 24" style="width:20px;height:20px"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg><span class="scr-sub">拖动设备到这${opt.side === "left" ? "左" : "右"}侧</span></div>
       <div class="stand"></div><div class="base"></div>`;
   } else {
     const nm = opt.self ? state.node_name : opt.name;
@@ -1549,8 +1585,9 @@ function screenTile(opt) {
 
 function renderLayout() {
   const left = state.kvm_left || "", right = state.kvm_right || "";
-  // 内容签名：无变化不重绘，避免周期快照打断进行中的拖拽
-  const sig = JSON.stringify([left, right, state.kvm_enabled, state.node_name,
+  // 内容签名（含选中态）：无变化不重绘，避免周期快照打断进行中的拖拽；
+  // 若不含 layoutSelected，点选设备后快捷按钮不会显现（提前 return 跳过重绘）
+  const sig = JSON.stringify([left, right, state.kvm_enabled, state.node_name, layoutSelected,
     lastPeers.map(p => p.name + "@" + p.ips.join(","))]);
   if (sig === layoutSig) return;
   layoutSig = sig;
@@ -1586,12 +1623,17 @@ function renderLayout() {
   tray.innerHTML = "";
   const avail = lastPeers.filter(p => p.name !== left && p.name !== right);
   if (!avail.length) {
-    tray.innerHTML = `<span class="hint">暂无未配置的在线设备。邻居设备离线时也会显示在画布上（灰色）。</span>`;
+    tray.innerHTML = `<span class="hint">暂无未配置的在线节点。邻居节点离线时也会显示在画布上（灰色）。</span>`;
   }
   for (const p of avail) {
     const chip = document.createElement("div");
     chip.className = "dev" + (layoutSelected === p.name ? " selected" : "");
     chip.draggable = true;
+    chip.tabIndex = 0;                 // 键盘可达：Tab 进入，Enter/Space 选中后快捷按钮显现
+    chip.setAttribute("role", "button");
+    chip.dataset.name = p.name;        // 供重绘后焦点复位精确匹配
+    chip.setAttribute("aria-pressed", String(layoutSelected === p.name));
+    chip.setAttribute("aria-label", "节点 " + (p.name || "") + "，回车选择后可设为左邻或右邻");
     chip.innerHTML = `<span class="initial">${esc((p.name || "?")[0].toUpperCase())}</span>
       <div><div class="nm">${esc(p.name)}</div><div class="ip">${esc(p.ips[0] || "")}</div></div>
       <div class="quick">
@@ -1604,15 +1646,28 @@ function renderLayout() {
       chip.classList.add("dragging");
     });
     chip.addEventListener("dragend", () => chip.classList.remove("dragging"));
+    const toggleSel = () => {
+      layoutSelected = layoutSelected === p.name ? "" : p.name;
+      layoutFocusName = layoutSelected; // 重绘后焦点复位到该 chip
+      renderLayout();
+    };
     chip.addEventListener("click", e => {
       if (e.target.closest("button")) return; // 快捷按钮自行处理
-      layoutSelected = layoutSelected === p.name ? "" : p.name;
-      renderLayout();
+      toggleSel();
+    });
+    chip.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleSel(); }
     });
     chip.querySelectorAll("[data-side]").forEach(b => b.onclick = () => {
       assignSide(b.dataset.side, p.name);
     });
     tray.appendChild(chip);
+  }
+  // 键盘/点选重绘后焦点复位，避免 Tab 序从头开始
+  if (layoutFocusName) {
+    const target = tray.querySelector(`.dev[data-name="${CSS.escape(layoutFocusName)}"]`);
+    target?.focus();
+    layoutFocusName = "";
   }
 }
 
@@ -1660,23 +1715,23 @@ function askConfirm(title, text, okLabel, fn) {
   $("confirmText").textContent = text;
   $("confirmYes").textContent = okLabel || "确定";
   confirmFn = fn;
-  $("confirmModal").classList.add("show");
+  openDialog($("confirmModal"), $("confirmNo"));
 }
 $("confirmYes").onclick = () => {
-  $("confirmModal").classList.remove("show");
+  closeDialog($("confirmModal"));
   const f = confirmFn; confirmFn = null;
   if (f) f();
 };
-$("confirmNo").onclick = () => { $("confirmModal").classList.remove("show"); confirmFn = null; };
+$("confirmNo").onclick = () => { closeDialog($("confirmModal")); confirmFn = null; };
 
 // ---------- 图片灯箱 ----------
 function showLightbox(src, name) {
   const img = $("lightboxImg");
   img.src = src;
   img.alt = name || "";
-  $("lightbox").classList.add("show");
+  openDialog($("lightbox"));
 }
-$("lightbox").onclick = () => $("lightbox").classList.remove("show");
+$("lightbox").onclick = () => closeDialog($("lightbox"));
 
 // ---------- 配对 ----------
 async function pairWith(id, name) {
@@ -1692,7 +1747,8 @@ function showPairModal(id, name) {
   pairPendingId = id;
   $("pairName").textContent = name || id;
   $("pairFp").textContent = "节点指纹: " + id.slice(0, 16) + "…";
-  $("pairModal").classList.add("show");
+  openDialog($("pairModal"), $("pairModal").querySelector(".btn.primary"));
+  renderDock(); // 设备坞出现"待确认"标记（签名含 pairPendingId）
 }
 
 async function respondPair(accept) {
@@ -1700,9 +1756,11 @@ async function respondPair(accept) {
     await api("/api/pair/respond", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify({ accept }) });
     toast(accept ? "已接受配对，双方现在可以互相同步" : "已拒绝配对请求");
-  } catch (e) { toast("操作失败: " + e.message, true); }
-  pairPendingId = ""; // 清除设备坞上的"待确认"标记
-  $("pairModal").classList.remove("show");
+    // 仅在成功时消费请求；失败保留弹窗与 pendingId，让用户重试或等待对端重发
+    pairPendingId = "";
+    closeDialog($("pairModal"));
+    renderDock(); // 移除"待确认"标记
+  } catch (e) { toast("操作失败: " + e.message + "（请重试）", true); }
 }
 
 async function checkPendingPair() {
@@ -1726,6 +1784,8 @@ async function toggleSync(paused) {
   } catch (err) {
     setSyncUI(!paused);
     toast("操作失败: " + err.message, true);
+    // 请求失败但服务端可能已生效：主动回读一次，UI 与真相同步
+    try { applyState(await api("/api/state")); } catch (_) {}
   }
 }
 $("syncSwitch").addEventListener("change", e => toggleSync(!e.target.checked));
@@ -1768,7 +1828,7 @@ function upload(files) {
   if (!x) {
     const el = document.createElement("div");
     el.className = "xfer";
-    el.innerHTML = `<div class="cap"><b>上传 ${esc(files.length)} 个文件</b><span><span class="pct"></span> · <span class="amt"></span></span><button class="xab" title="取消上传">✕</button></div>
+    el.innerHTML = `<div class="cap"><b>上传 ${esc(files.length)} 个文件</b><span><span class="pct"></span> · <span class="amt"></span></span><button class="xab" title="取消上传" aria-label="取消上传">✕</button></div>
       <div class="bar"><i></i></div>`;
     $("xferStrip").appendChild(el);
     x = { el, bar: el.querySelector("i"), pct: el.querySelector(".pct"), amt: el.querySelector(".amt"), gen: ++xferGen };
@@ -1856,6 +1916,10 @@ function autoSizeComposer() {
   const t = $("composerInput");
   t.style.height = "auto";
   t.style.height = Math.min(t.scrollHeight, 132) + "px";
+  // jump-bottom 贴合 composer 顶沿：composer 高度随输入变化，固定 bottom 会被遮挡
+  const c = document.querySelector(".composer");
+  const jb = $("jumpBottom");
+  if (c && jb) jb.style.bottom = (c.offsetHeight + 8) + "px";
 }
 $("composerInput").addEventListener("input", autoSizeComposer);
 
@@ -1937,12 +2001,13 @@ $("autoscroll").addEventListener("change", e => {
 // ---------- 设置大面板 ----------
 function openSettings() {
   $("scrim").classList.add("show");
-  $("settings").classList.add("open");
+  // 焦点移到关闭按钮而非输入框：避免打开即弹光标、误触发中文输入法或改动节点名
+  openDialog($("settings"), $("settingsClose"));
   loadCfg(); loadPaired();
 }
 function closeSettings() {
   $("scrim").classList.remove("show");
-  $("settings").classList.remove("open");
+  closeDialog($("settings"));
 }
 $("settingsBtn").onclick = openSettings;
 $("settingsClose").onclick = closeSettings;
@@ -2048,22 +2113,23 @@ function syncKvmScales() {
 
 // ---------- 已配对设备 ----------
 let pairedCache = []; // 供命令面板使用
+let pairedLoaded = false; // 仅在成功拉到后置真：失败时命令面板下次打开重试
 async function loadPaired() {
   const el = $("pairedList");
   try {
     const r = await api("/api/paired");
-    pairedCache = r.paired;
+    pairedCache = r.paired; pairedLoaded = true;
     if (!r.paired.length) {
-      el.textContent = "暂无配对设备：在设备坞或「屏幕布局」点击「配对」，对端确认后即完成。";
-      return;
+      el.textContent = "暂无配对节点：在设备坞或「屏幕布局」点击「配对」，对端确认后即完成。";
+      return true;
     }
     el.innerHTML = "";
     for (const d of r.paired) {
       const row = document.createElement("div");
-      row.style.cssText = "display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border-dim)";
-      row.innerHTML = `<div style="flex:1;min-width:0">
-          <div style="font-weight:550">${esc(d.name || "未命名节点")}</div>
-          <div class="hint" style="font-family:var(--mono)">${esc(d.id.slice(0, 12))}… · 配对于 ${esc(d.paired_at)}</div>
+      row.className = "paired-row";
+      row.innerHTML = `<div class="pinfo">
+          <div class="pname">${esc(d.name || "未命名节点")}</div>
+          <div class="hint pid">${esc(d.id.slice(0, 12))}… · 配对于 ${esc(d.paired_at)}</div>
         </div>`;
       const b = document.createElement("button");
       b.className = "chipbtn";
@@ -2104,7 +2170,7 @@ function buildCommands() {
     { t: "打开接收目录", kw: "open folder 目录 接收", fn: () => openPath({ dir: "receive" }) },
     { t: $("console").classList.contains("open") ? "关闭运行日志" : "打开运行日志", kw: "log console 日志", fn: toggleConsole },
     { t: "打开屏幕布局", kw: "layout kvm 布局", fn: () => { switchView("layout"); } },
-    { t: "回到工作台", kw: "workspace 工作台", fn: () => switchView("workspace") },
+    { t: "回到传输", kw: "workspace 工作台 传输", fn: () => switchView("workspace") },
     { t: "打开设置…", kw: "settings 设置", fn: openSettings },
     { t: "主题：跟随系统", kw: "theme auto 主题", fn: () => setTheme("auto") },
     { t: "主题：浅色", kw: "theme light 主题 亮", fn: () => setTheme("light") },
@@ -2136,23 +2202,58 @@ function palRender() {
   });
 }
 
+// ---------- 模态焦点管理：打开时移入焦点并循环 Tab，关闭后归还 ----------
+let lastFocused = null;
+function focusables(el) {
+  return [...el.querySelectorAll('button,input,select,textarea,[href],[tabindex]:not([tabindex="-1"])')]
+    .filter(e => !e.disabled && e.offsetParent !== null);
+}
+function trapTab(e) {
+  if (e.key !== "Tab") return;
+  const f = focusables(e.currentTarget);
+  if (!f.length) return;
+  const first = f[0], last = f[f.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && (document.activeElement === last || !e.currentTarget.contains(document.activeElement))) {
+    e.preventDefault(); first.focus();
+  }
+}
+function openDialog(el, focusTarget) {
+  if (!document.querySelector(".modal.show,.sheet.open,.palette.show,.lightbox.show"))
+    lastFocused = document.activeElement; // 首个弹窗记录归还目标
+  el.classList.add(el.classList.contains("sheet") ? "open" : "show");
+  el.addEventListener("keydown", trapTab);
+  const t = focusTarget || focusables(el)[0];
+  if (t) t.focus();
+  else { el.tabIndex = -1; el.focus(); } // 无可聚焦子元素（如灯箱）：聚焦容器防 Tab 穿透
+}
+function closeDialog(el) {
+  el.classList.remove("show", "open");
+  el.removeEventListener("keydown", trapTab);
+  // 全部弹窗都已关闭时，把焦点还给触发元素
+  if (!document.querySelector(".modal.show,.sheet.open,.palette.show,.lightbox.show") &&
+      lastFocused?.isConnected) { lastFocused.focus(); lastFocused = null; }
+}
+
 function openPalette() {
-  // 解除配对命令依赖已配对列表：首次打开时若尚未加载则补拉一次
-  if (!pairedCache.length) {
-    loadPaired().then(() => {
+  // 解除配对命令依赖已配对列表：未成功加载过（含上次失败）时补拉一次
+  if (!pairedLoaded) {
+    loadPaired().catch(() => {}).then(() => {
       if ($("palette").classList.contains("show")) { buildCommands(); palRender(); }
-    }).catch(() => {});
+    });
   }
   buildCommands();
-  $("palette").classList.add("show");
+  openDialog($("palette"), $("palInput"));
   $("palInput").value = "";
   palSel = 0;
   palRender();
-  $("palInput").focus();
 }
-function closePalette() { $("palette").classList.remove("show"); }
+function closePalette() { closeDialog($("palette")); }
 
 $("palHint").onclick = openPalette;
+$("palHint").addEventListener("keydown", e => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openPalette(); }
+});
 $("palette").addEventListener("click", e => { if (e.target === $("palette")) closePalette(); });
 $("palInput").addEventListener("input", () => { palSel = 0; palRender(); });
 $("palInput").addEventListener("keydown", e => {
@@ -2180,8 +2281,8 @@ document.addEventListener("keydown", e => {
   }
   if (e.key === "Escape") {
     if ($("palette").classList.contains("show")) { closePalette(); return; }
-    if ($("lightbox").classList.contains("show")) { $("lightbox").classList.remove("show"); return; }
-    if ($("confirmModal").classList.contains("show")) { $("confirmModal").classList.remove("show"); confirmFn = null; return; }
+    if ($("lightbox").classList.contains("show")) { closeDialog($("lightbox")); return; }
+    if ($("confirmModal").classList.contains("show")) { closeDialog($("confirmModal")); confirmFn = null; return; }
     closeSettings();
     // 配对请求不响应 Esc：必须明确接受或拒绝（设备坞有"待确认"标记）
     $("dropzone").classList.remove("show"); dragDepth = 0;
@@ -2218,7 +2319,21 @@ document.querySelectorAll("#themeSeg [data-theme-opt]").forEach(b =>
   b.onclick = () => setTheme(b.dataset.themeOpt));
 applyTheme();
 
+// ---------- 平台键帽（Mac 显示 ⌘，其余显示 Ctrl） ----------
+const IS_MAC = /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent);
+(function initModKey() {
+  const el = $("modKey");
+  if (el && IS_MAC) el.textContent = "⌘";
+})();
+
+// ---------- 上传/发送进行中防误关（聊天软件惯例：拦截刷新与关闭） ----------
+addEventListener("beforeunload", e => {
+  // 仅拦截真正进行中的：上传未接管、或存在未完成的传输气泡
+  if (pendingUpload || [...xfers.values()].some(x => !x.done)) { e.preventDefault(); e.returnValue = ""; }
+});
+
 // ---------- 启动 ----------
+autoSizeComposer(); // 首屏对齐 jump-bottom 到 composer 顶沿
 fetch("/api/state").then(r => r.json()).then(st => {
   const v = "v" + (st.version || "1");
   $("ver").textContent = v;
