@@ -72,6 +72,48 @@ func TestSelfAnnounceIgnored(t *testing.T) {
 	}
 }
 
+// TestAnnounceCarriesCaps 公告带 caps 字段（新→新）；
+// 旧版本公告缺字段解析后为空，不得 panic 也不得误判有能力。
+func TestAnnounceCarriesCaps(t *testing.T) {
+	b, err := json.Marshal(announceMsg{Magic: announceMagic, ID: "x", Name: "X", TCPPort: 1, Caps: []string{CapRich}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back announceMsg
+	if err := json.Unmarshal(b, &back); err != nil || !(Peer{Caps: back.Caps}).Supports(CapRich) {
+		t.Fatalf("caps 序列化往返失败: %s", b)
+	}
+	// 模拟旧版本：JSON 里没有 caps 键。注意用全新变量——生产路径每个
+	// 数据报都反序列化到新 announceMsg，不会残留上一包的字段。
+	var legacy announceMsg
+	if err := json.Unmarshal([]byte(`{"magic":"m","id":"x","name":"X","tcp_port":1}`), &legacy); err != nil {
+		t.Fatalf("旧版本公告应可解析: %v", err)
+	}
+	if len(legacy.Caps) != 0 {
+		t.Fatal("旧版本公告 caps 应为空")
+	}
+}
+
+// TestCapsUpsertLifecycle 能力记录的生命周期：带 caps 的公告写入，
+// 旧版本公告不清空已有记录，会话变化（重启）后作废。
+func TestCapsUpsertLifecycle(t *testing.T) {
+	store := NewStore("self")
+	store.UpsertCaps("p1", "P", "10.0.0.1", 47831, "s1", []string{CapRich})
+	if !store.Alive(time.Minute)[0].Supports(CapRich) {
+		t.Fatal("公告后应记录能力")
+	}
+	// 旧版本路径（Upsert，caps=nil）：保留已有能力记录不清空
+	store.Upsert("p1", "P", "10.0.0.2", 47831, "s1")
+	if !store.Alive(time.Minute)[0].Supports(CapRich) {
+		t.Fatal("nil caps 不应清空已有记录")
+	}
+	// 会话变化 = 进程重启（可能换了版本）：能力作废，等新公告再记
+	store.Upsert("p1", "P", "10.0.0.1", 47831, "s2")
+	if store.Alive(time.Minute)[0].Supports(CapRich) {
+		t.Fatal("重启后旧能力应作废")
+	}
+}
+
 func TestMultiIPDedupAndPreference(t *testing.T) {
 	store := NewStore("self")
 	_, lanNet, _ := net.ParseCIDR("192.168.0.0/24")

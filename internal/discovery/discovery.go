@@ -24,6 +24,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"copywhere/internal/diag"
 )
 
 const announceMagic = "copywhere-a1"
@@ -38,8 +40,15 @@ type Peer struct {
 	Name     string    `json:"name"` // 节点显示名
 	IPs      []string  `json:"ips"`  // 全部已知地址，优选排序（同网段直连优先）
 	TCPPort  int       `json:"tcp_port"`
+	Caps     []string  `json:"caps,omitempty"` // 对端公告的能力（见 Cap* 常量）
 	LastSeen time.Time `json:"-"`
 }
+
+// 节点能力标识：新版本在公告中携带，旧版本（无 caps 字段）解析后为空，
+// 发送方据此自动降级——能力协商天然向后兼容，无需版本号比对。
+const (
+	CapRich = "rich" // 支持 type="rich" 富文本（HTML/RTF）同步
+)
 
 // Primary 返回优选地址（IPs[0]）。
 func (p Peer) Primary() string {
@@ -49,6 +58,17 @@ func (p Peer) Primary() string {
 	return ""
 }
 
+// Supports 返回节点是否公告了指定能力（旧版本节点恒为 false，
+// 发送方据此降级到双方都能处理的内容类型）。
+func (p Peer) Supports(capName string) bool {
+	for _, c := range p.Caps {
+		if c == capName {
+			return true
+		}
+	}
+	return false
+}
+
 // peerEntry 汇合同一节点的全部来源地址。
 type peerEntry struct {
 	name     string
@@ -56,7 +76,8 @@ type peerEntry struct {
 	ips      map[string]time.Time
 	lastSeen time.Time
 	online   bool
-	session  string // 对端进程会话（每次启动随机），变化即对端重启
+	session  string   // 对端进程会话（每次启动随机），变化即对端重启
+	caps     []string // 对端公告的能力；旧版本为空
 }
 
 // Store 是线程安全的节点表。
@@ -90,6 +111,12 @@ func (s *Store) SetRestartCallback(fn func(id, name string)) {
 
 // Upsert 记录/刷新一个节点的某个来源地址；session 为对端进程会话标识。
 func (s *Store) Upsert(id, name, ip string, port int, session string) {
+	s.UpsertCaps(id, name, ip, port, session, nil)
+}
+
+// UpsertCaps 与 Upsert 相同，额外记录对端公告的能力列表（caps）。
+// caps 为 nil 表示来源不认识该字段（旧版本公告），保留已有记录不清空。
+func (s *Store) UpsertCaps(id, name, ip string, port int, session string, caps []string) {
 	if id == "" || id == s.self {
 		return
 	}
@@ -114,15 +141,20 @@ func (s *Store) Upsert(id, name, ip string, port int, session string) {
 	// 会话变化 = 同一指纹的节点进程重启
 	if session != "" && e.session != "" && e.session != session {
 		log.Printf("节点 %q 已重启（会话变化）", e.name)
+		e.caps = nil // 旧记录的能力作废：重启后可能是旧版本
 		if s.restartCb != nil {
 			cb := s.restartCb
-			s.mu.Unlock() // 回调在锁外执行，避免死锁
-			cb(id, e.name)
+			name := e.name // 锁内取值：解锁后 e.name 可能被并发 Upsert 改写
+			s.mu.Unlock()  // 回调在锁外执行，避免死锁
+			cb(id, name)
 			s.mu.Lock()
 		}
 	}
 	if session != "" {
 		e.session = session
+	}
+	if caps != nil {
+		e.caps = caps
 	}
 	e.tcpPort = port
 	e.lastSeen = now
@@ -202,6 +234,7 @@ func (s *Store) Alive(ttl time.Duration) []Peer {
 			Name:     e.name,
 			IPs:      ips,
 			TCPPort:  e.tcpPort,
+			Caps:     append([]string(nil), e.caps...),
 			LastSeen: e.lastSeen,
 		})
 	}
@@ -250,23 +283,25 @@ func (e *peerEntry) Primary() string {
 }
 
 type announceMsg struct {
-	Magic   string `json:"magic"`
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	TCPPort int    `json:"tcp_port"`
-	Session string `json:"session"` // 进程会话，重启即变化
+	Magic   string   `json:"magic"`
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	TCPPort int      `json:"tcp_port"`
+	Session string   `json:"session"`        // 进程会话，重启即变化
+	Caps    []string `json:"caps,omitempty"` // 本机能力，旧版本忽略该字段
 }
 
 // Run 启动发现服务：广播本机公告并接收其他节点的公告，直到 ctx 结束。
 // name 为固定节点名；需要节点名热更新（面板改名即时生效）请用 RunDynamic。
-func Run(ctx context.Context, udpPort, tcpPort int, interval time.Duration, name, selfID string, store *Store) error {
-	return RunDynamic(ctx, udpPort, tcpPort, interval, func() string { return name }, selfID, store)
+// caps 为本机公告的能力列表（可为 nil，见 Cap* 常量）。
+func Run(ctx context.Context, udpPort, tcpPort int, interval time.Duration, name, selfID string, store *Store, caps ...string) error {
+	return RunDynamic(ctx, udpPort, tcpPort, interval, func() string { return name }, selfID, store, caps...)
 }
 
 // RunDynamic 与 Run 相同，但每次广播时通过 nameFn 取当前节点名：
 // 面板改名后下一次广播即用新名字，无需重启。
 func RunDynamic(ctx context.Context, udpPort, tcpPort int, interval time.Duration,
-	nameFn func() string, selfID string, store *Store) error {
+	nameFn func() string, selfID string, store *Store, caps ...string) error {
 	if nameFn == nil {
 		nameFn = func() string { return "" }
 	}
@@ -287,7 +322,8 @@ func RunDynamic(ctx context.Context, udpPort, tcpPort int, interval time.Duratio
 
 	marshal := func() []byte {
 		msg, _ := json.Marshal(announceMsg{
-			Magic: announceMagic, ID: selfID, Name: nameFn(), TCPPort: tcpPort, Session: session,
+			Magic: announceMagic, ID: selfID, Name: nameFn(), TCPPort: tcpPort,
+			Session: session, Caps: caps,
 		})
 		return msg
 	}
@@ -307,6 +343,8 @@ func RunDynamic(ctx context.Context, udpPort, tcpPort int, interval time.Duratio
 
 	go func() {
 		sendAnnounce()
+		diag.Mark("announce")
+		diag.Incr("discovery.announces")
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
@@ -315,6 +353,8 @@ func RunDynamic(ctx context.Context, udpPort, tcpPort int, interval time.Duratio
 				return
 			case <-t.C:
 				sendAnnounce()
+				diag.Mark("announce")
+				diag.Incr("discovery.announces")
 			}
 		}
 	}()
@@ -333,10 +373,11 @@ func RunDynamic(ctx context.Context, udpPort, tcpPort int, interval time.Duratio
 			log.Printf("忽略来自 %s 的非法公告包", remote)
 			continue
 		}
+		diag.Incr("discovery.packets_in")
 		if m.ID == selfID {
 			continue
 		}
-		store.Upsert(m.ID, m.Name, remote.IP.String(), m.TCPPort, m.Session)
+		store.UpsertCaps(m.ID, m.Name, remote.IP.String(), m.TCPPort, m.Session, m.Caps)
 	}
 }
 

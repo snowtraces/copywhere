@@ -24,11 +24,16 @@ import (
 	"time"
 
 	"copywhere/internal/config"
+	"copywhere/internal/diag"
 )
 
 const (
 	maxFileBytes = int64(4) << 30 // 单文件上限 4GB
 	maxTextBytes = int64(4) << 20 // 文本上限 4MB
+
+	// MaxRichBytes 是 rich 负载（JSON 序列化后）上限 16MB：超出即降级为纯文本
+	// 通道，发送端必须自查——对端只会拒绝超限的 rich 请求，不能指望它兜底。
+	MaxRichBytes = int64(16) << 20
 
 	// 超时预算：底数 60s，之后按 256KB/s 估算传输时间。
 	// ZeroTier 中继、弱 WiFi 等慢链路可能远低于 1MB/s，预算必须宽裕。
@@ -44,7 +49,7 @@ func TimeoutFor(size int64) time.Duration {
 type Header struct {
 	V        int    `json:"v"`                   // 协议版本
 	Token    string `json:"token"`               // 鉴权令牌（对方签发给本节点的配对令牌）
-	Type     string `json:"type"`                // "file" | "text" | "pair" | "kvm"
+	Type     string `json:"type"`                // "file" | "text" | "rich" | "pair" | "kvm"
 	Name     string `json:"name"`                // 文件名（text/kvm 时为固定标识）
 	Size     int64  `json:"size"`                // 负载字节数
 	SHA256   string `json:"sha256"`              // 负载 sha256
@@ -85,6 +90,18 @@ type KVMSync struct {
 	Clear    bool   `json:"clear,omitempty"`
 }
 
+// RichPayload 是 type="rich" 的负载：带格式的剪贴板文本。
+// HTML/RTF 原样搬运各自的剪贴板格式字节（含 BOM，不做转码）；Text 恒为非空，
+// 接收端无论能否处理富格式都可用它兜底。
+//
+// 兼容性：rich 只发给公告了 CapRich 的对端（发现层能力协商），旧版本
+// 永远收不到该类型，无需协议版本协商。
+type RichPayload struct {
+	Text string `json:"text"`
+	HTML []byte `json:"html,omitempty"`
+	RTF  []byte `json:"rtf,omitempty"`
+}
+
 // Response 是接收方的 JSON 应答。
 type Response struct {
 	OK        bool   `json:"ok"`
@@ -102,6 +119,10 @@ type Handlers struct {
 	OnFile func(sender, path string, dup bool, bundle bool)
 	// OnText 收到文本。
 	OnText func(sender, text string)
+	// OnRich 收到带格式文本（HTML/RTF 可为 nil）。正常路径下发送方只对公告
+	// CapRich 的对端使用 rich 类型；本端未接 OnRich 时兜底回落 OnText
+	// 纯文本（防御混合版本与伪造 caps 的边缘场景）。
+	OnRich func(sender string, payload RichPayload)
 	// OnProgress 接收进度（每 256KB 上报一次；sent=-1 表示接收失败，
 	// sent==total 表示接收完成）。供 GUI 面板展示接收方向的实时进度。
 	OnProgress func(sender, name string, sent, total int64)
@@ -141,6 +162,7 @@ func handle(conn net.Conn, cfg *config.Config, h Handlers) {
 
 	defer conn.Close()
 	peer := conn.RemoteAddr().String()
+	diag.Incr("transport.conns")
 	conn.SetDeadline(time.Now().Add(30 * time.Second)) // 仅限读取协议头
 	br := bufio.NewReaderSize(conn, 64*1024)
 
@@ -178,10 +200,48 @@ func handle(conn net.Conn, cfg *config.Config, h Handlers) {
 		recvFile(conn, br, hdr, cfg, h, peer)
 	case "text":
 		recvText(conn, br, hdr, h.OnText, peer)
+	case "rich":
+		recvRich(conn, br, hdr, h, peer)
 	case "kvm":
 		handleKVM(conn, br, hdr, h, peer)
 	default:
 		writeResp(conn, Response{Error: "unknown type"})
+	}
+}
+
+// recvRich 接收带格式文本（借鉴 MWB 的富文本同步，扩展为 HTML+RTF 并存）：
+// 整体读取 JSON 负载校验后交给 OnRich。只在双方均公告 CapRich 时才会出现
+// 该类型，旧版本不会收到，无需额外兼容分支。
+func recvRich(conn net.Conn, br *bufio.Reader, hdr Header, h Handlers, peer string) {
+	if hdr.Size <= 0 || hdr.Size > MaxRichBytes {
+		writeResp(conn, Response{Error: "size out of range"})
+		return
+	}
+	conn.SetDeadline(time.Now().Add(TimeoutFor(hdr.Size)))
+	b, err := io.ReadAll(io.LimitReader(br, hdr.Size))
+	if err != nil || int64(len(b)) != hdr.Size {
+		log.Printf("接收 %s 的富文本不完整: got %d/%d bytes", peer, len(b), hdr.Size)
+		writeResp(conn, Response{Error: "transfer incomplete"})
+		return
+	}
+	if sum := sha256.Sum256(b); hex.EncodeToString(sum[:]) != hdr.SHA256 {
+		log.Printf("接收 %s 的富文本校验失败（sha256 不匹配）", peer)
+		writeResp(conn, Response{Error: "sha256 mismatch"})
+		return
+	}
+	var payload RichPayload
+	if err := json.Unmarshal(b, &payload); err != nil || payload.Text == "" {
+		log.Printf("接收 %s 的富文本 JSON 无效: %v", peer, err)
+		writeResp(conn, Response{Error: "bad rich payload"})
+		return
+	}
+	writeResp(conn, Response{OK: true})
+	diag.Incr("recv.rich")
+	diag.Add("recv.bytes", hdr.Size)
+	if h.OnRich != nil {
+		h.OnRich(hdr.Sender, payload)
+	} else if h.OnText != nil {
+		h.OnText(hdr.Sender, payload.Text) // 本端未接富文本回调：纯文本兜底
 	}
 }
 
@@ -356,6 +416,8 @@ func recvFile(conn net.Conn, br *bufio.Reader, hdr Header, cfg *config.Config,
 		return
 	}
 	writeResp(conn, Response{OK: true, Path: final, Duplicate: dup})
+	diag.Incr("recv.files")
+	diag.Add("recv.bytes", hdr.Size)
 	if h.OnFile != nil {
 		h.OnFile(hdr.Sender, final, dup, hdr.Bundle)
 	}
@@ -405,6 +467,8 @@ func recvText(conn net.Conn, br *bufio.Reader, hdr Header, onText func(sender, t
 		return
 	}
 	writeResp(conn, Response{OK: true})
+	diag.Incr("recv.texts")
+	diag.Add("recv.bytes", hdr.Size)
 	if onText != nil {
 		onText(hdr.Sender, string(b))
 	}
@@ -430,6 +494,8 @@ func Send(ip string, port int, hdr Header, payload func(w io.Writer) error, time
 	if _, err := bw.Write(append(b, '\n')); err != nil {
 		return resp, fmt.Errorf("发送协议头失败: %w", err)
 	}
+	diag.Incr("send.conns")
+	diag.Add("send.bytes", hdr.Size) // 声明的负载大小；失败连接也计入尝试量
 	if payload != nil {
 		if err := payload(bw); err != nil {
 			return resp, fmt.Errorf("发送数据失败: %w", err)

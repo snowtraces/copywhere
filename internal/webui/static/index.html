@@ -764,7 +764,7 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
         </div>
         <div class="set-row">
           <div class="info"><b>同步剪贴板文本</b>
-            <div class="hint">纯文本复制内容也在节点间同步</div></div>
+            <div class="hint">纯文本与富文本（HTML/RTF，保留格式）在节点间同步；对端会写回本机剪贴板，仅与可信设备配对</div></div>
           <div class="ctl"><label class="switch"><input type="checkbox" id="cfg_text_sync"><span class="knob"></span></label></div>
         </div>
         <div class="set-row">
@@ -2170,6 +2170,7 @@ function buildCommands() {
     { t: "打开接收目录", kw: "open folder 目录 接收", fn: () => openPath({ dir: "receive" }) },
     { t: $("console").classList.contains("open") ? "关闭运行日志" : "打开运行日志", kw: "log console 日志", fn: toggleConsole },
     { t: "打开屏幕布局", kw: "layout kvm 布局", fn: () => { switchView("layout"); } },
+    { t: "运行时诊断（新标签页）", kw: "debug 诊断 堆栈 调试 diagnostics", fn: () => window.open("api/debug", "_blank") },
     { t: "回到传输", kw: "workspace 工作台 传输", fn: () => switchView("workspace") },
     { t: "打开设置…", kw: "settings 设置", fn: openSettings },
     { t: "主题：跟随系统", kw: "theme auto 主题", fn: () => setTheme("auto") },

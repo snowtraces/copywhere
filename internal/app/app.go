@@ -25,6 +25,7 @@ import (
 	"copywhere/internal/bytesize"
 	"copywhere/internal/clip"
 	"copywhere/internal/config"
+	"copywhere/internal/diag"
 	"copywhere/internal/discovery"
 	"copywhere/internal/input"
 	"copywhere/internal/kvm"
@@ -89,9 +90,10 @@ func (w *sinkWriter) Write(p []byte) (int, error) {
 }
 
 type pendingEntry struct {
-	kind    string // "files" | "text"
+	kind    string // "files" | "text" | "rich"
 	paths   []string
 	text    string
+	rich    *clip.Rich // kind=="rich"
 	expires time.Time
 }
 
@@ -300,6 +302,7 @@ func Start(ctx context.Context, cfg *config.Config, opts Options) (*App, error) 
 		if err := transport.Server(runCtx, cfg, transport.Handlers{
 			OnFile: a.onFileReceived,
 			OnText: a.onTextReceived,
+			OnRich: a.onRichReceived,
 			// 接收方向进度推给面板（发送方向的进度由 progressWriter 上报）
 			OnProgress: func(sender, name string, sent, total int64) {
 				if a.sink != nil {
@@ -315,13 +318,35 @@ func Start(ctx context.Context, cfg *config.Config, opts Options) (*App, error) 
 	}()
 	go func() {
 		interval := time.Duration(cfg.AnnounceSec) * time.Second
-		// 节点名经 nameFn 每次广播时取当前值：面板改名下一次广播即生效
+		// 节点名经 nameFn 每次广播时取当前值：面板改名下一次广播即生效。
+		// caps 公告本机能力：对端据此决定是否发送 rich 富文本。
 		if err := discovery.RunDynamic(runCtx, cfg.DiscoveryPort, cfg.TransferPort, interval,
-			func() string { return a.cfg.NodeName }, a.selfID, a.store); err != nil {
+			func() string { return a.cfg.NodeName }, a.selfID, a.store, discovery.CapRich); err != nil {
 			log.Printf("节点发现异常退出: %v", err)
 		}
 	}()
 	go a.flushLoop(runCtx)
+	// 运行时看门狗（借鉴 MWB 的诊断思路）：关键循环周期性心跳，
+	// 超期未更新即转储全部 goroutine 堆栈到诊断环，经面板 /api/debug 可见。
+	// 预算给得宽：monitor/flush 触发的是多节点同步 IO，正常也可能耗时数分钟。
+	diag.StartWatchdog(runCtx, 10*time.Second, func(name string) time.Duration {
+		switch name {
+		case "announce":
+			// 预算跟随可配置的广播间隔，防止用户调大 AnnounceSec 后每轮误判卡死
+			if b := 3 * time.Duration(cfg.AnnounceSec) * time.Second; b > 20*time.Second {
+				return b
+			}
+			return 20 * time.Second
+		case "monitor":
+			return 5 * time.Minute
+		case "flush":
+			// 重试队列可能在同步大文件（4GB 按 256KB/s 预算即数小时），
+			// 进度写会持续续心跳；预算只是不信任"写循环本身卡死"的兜底。
+			return 30 * time.Minute
+		default:
+			return time.Minute
+		}
+	})
 
 	printBanner(cfg)
 	// 输入钩子进程级安装一次（代价极小）；回调经门禁转发给当前 KVM 服务，
@@ -392,6 +417,9 @@ func (a *App) Peers() []discovery.Peer { return a.store.Alive(a.ttl()) }
 
 // SelfName 返回本机节点显示名。
 func (a *App) SelfName() string { return a.cfg.NodeName }
+
+// WatchMode 返回剪贴板监听方式（"listener"/"viewer"/"none"），供面板诊断展示。
+func (a *App) WatchMode() string { return clip.WatchMode() }
 
 // SelfIP 返回本机展示用的首选地址。
 func (a *App) SelfIP() string { return selfIP() }
@@ -895,22 +923,45 @@ func bundleRecordPath(targets []string) string {
 }
 
 func (a *App) onTextReceived(sender, text string) {
+	a.applyReceivedText(sender, text, clip.Rich{Text: text})
+}
+
+// onRichReceived 收到带格式文本：把 HTML/RTF 与纯文本一并写回本机剪贴板，
+// 目标应用（Word/浏览器等）粘贴时自行挑选最丰富的格式（借鉴 MWB 的富文本同步）。
+func (a *App) onRichReceived(sender string, p transport.RichPayload) {
+	a.applyReceivedText(sender, p.Text, clip.Rich{Text: p.Text, HTML: p.HTML, RTF: p.RTF})
+}
+
+// applyReceivedText 是 text/rich 两条接收路径的共同落地：写回剪贴板 + 记录。
+func (a *App) applyReceivedText(sender, text string, rich clip.Rich) {
 	a.lastRecv.Store(time.Now().UnixNano())
 	if a.cfg.TextSync {
-		if err := clip.SetText(text); err != nil {
+		var err error
+		if rich.HasFormats() {
+			err = clip.SetRich(rich)
+		} else {
+			err = clip.SetText(text)
+		}
+		if err != nil {
 			log.Printf("写入剪贴板失败: %v", err)
 		} else {
 			a.ownSeq.Store(clip.Seq())
 		}
 	}
 	preview := textPreview(text)
-	log.Printf("已接收文本（来自 %s）：%q，可直接 Ctrl+V", sender, preview)
+	if rich.HasFormats() {
+		log.Printf("已接收富文本（来自 %s）：%q，可直接 Ctrl+V 保留格式", sender, preview)
+	} else {
+		log.Printf("已接收文本（来自 %s）：%q，可直接 Ctrl+V", sender, preview)
+	}
 	if a.ui != nil || a.sink != nil {
 		// 文本同步也计入传输动态，与文件记录同栏展示；
-		// Detail 携带限长的完整内容供面板做消息预览/一键复制
+		// Detail 携带限长的完整内容供面板做消息预览/一键复制。
+		// Size 用剪贴板内容字节数（rich.Size 纯文本时即 len(text)，
+		// 富文本时含 HTML/RTF），与发送端记录口径一致。
 		a.addFile(ui.FileRecord{
 			Time: time.Now(), In: true, Peer: sender,
-			Name: preview, Size: int64(len(text)), Status: "已接收",
+			Name: preview, Size: rich.Size(), Status: "已接收",
 			Detail: textDetail(text), Text: true,
 		})
 	}
@@ -955,6 +1006,18 @@ func (a *App) SendText(text string) {
 	res := a.sendTextPayload(text)
 	if a.hasRetryableFailure(res) {
 		a.pushPending(pendingEntry{kind: "text", text: text, expires: time.Now().Add(pendingTTL)})
+		log.Printf("部分节点不可达，%s 内将对在线节点重试", pendingTTL)
+	}
+}
+
+// SendRich 同步带格式文本：对公告 CapRich 的节点走 rich 通道（HTML/RTF 一并
+// 搬运），对旧版本自动降级为纯文本通道——两者都是同一批对端各自选择，
+// 一次复制即可覆盖混合版本环境。富文本不可达时同样进入重试队列。
+func (a *App) SendRich(r clip.Rich) {
+	res := a.sendRichPayload(r)
+	if a.hasRetryableFailure(res) {
+		rr := r
+		a.pushPending(pendingEntry{kind: "rich", rich: &rr, expires: time.Now().Add(pendingTTL)})
 		log.Printf("部分节点不可达，%s 内将对在线节点重试", pendingTTL)
 	}
 }
@@ -1115,6 +1178,10 @@ func (p *progressWriter) Write(b []byte) (int, error) {
 		if p.sent >= p.next {
 			p.sink.Progress(Progress{Peer: p.peer, Name: p.name, Sent: p.sent, Total: p.total})
 			p.next = p.sent + 256*1024
+			// 上传持续推进 = 发送它的循环还活着：同步发送的大文件（可达
+			// 数分钟以上）期间为 monitor / flush 续心跳，防看门狗误判卡死。
+			diag.Mark("monitor")
+			diag.Mark("flush")
 		}
 	}
 	return n, err
@@ -1149,6 +1216,68 @@ func (a *App) sendTextPayload(text string) []SendResult {
 			Detail: textDetail(text), Text: true,
 		})
 		res = append(res, r)
+	}
+	return res
+}
+
+// sendRichPayload 发送带格式文本。逐对端决定类型：公告了 CapRich 且本机
+// 确实带富格式时走 rich 通道，否则（旧版本对端 / 本来就只有纯文本）走
+// 既有 text 通道——对端看到的永远是自己能处理的内容。
+func (a *App) sendRichPayload(r clip.Rich) []SendResult {
+	preview := textPreview(r.Text)
+	detail := textDetail(r.Text)
+	var res []SendResult
+	for _, p := range a.sendablePeers() {
+		useRich := r.HasFormats() && p.Supports(discovery.CapRich)
+		var data []byte
+		typ := "text" // Type/Name 同源，避免成对散落两处失同步
+		if useRich {
+			b, err := json.Marshal(transport.RichPayload{Text: r.Text, HTML: r.HTML, RTF: r.RTF})
+			switch {
+			case err != nil:
+				log.Printf("序列化富文本失败（按纯文本发送）: %v", err)
+				useRich = false
+			case int64(len(b)) > transport.MaxRichBytes:
+				// 超限的富负载会被对端拒收：本机先降级为纯文本，保证内容可达
+				log.Printf("富文本负载 %s 超过上限，降级为纯文本发送", bytesize.Human(int64(len(b))))
+				useRich = false
+			default:
+				data = b
+				typ = "rich"
+			}
+		}
+		if !useRich {
+			data = []byte(r.Text)
+		}
+		sum := sha256.Sum256(data)
+		hdr := transport.Header{
+			V: 1, Type: typ, Name: typ, Size: int64(len(data)),
+			SHA256: hex.EncodeToString(sum[:]), Sender: a.cfg.NodeName,
+		}
+		makePayload := func() (func(io.Writer) error, error) {
+			return func(w io.Writer) error {
+				_, err := w.Write(data)
+				return err
+			}, nil
+		}
+		resp, err := a.sendToPeer(p, hdr, makePayload, transport.TimeoutFor(int64(len(data)))+15*time.Second)
+		sr := resultOf(p, preview, r.Size(), resp, err)
+		if sr.OK {
+			if useRich {
+				log.Printf("富文本（%d 字符 + 富格式）已发送到 %s", len(r.Text), sr.Peer)
+			} else {
+				log.Printf("文本（%d 字符）已发送到 %s", len(r.Text), sr.Peer)
+			}
+		}
+		// 文本同步也计入传输动态，与文件记录同栏展示；Detail 供面板预览。
+		// Size 用剪贴板内容字节数（与接收端记录口径一致），而非 JSON 上线量。
+		a.addFile(ui.FileRecord{
+			Time: time.Now(), In: false, Peer: sr.Peer,
+			Name: preview, Size: r.Size(),
+			Status: map[bool]string{true: "已发送", false: "失败"}[sr.OK],
+			Detail: detail, Text: true,
+		})
+		res = append(res, sr)
 	}
 	return res
 }
@@ -1259,6 +1388,7 @@ func (a *App) flushLoop(ctx context.Context) {
 			return
 		case <-t.C:
 		}
+		diag.Mark("flush")
 		if len(a.store.Alive(a.ttl())) == 0 {
 			continue
 		}
@@ -1278,9 +1408,15 @@ func (a *App) flushLoop(ctx context.Context) {
 				continue
 			}
 			var res []SendResult
-			if e.kind == "files" {
+			switch e.kind {
+			case "files":
 				res = a.sendFilePayload(e.paths)
-			} else {
+			case "rich":
+				if e.rich == nil { // 理论不可达：入队方恒置非 nil，防御未来构造点
+					continue
+				}
+				res = a.sendRichPayload(*e.rich)
+			default:
 				res = a.sendTextPayload(e.text)
 			}
 			if res == nil {

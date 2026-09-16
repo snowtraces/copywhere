@@ -21,6 +21,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"copywhere/internal/diag"
 )
 
 const (
@@ -85,8 +87,8 @@ var (
 
 // clipRequest 是一次投递到剪贴板线程执行的请求。
 type clipRequest struct {
-	do   func()          // 在剪贴板线程上执行，结果写入其闭包捕获的变量
-	done chan struct{}   // 关闭表示 do 已执行完毕（与调用方建立 happens-before）
+	do   func()        // 在剪贴板线程上执行，结果写入其闭包捕获的变量
+	done chan struct{} // 关闭表示 do 已执行完毕（与调用方建立 happens-before）
 }
 
 // clipReq 是串行化队列；非缓冲通道确保同一时刻只有一个请求在途。
@@ -106,6 +108,7 @@ func clipboardThread() {
 // runClipboard 在剪贴板线程上同步执行 fn，并等待其完成。
 // 通过通道收发建立 happens-before：调用方在 fn 内写入的结果，返回后可安全读取。
 func runClipboard(fn func()) {
+	diag.Incr("clip.ops")
 	r := clipRequest{do: fn, done: make(chan struct{})}
 	clipReq <- r
 	<-r.done
@@ -350,13 +353,20 @@ func ReadText() (string, error) {
 	return text, err
 }
 
-// readTextLocked 在剪贴板线程上执行读文本。
+// readTextLocked 在剪贴板线程上执行读文本（自行开关剪贴板）。
 func readTextLocked() (string, error) {
 	if err := openClipboard(); err != nil {
 		return "", err
 	}
 	defer procCloseClipboard.Call()
+	return readTextFromOpenLocked()
+}
 
+// readTextFromOpenLocked 读取 CF_UNICODETEXT，要求调用方**已经**在本线程
+// 打开剪贴板（OpenClipboard/CloseClipboard 必须同线程严格配对，且
+// CloseClipboard 不计数——嵌套调用会让内层 close 提前把剪贴板还给系统，
+// 外层后续读取全部失败）。
+func readTextFromOpenLocked() (string, error) {
 	h, ok := getClipboardData(cfUnicodeText)
 	if !ok {
 		return "", ErrNoText
@@ -409,15 +419,25 @@ func SetFiles(paths []string) error {
 	return setClipboardBuffer(cfHDROP, data)
 }
 
-// SetText 将文本写入剪贴板（CF_UNICODETEXT）。
-func SetText(s string) error {
+// utf16LEBytes 把字符串编码为 CF_UNICODETEXT 要求的 UTF-16 LE 字节
+// （含结尾双 null，即终止符本身），供 SetText 与 SetRich 共用。
+func utf16LEBytes(s string) ([]byte, error) {
 	u, err := syscall.UTF16FromString(s)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	data := make([]byte, len(u)*2)
 	for i, v := range u {
 		binary.LittleEndian.PutUint16(data[i*2:], v)
+	}
+	return data, nil
+}
+
+// SetText 将文本写入剪贴板（CF_UNICODETEXT）。
+func SetText(s string) error {
+	data, err := utf16LEBytes(s)
+	if err != nil {
+		return err
 	}
 	return setClipboardBuffer(cfUnicodeText, data)
 }

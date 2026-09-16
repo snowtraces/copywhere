@@ -63,6 +63,7 @@ func (f *fakeCore) sentSnapshot() []string {
 func (f *fakeCore) PairedWith(id string) bool     { return false }
 func (f *fakeCore) RejectedWith(id string) bool   { return false }
 func (f *fakeCore) PairedList() []trust.Paired    { return nil }
+func (f *fakeCore) WatchMode() string             { return "none" }
 func (f *fakeCore) PairWith(id string) error      { return nil }
 func (f *fakeCore) RespondPair(accept bool) error { return nil }
 func (f *fakeCore) PendingPair() (string, string, bool) {

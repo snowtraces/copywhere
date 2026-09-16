@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"copywhere/internal/diag"
 	"copywhere/internal/discovery"
 	"copywhere/internal/input"
 )
@@ -160,6 +161,9 @@ type slaveSession struct {
 }
 
 // end 结束被控会话（幂等）：可选发送 leave 并关闭连接。
+// 诊断计数与会话的回收不在此处——end 会从多个协程被调用（本连接读循环、
+// 热停用 Stop、物理输入检测），统一交给 handleSlaveConn 的 defer 单点回收，
+// 避免正常断线（socket 关闭→读错 return，不经 end）漏掉回收造成计数泄漏。
 func (sess *slaveSession) end(writeLeave bool, reason string) {
 	sess.endOnce.Do(func() {
 		if writeLeave {
@@ -483,6 +487,9 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 	sess := &slaveSession{conn: conn, w: bw}
 	s.serving = sess
 	s.mu.Unlock()
+	diag.Incr("kvm.slave.start")
+	diag.Add("kvm.slave.active", 1)
+	diag.SetSession("kvm_slave", map[string]any{"peer": hello.Name, "since": time.Now().Format("15:04:05")})
 	entryW := pickEntryMonitor(s.currentMonitors(), s.cfg.EntryMonitor).W
 	writeMsg(bw, wireMsg{T: "ok", PW: entryW})
 	log.Printf("KVM：开始被 %q 控制", hello.Name)
@@ -491,6 +498,10 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 		s.mu.Lock()
 		if s.serving == sess {
 			s.serving = nil
+			// 诊断回收单点归本 defer（end 从多协程调用且正常断线不经过它）；
+			// serving==sess 的判定保证每个会话恰好回收一次，不会双重 -1。
+			diag.Add("kvm.slave.active", -1)
+			diag.SetSession("kvm_slave", nil)
 		}
 		s.mu.Unlock()
 	}()
@@ -565,6 +576,7 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 // 开启时并入待注入位移并保证 reflow 协程在跑。
 // 切回检测在注入之后对"实际位移"执行，与直注模式时序等价。
 func (s *Service) feedMove(sess *slaveSession, dx, dy int) {
+	diag.Incr("kvm.move.recv")
 	if s.cfg.ReflowStep < 0 {
 		s.injector.MoveRel(dx, dy)
 		if s.detectLeave(sess, dx) {
@@ -804,6 +816,8 @@ func (s *Service) trySwitch(dir string) {
 	s.mu.Lock()
 	s.master = sess
 	s.mu.Unlock()
+	diag.Incr("kvm.master.start")
+	diag.SetSession("kvm_master", map[string]any{"peer": peer.Name, "dir": dir, "since": time.Now().Format("15:04:05")})
 	inputSetSuppress(true)
 	cx, cy := s.injector.CursorPos()
 	sess.virtX = float64(cx)
@@ -905,6 +919,9 @@ func (s *Service) masterSender(sess *masterSession) {
 		case <-sess.stop:
 			return
 		case m := <-sess.sendCh:
+			if m.T == "move" {
+				diag.Incr("kvm.move.sent")
+			}
 			if err := writeMsg(sess.w, m); err != nil {
 				s.endMasterSession(sess, false, "发送失败: "+err.Error())
 				return
@@ -965,6 +982,9 @@ func (s *Service) endMasterSession(sess *masterSession, sendLeave bool, reason s
 		s.mu.Lock()
 		if s.master == sess {
 			s.master = nil
+			// 与从端同构：diag 回收只由唯一的所有者执行。若 trySwitch 已把
+			// s.master 换成新会话，这里不得再用 nil 抹掉新会话的登记。
+			diag.SetSession("kvm_master", nil)
 		}
 		s.mu.Unlock()
 		s.setCooldown(1500 * time.Millisecond)

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"net"
@@ -13,10 +14,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"copywhere/internal/app"
 	"copywhere/internal/config"
+	"copywhere/internal/diag"
 	"copywhere/internal/discovery"
 	"copywhere/internal/trust"
 )
@@ -47,6 +50,8 @@ type Core interface {
 	SetTouchpadGestures(on bool)
 	// 触控板滚动输出倍率热更新（实验性，100=基准），无需重启
 	SetTouchpadSpeed(pct int)
+	// WatchMode 返回剪贴板监听方式："listener" | "viewer" | "none"（诊断展示）
+	WatchMode() string
 }
 
 // Server 是本地控制面板 HTTP 服务（仅监听 127.0.0.1）。
@@ -57,7 +62,11 @@ type Server struct {
 	cfgPath string
 	token   string
 	url     string
+	port    int
 	srv     *http.Server
+
+	stackMu       sync.Mutex // 栈转储限流状态
+	lastStackDump time.Time
 }
 
 // peerJSON 是 discovery.Peer 的 JSON 视图（附带上一次活跃的相对时间与配对状态）。
@@ -85,6 +94,7 @@ type stateJSON struct {
 	KVMTouchpad bool   `json:"kvm_touchpad_gestures"`
 	KVMLeft     string `json:"kvm_left"`
 	KVMRight    string `json:"kvm_right"`
+	WatchMode   string `json:"watch_mode"` // 剪贴板监听方式：listener | viewer | none
 }
 
 // NewServer 创建面板服务：生成访问 token 并绑定端口。
@@ -111,6 +121,7 @@ func NewServer(core Core, cfg *config.Config, cfgPath string, bus *Bus) (*Server
 		return nil, fmt.Errorf("面板监听失败: %w", err)
 	}
 	s.url = fmt.Sprintf("http://127.0.0.1:%d/?key=%s", ln.Addr().(*net.TCPAddr).Port, token)
+	s.port = ln.Addr().(*net.TCPAddr).Port
 	s.srv = &http.Server{Handler: s.routes(), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		if err := s.srv.Serve(ln); err != nil && err != http.ErrServerClosed {
@@ -169,6 +180,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/paired", s.apiPairedList)
 	mux.HandleFunc("POST /api/unpair", s.apiUnpair)
 	mux.HandleFunc("GET /api/file", s.apiFile)
+	mux.HandleFunc("GET /api/debug", s.apiDebug)
+	mux.HandleFunc("POST /api/debug/stack", s.apiDebugStack)
 	mux.HandleFunc("GET /", s.apiIndex)
 	return s.withAuth(mux)
 }
@@ -241,6 +254,7 @@ func (s *Server) stateView() stateJSON {
 		KVMTouchpad: s.cfg.KVMTouchpadOn(),
 		KVMLeft:     s.cfg.KVMLeft,
 		KVMRight:    s.cfg.KVMRight,
+		WatchMode:   s.core.WatchMode(),
 	}
 }
 
@@ -261,6 +275,61 @@ func (s *Server) apiLogs(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apiRecords(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"records": s.bus.Files()})
+}
+
+// apiDebug 输出运行时诊断快照：原子计数器、心跳年龄、活动会话、
+// 环形诊断日志，外加节点表与关键配置摘要。用于排查"活着但不干活"类问题。
+// 浏览器地址栏直接访问（HTML 请求）时渲染成自动刷新的页面，
+// 面板与 API 客户端（默认）拿到 JSON。
+func (s *Server) apiDebug(w http.ResponseWriter, r *http.Request) {
+	payload := map[string]any{
+		"version":     app.Version,
+		"snapshot":    diag.Snap(),
+		"peers":       s.peersView(),
+		"state":       s.stateView(),
+		"receive_dir": s.cfg.ReceiveDir,
+		"config_path": s.cfgPath,
+		"listen": map[string]any{
+			"discovery_udp": s.cfg.DiscoveryPort,
+			"transfer_tcp":  s.cfg.TransferPort,
+			"kvm_tcp":       s.cfg.KVMPort,
+			"panel_tcp":     fmt.Sprintf("127.0.0.1:%d", s.port),
+		},
+	}
+	if strings.Contains(r.Header.Get("Accept"), "text/html") {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		b, err := json.MarshalIndent(payload, "", "  ")
+		view := []byte("序列化诊断快照失败: " + fmt.Sprint(err))
+		if err == nil {
+			// 显式转义后才进 <pre>：不依赖 json.Marshal 的隐式 HTML 转义
+			// （快照含对端可控的节点名等文本，防存储型 XSS）。
+			view = []byte(html.EscapeString(string(b)))
+		}
+		fmt.Fprintf(w, `<!doctype html><meta charset="utf-8"><title>copywhere 诊断</title>
+<meta http-equiv="refresh" content="3"><style>body{background:#111827;color:#e5e7eb;font:13px/1.6 ui-monospace,Consolas,monospace;padding:24px}pre{white-space:pre-wrap}button{background:#2563eb;color:#fff;border:0;border-radius:6px;padding:4px 12px;cursor:pointer;font:inherit}</style>
+<body><h3 style="color:#93c5fd">copywhere 运行时诊断（3 秒自动刷新）
+<a href="/" style="color:#6b7280;font-size:12px;margin-left:12px">返回面板</a>
+<button style="margin-left:12px" onclick="fetch('/api/debug/stack',{method:'POST'}).then(()=>setTimeout(()=>location.reload(),300))">转储堆栈</button></h3><pre>%s</pre>`, view)
+		return
+	}
+	writeJSON(w, payload)
+}
+
+// apiDebugStack 立即转储全部 goroutine 堆栈到诊断环并返回快照。
+// 面板「转储堆栈」按钮调用，是定位卡死/死锁的第一手材料。
+// 全量栈转储开销大（1MB 缓冲 + 环写），限流 2 秒一次防误触刷爆诊断环。
+func (s *Server) apiDebugStack(w http.ResponseWriter, r *http.Request) {
+	s.stackMu.Lock()
+	if time.Since(s.lastStackDump) < 2*time.Second {
+		s.stackMu.Unlock()
+		writeJSON(w, map[string]any{"ok": false, "error": "转储过于频繁，请 2 秒后再试", "dumped": 0})
+		return
+	}
+	s.lastStackDump = time.Now()
+	s.stackMu.Unlock()
+	n := diag.DumpStacks()
+	writeJSON(w, map[string]any{"ok": true, "dumped": n, "snapshot": diag.Snap()})
 }
 
 func (s *Server) apiGetConfig(w http.ResponseWriter, r *http.Request) {

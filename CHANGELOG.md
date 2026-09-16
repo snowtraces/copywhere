@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **新增**：**富文本剪贴板同步**——复制 Word/网页/邮件等带格式内容时，
+  HTML Format 与 Rich Text Format 随纯文本一并搬运，对端 Ctrl+V 粘贴保留
+  字体、颜色与排版（借鉴 MouseWithoutBorders 的 RTF 同步并扩展为三格式并存）。
+  通过节点公告的 `caps:["rich"]` 做能力协商，对旧版本自动降级为纯文本通道，
+  混合版本环境无需统一升级。单次富负载上限 16MB（超限自动降级纯文本）。
+  两端写入前均做魔数轻校验（HTML 须 `Version:` 头、RTF 须 `{\rtf` 开头），
+  畸形内容只保留纯文本；README「已知限制」注明富文本写回剪贴板的信任边界。
+- **改进**：**剪贴板检测改为事件驱动**——用 `AddClipboardFormatListener` 注册
+  消息专用窗口，复制动作毫秒级即触发同步（此前只有 400ms 轮询）。安装失败
+  自动回退旧式 `SetClipboardViewer` 链，再不行保留轮询兜底，三条路径汇入同一
+  检测循环；面板 `api/status` 新增 `watch_mode` 字段可查当前生效方式。
+- **新增**：**运行时诊断**（`internal/diag` + 面板 `/api/debug`）——剪贴板事件、
+  收发字节与连接、KVM 会话、发现公告等关键路径全部原子打点，连同环形日志、
+  协程/堆内存与心跳年龄提供 JSON 快照与自动刷新的网页视图；announce /
+  monitor / flush 主循环按各自预算由 watchdog 判定卡死并自动转储协程栈一次，
+  用于定位"同步突然不动了"这类只有现场才有价值的故障。
 - **新增（实验性）**：触控板双指滚动跨屏识别——针对 PTP 双指滚动属于
   `PT_GESTURE2` 指针手势、不经低级钩子/Raw Input 而无法跨屏的已知问题，
   绕过指针层直接旁路监听触控板 HID 原始触点（Digitizer Raw Input +

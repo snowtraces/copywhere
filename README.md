@@ -24,8 +24,9 @@
 - **图形界面（推荐）**：双击 exe 即得——系统托盘 + 浏览器控制面板，对话式传输工作台、
   全局拖拽投送、屏幕布局（KVM）、Ctrl+K 命令面板、深浅双主题，SSE 实时刷新，
   仅监听 `127.0.0.1`
-- **剪贴板全类型同步**：文件（CF_HDROP）、文本、截图（Win+Shift+S / PrintScreen
-  直接写入剪贴板的图片）自动同步；接收端自动回贴
+- **剪贴板全类型同步**：文件（CF_HDROP）、文本（含 HTML/RTF 富格式，跨机粘贴
+  保留样式）、截图（Win+Shift+S / PrintScreen 直接写入剪贴板的图片）自动同步；
+  接收端自动回贴。事件驱动检测（`AddClipboardFormatListener`，毫秒级）+ 轮询兜底
 - **多文件 / 文件夹**：自动打包 zip 传输，对端**自动解包**后回贴原内容（文件夹仍是
   文件夹、多文件仍是多文件）；用户亲手发送的 zip 不误解包
 - **手动发送**：`copywhere send` 或面板拖入文件不受阈值限制（单文件上限 4GB）
@@ -242,8 +243,13 @@ copywhere — 局域网剪贴板/文件自动同步工具
 - **传输**：TCP 单行 JSON 头 + 原始负载 + JSON 应答；sha256 校验、临时文件原子改名、
   独立接收子目录；鉴权只认配对令牌（常数时间比较），配对经人工确认、应答沿原连接
   返回不可伪造。
-- **剪贴板**：400ms 轮询序号变化，依次识别 文件 → 文本 → 截图（PNG / CF_DIB 就地
-  转 PNG），本进程写入跳过 + 接收后 3 秒冷却期双重防回环。
+- **剪贴板**：`AddClipboardFormatListener` 事件驱动（消息专用窗口收到
+  `WM_CLIPBOARDUPDATE` 即唤醒，毫秒级），400ms 轮询序号作降级兜底；依次识别
+  文件 → 文本（含 HTML/RTF 富格式一并搬运，对旧版本自动降级纯文本）→ 截图
+  （PNG / CF_DIB 就地转 PNG），本进程写入跳过 + 接收后 3 秒冷却期双重防回环。
+- **运行时诊断**：主循环节点、传输/KVM 计数、会话状态与环形日志汇聚为面板
+  `/api/debug` 快照；watchdog 按各循环预算判定卡死并自动转储协程栈，
+  便于定位"同步不动了"这类现场问题（详见 docs/protocol.md 第 5 节）。
 
 完整的报文格式、配对时序、KVM 消息协议与容错行为见
 [docs/protocol.md](docs/protocol.md)。
@@ -253,10 +259,12 @@ copywhere — 局域网剪贴板/文件自动同步工具
 ```
 cmd/copywhere/        CLI 入口（子命令、单实例互斥、托盘启动）
 internal/app/         组装、发送/重试、zip 打包/自动解包、截图落盘
-internal/clip/        Windows 剪贴板读写（CF_HDROP / CF_UNICODETEXT / PNG / CF_DIB）
+internal/clip/        Windows 剪贴板读写与事件监听（CF_HDROP / CF_UNICODETEXT /
+                      HTML Format / RTF / PNG / CF_DIB）
 internal/config/      配置
-internal/discovery/   UDP 广播发现与节点表（指纹、会话、多 IP 合并与优选）
-internal/monitor/     剪贴板轮询监控与防回环
+internal/diag/        运行时诊断（环形日志、事件计数、心跳 watchdog、栈转储）
+internal/discovery/   UDP 广播发现与节点表（指纹、会话、多 IP 合并与优选、能力协商）
+internal/monitor/     剪贴板监控（事件驱动 + 轮询兜底）与防回环
 internal/transport/   TCP 传输协议（服务端/客户端）
 internal/trust/       配对令牌信任库（peers.json，签发/校验/解除）
 internal/kvm/         鼠标键盘跨屏（软 KVM）
@@ -293,6 +301,10 @@ gofmt -l .   # 输出应为空
 ## 已知限制
 
 - 仅支持 Windows（剪贴板与输入注入使用 Win32 API）；协议与发现层是跨平台的。
+- **富文本同步风险**：开启文本同步时，对端的 HTML/RTF 会被写回本机剪贴板，
+  Word/浏览器粘贴时会解析这些格式。copywhere 对写回内容做魔数轻校验（不符即
+  丢弃该格式），但仍建议**只与可信设备配对**——配对令牌 + 人工确认是唯一准入
+  边界。不确定时可在面板关闭「文本同步」。
 - 自动发现依赖 UDP 广播：跨路由/跨 VLAN 或开启了 AP 隔离的网段无法互相发现
   （可手动 `send`）。
 - `run` 需要在交互式用户会话中运行（写剪贴板的要求），不适合作为系统服务。
