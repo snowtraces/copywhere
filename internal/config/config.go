@@ -29,7 +29,7 @@ type Config struct {
 	KVMEntryMon   *int   `json:"kvm_entry_monitor,omitempty"`     // 被控入口显示器下标（缺省 -1=主显示器）
 	KVMMoveMs     int    `json:"kvm_move_interval_ms"`            // 主控移动合拍间隔（ms）；0=默认(8)，>0 自定义
 	KVMReflowMs   int    `json:"kvm_reflow_step_ms"`              // 被控重排注入节拍（ms）；0=默认(4)，-1=关闭直注，>0 自定义
-	KVMSpeedPct   int    `json:"kvm_speed_percent"`               // 本机作为主控的位移手调系数百分比（100=1.0x；<=0 视为 100）
+	KVMSpeedPct   int    `json:"kvm_speed_percent"`               // 本机作为主控的位移速度调节百分比（100=1.0x；<=0 视为 100）
 	KVMTouchpad   *bool  `json:"kvm_touchpad_gestures,omitempty"` // 实验性：触控板双指滚动跨屏识别（缺省关闭）
 	KVMTouchSpd   int    `json:"kvm_touchpad_speed"`              // 触控板滚动输出倍率百分比（100=基准；<=0 视为 100）
 	WebPort       int    `json:"web_port"`                        // GUI 面板端口（gui 命令；0=默认，负数=随机）
@@ -61,9 +61,7 @@ func (c *Config) KVMReflowStep() time.Duration {
 	return time.Duration(c.KVMReflowMs) * time.Millisecond
 }
 
-// KVMSpeedFactor 返回本机作为主控的位移手调系数（kvm_speed_percent/100，
-// <=0 视为 1.0）。用于标定"远程光标与本机快慢不一致"：每台机器各自设一档，
-// 双向可分别校正、互不干扰（详见 kvm 包 trySwitch 注释）。
+// KVMSpeedFactor 返回本机作为主控的位移速度手调百分比（100=1.0x；<=0 视为 100）。
 func (c *Config) KVMSpeedFactor() int {
 	if c.KVMSpeedPct <= 0 {
 		return 100

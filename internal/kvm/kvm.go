@@ -37,17 +37,21 @@ const (
 	// 网络成批到达时约 horizon 拍内追平，空闲时以最小步继续细分平滑。
 	reflowHorizon = 3
 
-	edgePushPixels   = 16 // 本地边缘推动判定：累计推动像素
-	pushGapReset     = 600 * time.Millisecond
-	edgeAdjacency    = 2  // 判断两显示器相邻的坐标容差（像素）
-	edgeBand         = 2  // 光标距边缘多少像素内算"贴边"
-	armPixels        = 30 // 进入副机后深入多少像素才允许触发切回
-	leavePushPixels  = 16 // 切回判定：贴边累计推动像素
-	pushGapLeave     = 600 * time.Millisecond
-	entryMargin      = 2 // 入口位置距共享边缘的像素
-	pingInterval     = 1 * time.Second
-	readTimeout      = 5 * time.Second
-	unconfigLogEvery = 5 * time.Second // 未配置邻居提示的节流间隔
+	edgePushPixels     = 8 // 本地边缘推动判定：累计推动像素（从 16 优化为 8，轻推即过）
+	pushGapReset       = 600 * time.Millisecond
+	edgeAdjacency      = 2 // 判断两显示器相邻的坐标容差（像素）
+	edgeBand           = 6 // 光标距边缘多少像素内算"贴边"（加大到 6px 适配高分屏与斜推）
+	armPixels          = 6 // 进入副机后深入多少像素才允许触发切回（从 30 优化为 6，防止死锁）
+	leavePushPixels    = 8 // 切回判定：贴边累计推动像素（从 16 优化为 8，轻推即回）
+	pushGapLeave       = 600 * time.Millisecond
+	cooldownSwitch     = 200 * time.Millisecond // 切换成功/控制结束后的防抖短冷却（消除 1.5 秒硬性冻结）
+	cooldownFailed     = 1 * time.Second        // 连接/握手失败或对端不在线的冷却
+	entryMargin        = 2                      // 入口位置距共享边缘的像素
+	minMonitorSpan     = 100                    // 退化显示器矩形过滤阈值（幽灵/虚拟显示器会枚举出 1x1 占位项）
+	umovePushThreshold = 280.0                  // Universal 通道贴边推回切回阈值（0..65535 空间，约占 1080p 的 8px）
+	pingInterval       = 1 * time.Second
+	readTimeout        = 5 * time.Second
+	unconfigLogEvery   = 5 * time.Second // 未配置邻居提示的节流间隔
 )
 
 // Config 是 KVM 的配置（来自 config.json）。
@@ -62,24 +66,22 @@ type Config struct {
 	// ReflowStep 被控端重排注入节拍；<=0 使用 DefaultReflowStep，
 	// 显式传 <0 的哨兵值（-1）关闭重排、恢复逐包直注。
 	ReflowStep time.Duration
-	// SpeedPercent 本机作为主控时施加到发送位移的百分比手调系数（100=1.0x，
-	// <=0 视为 100）。这是"远程光标与本机快慢不一致"的方案 C 修正：本地光标
-	// 速度 = Raw 计数 ×(本机滑块倍率×加速曲线)，而 SendInput 注入不走该硬件
-	// 管线，两者之差是每台机器各自、不随主/被角色翻转的常数；自动折算读不准
-	// （已多次证伪），故交给用户按诊断日志各端一次标定：A→B 偏慢调高 A 的
-	// 百分比，B→A 偏慢调高 B 的百分比，互不干扰。
-	SpeedPercent int
 	// TokenForPeer 返回对端签发给本机的配对令牌（本机作为主控连接它时使用）；
 	// 未配对返回 false，回退共享 token。
 	TokenForPeer func(id string) (string, bool)
 	// PairTokenFor 返回本机签发给指定节点的配对令牌（被控端校验对端 hello 用）；
 	// 未配对返回 false，回退共享 token。
 	PairTokenFor func(id string) (string, bool)
+	// SpeedPercent 本机作为主控的位移速度调节百分比（100=基准 1.0x；<=0 视为 100）。
+	SpeedPercent int
 }
 
 // Injector 是输入注入接口（生产环境为 input.DefaultInjector，测试用假实现）。
 type Injector interface {
 	MoveAbs(x, y int)
+	// MoveNorm 以 Universal 归一化坐标（0..65535，铺满整个虚拟桌面）注入移动。
+	// 相对通道的替代品（B4）：绝对坐标不经接收端的指针速度/加速管线。
+	MoveNorm(nx, ny int)
 	MoveRel(dx, dy int)
 	Button(down bool, button int)
 	Wheel(delta int32, horizontal bool)
@@ -107,15 +109,99 @@ type wireMsg struct {
 	Y     float64 `json:"y,omitempty"` // 主控机光标的垂直比例（用于入口位置）
 	DX    int     `json:"dx,omitempty"`
 	DY    int     `json:"dy,omitempty"`
-	B     int     `json:"b,omitempty"`
-	D     int     `json:"d,omitempty"`
-	Down  bool    `json:"down,omitempty"`
-	H     bool    `json:"h,omitempty"`
-	VK    uint32  `json:"vk,omitempty"`
-	Scan  uint32  `json:"scan,omitempty"`
-	Ext   bool    `json:"ext,omitempty"`
-	Msg   string  `json:"msg,omitempty"`
-	PW    int     `json:"pw,omitempty"` // 被控端入口显示器物理宽，供主控折算缩放比
+	// AX/AY 是 Universal 通道的坐标载荷（B4，仅 T=="umove" 时有意义）：
+	// 主控光标相对**切换瞬间锚点**的偏移，按主控"离场所属屏"的宽/高归一到
+	// ±65535（1px ≈ 34 单位，取整误差远小于 1/50 像素）。符号与主控自己的
+	// 虚拟桌面一致（右为 +X、下为 +Y），两端都不需要知道对方分辨率。
+	// 用有符号数而非 0..65535 无符号：越过边缘后的"过冲"是副机贴边检测所需
+	// 的信号量，必须能表达锚点之外的位置（MWB 接收端线性外推同理）。
+	AX int `json:"ax,omitempty"`
+	AY int `json:"ay,omitempty"`
+	// NL/NR/NU/ND 是被控端回报的"可达带"（T=="band"，B4）：从入口点沿左/右/
+	// 上/下在副机**入口显示器**内可达的归一化偏移（与 AX/AY 同一坐标系）。
+	// 可达范围=入口屏而非整个桌面：多屏副机上按桌面计会让光标越界漫游到
+	// 邻屏、钉在包围盒角上（真机事故：副屏左上角冻结）；与 MWB"一对机器
+	// 一块屏"的矩阵映射一致。主控端据此钳制虚拟位置，消除贴边发散与反向
+	// 倒带；旧版对端不发送此消息。
+	NL int `json:"nl,omitempty"`
+	NR int `json:"nr,omitempty"`
+	NU int `json:"nu,omitempty"`
+	ND int `json:"nd,omitempty"`
+	// EX/EY/Mons 是 band 消息的几何附录（B4 修正）：入口点（吸附映射的原点）
+	// 与**会话可达屏（入口显示器）**矩形。主控端据此把 Universal 虚拟位置吸附
+	// 进"可达屏 ± 外推余量"——几何异常（旧版带/幽灵屏）时兜底防光标离屏：
+	// 桌面包围盒里的多屏"空洞"不属于任何显示器，光标被推进去会不可见、钉在
+	// 包围盒角上（真机事故：副屏左上角冻结）。
+	// 旧版对端不带这些字段（JSON 缺省即零值/nil），主控自动退回包围盒钳位。
+	EX   int        `json:"ex,omitempty"`
+	EY   int        `json:"ey,omitempty"`
+	Mons []wireRect `json:"mons,omitempty"`
+	// DUX/DUY/DUW/DUH 是 band 的**桌面包围盒**附录（诊断用，B4 现场数据采集）：
+	// 被控端全部显示器的并集。会话可达屏只是其中一块，光有 Mons 无法还原
+	// "副屏在主屏上方/侧方"这类多屏布局——真机上判断"光标为何出现在另一块屏
+	// 的角上"必须同时看到包围盒与逐屏矩形，否则日志里两端各说各话、对不上。
+	// 主控端不用它做任何决策（可达范围仍是入口屏），旧版对端忽略即可。
+	DUX int `json:"dux,omitempty"`
+	DUY int `json:"duy,omitempty"`
+	DUW int `json:"duw,omitempty"`
+	DUH int `json:"duh,omitempty"`
+	// RawMons 是 band 的原始逐屏矩形附录（诊断用）：**未经退化过滤**的
+	// Monitors() 结果。幽灵/虚拟适配器枚举出的 1x1 矩形会被 validMonitors
+	// 静默过滤掉，一旦过滤规则误伤真实显示器（入口选错屏），日志里就完全
+	// 看不出来——这里保留过滤前的原样，配合 Mons 即可判断"哪块屏被丢了"。
+	RawMons []wireRect `json:"rawmons,omitempty"`
+	// EIdx 是本次会话选中的入口屏在 RawMons 中的下标 +1（诊断用；0=未回报，
+	// JSON omitempty 无法区分"下标 0"与"缺省"，故整体偏移一位）。
+	// 配合 EntryMonitor 配置即可确认"入口屏是不是选错了那块"。
+	EIdx   int     `json:"eidx,omitempty"`
+	B      int     `json:"b,omitempty"`
+	D      int     `json:"d,omitempty"`
+	Down   bool    `json:"down,omitempty"`
+	H      bool    `json:"h,omitempty"`
+	VK     uint32  `json:"vk,omitempty"`
+	Scan   uint32  `json:"scan,omitempty"`
+	Ext    bool    `json:"ext,omitempty"`
+	Msg    string  `json:"msg,omitempty"`
+	PW     int     `json:"pw,omitempty"`     // 被控端入口显示器物理宽，供主控折算缩放比
+	PH     int     `json:"ph,omitempty"`     // 被控端入口显示器物理高（并集吸附的归一化基准）
+	PScale float64 `json:"pscale,omitempty"` // 被控端入口显示器实际设置缩放比 (例如 1.0, 1.25, 1.5, 2.0)
+	MW     int     `json:"mw,omitempty"`     // 主控端当前显示器物理宽
+	MH     int     `json:"mh,omitempty"`     // 主控端当前显示器物理高
+	MScale float64 `json:"mscale,omitempty"` // 主控端当前显示器实际设置缩放比
+	// Abs 是握手能力位：主控在 hello 里声明"我能发 umove"，被控在 ok 里回
+	// "我也支持"。双方都为 true 时本会话走 Universal 绝对坐标通道。
+	// 旧版本对端不带此字段（JSON 缺省即 false），自动退回相对位移通道。
+	Abs bool `json:"abs,omitempty"`
+}
+
+// wireRect 是线上传输的显示器矩形（band 消息的 Mons，被控端虚拟桌面像素）。
+type wireRect struct {
+	X int `json:"x"`
+	Y int `json:"y"`
+	W int `json:"w"`
+	H int `json:"h"`
+}
+
+func wireRects(mons []input.Rect) []wireRect {
+	if len(mons) == 0 {
+		return nil
+	}
+	out := make([]wireRect, 0, len(mons))
+	for _, m := range mons {
+		out = append(out, wireRect{X: m.X, Y: m.Y, W: m.W, H: m.H})
+	}
+	return out
+}
+
+func wireToRects(ws []wireRect) []input.Rect {
+	if len(ws) == 0 {
+		return nil
+	}
+	out := make([]input.Rect, 0, len(ws))
+	for _, w := range ws {
+		out = append(out, input.Rect{X: w.X, Y: w.Y, W: w.W, H: w.H})
+	}
+	return out
 }
 
 type masterSession struct {
@@ -124,16 +210,26 @@ type masterSession struct {
 	sendCh   chan wireMsg
 	virtX    float64 // 主控机虚拟桌面内未裁剪光标位置（像素）
 	virtY    float64
-	lastX    float64 // 上次发送时的位置（差值基准）
+	lastX    float64 // 上次发送时的位置（差值基准，相对通道用）
 	lastY    float64
 	lastSent time.Time
-	// 速度补偿系数在 OnMouseMove 锁内实时读 s.cfg.SpeedPercent（面板热生效），
-	// 不快照到会话；此处只留亚像素余数结转字段与对端入口宽（诊断日志用）。
-	slavePW  int // 被控端入口显示器物理宽（0=旧版对端）
-	gainResX float64
-	gainResY float64
-	stop     chan struct{}
-	stopOnce sync.Once
+	// abs=true：握手协商成功，本会话走 Universal 通道（B4 原生 MWB 0..65535 模型）。
+	abs       bool
+	dir       string  // 切入方向 ("right" / "left")
+	normX     float64 // 当前在受控端屏幕上的绝对归一化坐标 (0..65535)
+	normY     float64 // 当前在受控端屏幕上的绝对归一化坐标 (0..65535)
+	anchorW   float64 // 锚点所属显示器的宽（物理位移映射到 65535 的基准）
+	anchorH   float64 // 锚点所属显示器的高
+	baseGainX float64 // 跨分辨率与实际设置缩放比计算出的静态基准 X 增益（未乘 speedPct）
+	baseGainY float64 // 跨分辨率与实际设置缩放比计算出的静态基准 Y 增益
+	gainX     float64 // 叠加速度微调百分比后的最终 X 轴增益
+	gainY     float64 // 叠加速度微调百分比后的最终 Y 轴增益
+	resX      float64 // 亚像素位移结转余数（防微小位移截断丢失）
+	resY      float64 // 亚像素位移结转余数
+	slavePW   int     // 被控端入口显示器物理宽
+	slavePH   int     // 被控端入口显示器物理高
+	stop      chan struct{}
+	stopOnce  sync.Once
 }
 
 type slaveSession struct {
@@ -141,7 +237,8 @@ type slaveSession struct {
 	w          *bufio.Writer
 	dir        string     // "right": 主控机在我左侧；"left": 主控机在我右侧
 	entry      input.Rect // 入口显示器
-	entryX     int        // 入口放置的光标 X（用于计算深入距离）
+	entryX     int        // 入口放置的光标 X
+	entryY     int        // 入口放置的光标 Y
 	entryTime  time.Time
 	armed      bool
 	maxDist    int // 距入口位置的最大深入距离
@@ -149,15 +246,47 @@ type slaveSession struct {
 	pushLast   time.Time
 	leaveEdges []input.Rect // 主控方向上暴露的边缘（切回触发区）
 	endOnce    sync.Once
+	abs        bool // 本会话走 Universal 通道（握手协商结果，会话内不切换）
+	umoveN     int
+	lastUAX    int
+	lastUAY    int
+	hasLastU   bool
 
-	// 重排（reflow）注入：主控端把移动合拍为较大的累计位移、且经 TCP 成批到达，
-	// 若逐包直注，副机光标会"一格一格跳"且忽快忽慢。这里把收到的位移并入
-	// pending，由独立协程按固定节拍以恒定步长拆步注入，兼顾平滑与追平。
+	// 重排（reflow）注入：仅相对通道使用
 	rfMu    sync.Mutex
 	rfDX    int           // 待注入的累计 X 位移
 	rfDY    int           // 待注入的累计 Y 位移
 	rfStop  chan struct{} // 非 nil 表示 reflow 协程在运行
 	rfStopO sync.Once
+}
+
+// diagRing 诊断事件环容量：3s 节流下约 45 秒的现场，够定位一次会话。
+const diagRing = 16
+
+// diagPoint 一次会话内的关键数值快照（主控/被控两端共用同一结构，字段按
+// 通道语义填写；主控端的 Raw* 填"本次发送值折算回副机像素"的预期落点）。
+type diagPoint struct {
+	At    string  `json:"at"`
+	N     int     `json:"n"`    // 会话内第几个移动包
+	VirtX float64 `json:"vx"`   // 主控虚拟位置（主控像素，锚点系）；被控端填 0
+	VirtY float64 `json:"vy"`   // 同上
+	AX    int     `json:"ax"`   // 发出（主控）/收到（被控）的归一化偏移
+	AY    int     `json:"ay"`   // 同上
+	RawX  int     `json:"rawx"` // 未钳位展开后的副机像素目标
+	RawY  int     `json:"rawy"` // 同上
+	CurX  int     `json:"curx"` // 真实光标位置
+	CurY  int     `json:"cury"` // 同上
+	Move  int     `json:"move"` // 距上次快照，真实光标移动了多少（0=冻结）
+	Flags string  `json:"flags,omitempty"`
+}
+
+// pushDiag 把快照压入环（保留最近 diagRing 条，旧在前）。
+func pushDiag(ring []diagPoint, p diagPoint) []diagPoint {
+	ring = append(ring, p)
+	if len(ring) > diagRing {
+		ring = ring[len(ring)-diagRing:]
+	}
+	return ring
 }
 
 // end 结束被控会话（幂等）：可选发送 leave 并关闭连接。
@@ -171,7 +300,11 @@ func (sess *slaveSession) end(writeLeave bool, reason string) {
 			writeMsg(sess.w, wireMsg{T: "leave"})
 		}
 		sess.conn.Close()
-		log.Printf("KVM：被控会话结束（%s）", reason)
+		if sess.abs && sess.umoveN > 0 {
+			log.Printf("KVM：被控会话结束（%s，共处理 %d 个 Universal 移动包）", reason, sess.umoveN)
+		} else {
+			log.Printf("KVM：被控会话结束（%s）", reason)
+		}
 	})
 }
 
@@ -199,8 +332,9 @@ type Service struct {
 
 	// 显示器布局缓存：由后台协程定期刷新。钩子线程只读缓存，
 	// 绝不能在持有 s.mu 时做可能阻塞的事情（曾因此死锁拖垮全系统鼠标）。
-	monsMu sync.Mutex
-	mons   []input.Rect
+	monsMu    sync.Mutex
+	mons      []input.Rect
+	monsValid []input.Rect // mons 过滤退化矩形后的列表（注入吸附用，静默）
 }
 
 // NewService 创建 KVM 服务。鉴权只认配对令牌（Config.PairTokenFor / TokenForPeer）。
@@ -211,7 +345,9 @@ func NewService(cfg Config, nodeName string, store *discovery.Store,
 	}
 	cfg.MoveInterval = normalizeMoveInterval(cfg.MoveInterval)
 	cfg.ReflowStep = normalizeReflowStep(cfg.ReflowStep)
-	cfg.SpeedPercent = normalizeSpeedPercent(cfg.SpeedPercent)
+	if cfg.SpeedPercent <= 0 {
+		cfg.SpeedPercent = 100
+	}
 	return &Service{
 		cfg: cfg, nodeName: nodeName,
 		store: store, ttl: ttl, injector: injector,
@@ -229,16 +365,24 @@ func (s *Service) UpdateNeighbors(left, right string) {
 	log.Printf("KVM 邻居已更新：左邻 %q，右邻 %q", left, right)
 }
 
-// UpdateTunables 热更新手感参数（合拍间隔/重排节拍/速度系数），无需重启：
-// 主控移动在下一帧、重排在下一拍、系数在下一次移动即生效（均为锁内读取）。
-func (s *Service) UpdateTunables(moveInterval, reflowStep time.Duration, speedPercent int) {
+// UpdateTunables 热更新手感参数（合拍间隔/重排节拍/速度调节百分比），无需重启：
+// 主控移动在下一帧、重排在下一拍即生效（均为锁内读取）。
+func (s *Service) UpdateTunables(moveInterval, reflowStep time.Duration, speedPct int) {
 	s.mu.Lock()
 	s.cfg.MoveInterval = normalizeMoveInterval(moveInterval)
 	s.cfg.ReflowStep = normalizeReflowStep(reflowStep)
-	s.cfg.SpeedPercent = normalizeSpeedPercent(speedPercent)
+	if speedPct <= 0 {
+		speedPct = 100
+	}
+	s.cfg.SpeedPercent = speedPct
+	if m := s.master; m != nil {
+		userFactor := float64(speedPct) / 100.0
+		m.gainX = clampFloat(m.baseGainX*userFactor, 0.2, 5.0)
+		m.gainY = clampFloat(m.baseGainY*userFactor, 0.2, 5.0)
+	}
 	s.mu.Unlock()
-	log.Printf("KVM 手感参数已热更新：合拍 %v，重排 %v，速度系数 %d%%",
-		s.cfg.MoveInterval, s.cfg.ReflowStep, s.cfg.SpeedPercent)
+	log.Printf("KVM 手感参数已热更新：合拍 %v，重排 %v，速度微调 %d%%",
+		s.cfg.MoveInterval, s.cfg.ReflowStep, speedPct)
 }
 
 // Stop 热停用 KVM：同步关闭被控端监听（保证 Stop 返回后端口可立即重新
@@ -263,7 +407,7 @@ func (s *Service) Stop() {
 	}
 }
 
-// currentMoveInterval / currentReflowStep / currentSpeedPercent 在锁内读参数。
+// currentMoveInterval / currentReflowStep 在锁内读参数。
 func (s *Service) currentMoveInterval() time.Duration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -274,12 +418,6 @@ func (s *Service) currentReflowStep() time.Duration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.cfg.ReflowStep
-}
-
-func (s *Service) currentSpeedPercent() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.cfg.SpeedPercent
 }
 
 func normalizeMoveInterval(d time.Duration) time.Duration {
@@ -295,13 +433,6 @@ func normalizeReflowStep(d time.Duration) time.Duration {
 		return DefaultReflowStep
 	}
 	return d
-}
-
-func normalizeSpeedPercent(p int) int {
-	if p <= 0 {
-		return 100
-	}
-	return p
 }
 
 // inputSetSuppress 包一层避免各处直接依赖 input 包细节。
@@ -379,10 +510,26 @@ func (s *Service) currentMonitors() []input.Rect {
 	return s.mons
 }
 
+// currentValidMonitors 同 currentMonitors，但已过滤退化矩形（注入吸附用）。
+// 缓存未就绪时现场过滤，绝不把幽灵矩形当作吸附目标。
+func (s *Service) currentValidMonitors() []input.Rect {
+	s.monsMu.Lock()
+	mons, valid := s.mons, s.monsValid
+	s.monsMu.Unlock()
+	if mons == nil {
+		return []input.Rect{{X: 0, Y: 0, W: 1920, H: 1080, Primary: true}}
+	}
+	if len(valid) > 0 {
+		return valid
+	}
+	return filterDegenerate(mons)
+}
+
 func (s *Service) refreshMonitors() {
 	if m := s.injector.Monitors(); len(m) > 0 {
 		s.monsMu.Lock()
 		s.mons = m
+		s.monsValid = filterDegenerate(m) // 静默：周期刷新不能刷日志
 		s.monsMu.Unlock()
 	}
 }
@@ -422,6 +569,63 @@ func abs(v int) int {
 		return -v
 	}
 	return v
+}
+
+// validMonitors 过滤退化显示器矩形（带一次性诊断日志）：虚拟/幽灵显示适配器
+// 会被 EnumDisplayMonitors 枚举成 1x1 之类的占位项，若选作入口，MoveAbs 会把
+// 光标钉在桌面角落、umove 以 1px 为展开基准会让远端光标纹丝不动（真机事故：
+// "副屏左上角不能动"）。低于 minMonitorSpan 的矩形不参与入口选择/切回边缘/
+// 桌面并集计算。周期性调用方（refreshMonitors）请用静默的 filterDegenerate。
+func validMonitors(mons []input.Rect) []input.Rect {
+	out := filterDegenerate(mons)
+	if len(out) == 0 {
+		log.Printf("KVM：显示器列表全部为退化矩形 %v，按原样使用", mons)
+		return mons
+	}
+	if len(out) != len(mons) {
+		log.Printf("KVM：过滤退化显示器矩形，保留 %v", out)
+	}
+	return out
+}
+
+// filterDegenerate 是 validMonitors 的静默核心：低于 minMonitorSpan 的矩形
+// 不参与入口选择/切回边缘/桌面并集/注入吸附；全部退化时按原样返回。
+func filterDegenerate(mons []input.Rect) []input.Rect {
+	out := make([]input.Rect, 0, len(mons))
+	for _, m := range mons {
+		if m.W >= minMonitorSpan && m.H >= minMonitorSpan {
+			out = append(out, m)
+		}
+	}
+	if len(out) == 0 {
+		return mons
+	}
+	return out
+}
+
+// desktopUnion 返回显示器矩形的并集（虚拟桌面）。与 Monitors() 同一坐标系，
+// 不与 GetSystemMetrics 混用，规避 DPI 缩放下两套坐标不一致的问题。
+func desktopUnion(mons []input.Rect) (x, y, w, h int) {
+	if len(mons) == 0 {
+		return 0, 0, 1920, 1080
+	}
+	x, y = mons[0].X, mons[0].Y
+	r, b := mons[0].X+mons[0].W, mons[0].Y+mons[0].H
+	for _, m := range mons[1:] {
+		if m.X < x {
+			x = m.X
+		}
+		if m.Y < y {
+			y = m.Y
+		}
+		if m.X+m.W > r {
+			r = m.X + m.W
+		}
+		if m.Y+m.H > b {
+			b = m.Y + m.H
+		}
+	}
+	return x, y, r - x, b - y
 }
 
 // pickEntryMonitor 返回被控入口显示器：
@@ -489,10 +693,34 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 	s.mu.Unlock()
 	diag.Incr("kvm.slave.start")
 	diag.Add("kvm.slave.active", 1)
-	diag.SetSession("kvm_slave", map[string]any{"peer": hello.Name, "since": time.Now().Format("15:04:05")})
-	entryW := pickEntryMonitor(s.currentMonitors(), s.cfg.EntryMonitor).W
-	writeMsg(bw, wireMsg{T: "ok", PW: entryW})
-	log.Printf("KVM：开始被 %q 控制", hello.Name)
+	diag.SetSession("kvm_slave", map[string]any{"peer": hello.Name,
+		"channel": map[bool]string{true: "universal", false: "relative"}[hello.Abs],
+		"since":   time.Now().Format("15:04:05")})
+	mons := validMonitors(s.injector.Monitors())
+	entryMon := pickEntryMonitor(mons, s.cfg.EntryMonitor)
+	// Universal 通道能力协商（B4）：主控在 hello 里声明可发 umove，本机确认
+	// 自己也能解算/注入，双方都点头本会话才走绝对坐标。
+	// 当被控端拥有多台显示器（len(mons) > 1）时，单屏 0..65535 绝对坐标映射会导致光标
+	// 锁死在单屏范围内无法移动至副屏；此时被控端明确回执 Abs=false，使会话走
+	// 支持副机多屏漫游的相对位移通道（与 MWB MoveMouseRelatively 一致）。
+	// 仅在被控端为单显示器且主控主动请求 Abs 时，才走 umove 绝对通道。
+	sess.abs = hello.Abs && len(mons) <= 1
+	pscale := entryMon.Scale
+	if pscale <= 0 {
+		pscale = 1.0
+	}
+	writeMsg(bw, wireMsg{
+		T:      "ok",
+		PW:     entryMon.W,
+		PH:     entryMon.H,
+		PScale: pscale,
+		Abs:    sess.abs,
+	})
+	ch := "相对位移（支持多屏漫游）"
+	if sess.abs {
+		ch = "Universal 0..65535"
+	}
+	log.Printf("KVM：开始被 %q 控制（坐标通道：%s）", hello.Name, ch)
 	defer func() {
 		s.stopReflow(sess) // 停重排协程并把残余位移注入，绝不泄漏
 		s.mu.Lock()
@@ -517,9 +745,12 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 		}
 		switch m.T {
 		case "enter":
-			mons := s.injector.Monitors()
+			mons := validMonitors(s.injector.Monitors())
 			entry := pickEntryMonitor(mons, s.cfg.EntryMonitor)
 			leaveEdges := leaveEdgesFor(mons, m.Dir)
+			// 桌面 = 显示器矩形并集：与 entry/ex/ey 同一坐标系，不混用
+			// GetSystemMetrics，规避 DPI 缩放下两套坐标不一致。
+			ux, uy, uw, uh := desktopUnion(mons)
 			// 入口：入口显示器的共享边缘；垂直位置按主控比例映射到入口显示器
 			// 同比例高度（m.Y 已是主控"离场所属屏"内的比例，见 entryRatio）。
 			ex := entry.X + entryMargin
@@ -529,6 +760,15 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 			ey := entry.Y + int(clamp01(m.Y)*float64(entry.H))
 			if ey >= entry.Y+entry.H { // 比例=1 时防越界一行
 				ey = entry.Y + entry.H - 1
+			}
+			// 入口点必须落在桌面并集内：入口信息异常（幽灵显示器等）时兜底钳位，
+			// 绝不能把光标放到桌面外（真机事故：副屏左上角）。
+			ocx, ocy := ex, ey
+			ex = clampInt(ex, ux, ux+uw-1)
+			ey = clampInt(ey, uy, uy+uh-1)
+			if ex != ocx || ey != ocy {
+				log.Printf("KVM：入口点 (%d,%d) 落在桌面并集外，已钳到 (%d,%d)（入口屏 %+v）",
+					ocx, ocy, ex, ey, entry)
 			}
 			// 会话字段一次性在锁内写入：detectLeave 在锁内读取
 			// entryX/leaveEdges/entry 等，分两批写存在数据竞争。
@@ -542,16 +782,28 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 			sess.maxDist = 0
 			sess.pushAccum = 0
 			sess.pushLast = time.Time{}
+			sess.hasLastU = false
 			s.mu.Unlock()
+			// 入口重定位后旧 pending 作废（残留目标会把光标从入口点拽走）。
+			sess.rfMu.Lock()
+			sess.rfDX, sess.rfDY = 0, 0
+			sess.rfMu.Unlock()
 			s.injector.MoveAbs(ex, ey)
 			log.Printf("KVM：入口显示器 (%d,%d %dx%d 主屏=%v)，光标注入到 (%d,%d)",
 				sess.entry.X, sess.entry.Y, sess.entry.W, sess.entry.H,
 				sess.entry.Primary, ex, ey)
 		case "move":
-			if sess.dir == "" {
+			if sess.dir == "" || sess.abs {
 				continue
 			}
 			s.feedMove(sess, m.DX, m.DY)
+		case "umove":
+			// Universal 通道（B4）。未协商成功的会话一律忽略：旧主控不会发，
+			// 新主控在 abs=false 时也只发 move——出现这条即协议异常。
+			if sess.dir == "" || !sess.abs {
+				continue
+			}
+			s.feedUMove(sess, m.AX, m.AY)
 		case "btn":
 			s.injector.Button(m.Down, m.B)
 		case "wheel":
@@ -572,7 +824,7 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 	}
 }
 
-// feedMove 处理一条 move 事件：合拍关闭时保持旧的逐包直注语义，
+// feedMove 处理一条相对 move 事件：合拍关闭时保持旧的逐包直注语义，
 // 开启时并入待注入位移并保证 reflow 协程在跑。
 // 切回检测在注入之后对"实际位移"执行，与直注模式时序等价。
 func (s *Service) feedMove(sess *slaveSession, dx, dy int) {
@@ -589,6 +841,77 @@ func (s *Service) feedMove(sess *slaveSession, dx, dy int) {
 	sess.rfDX += dx
 	sess.rfDY += dy
 	sess.rfMu.Unlock()
+}
+
+// feedUMove 处理一条 Universal umove 事件（B4 0..65535 模型）。
+// 单屏环境下直接按入口显示器映射为本地物理像素并通过 MoveAbs (SetCursorPos) 注入；
+// 多屏环境下将归一化增量转换为像素位移转交 feedMove 处理，支持副屏自由漫游。
+func (s *Service) feedUMove(sess *slaveSession, ax, ay int) {
+	diag.Incr("kvm.umove.recv")
+	mons := validMonitors(s.injector.Monitors())
+	if len(mons) > 1 {
+		if !sess.hasLastU {
+			sess.hasLastU = true
+			sess.lastUAX = ax
+			sess.lastUAY = ay
+			return
+		}
+		dax := ax - sess.lastUAX
+		day := ay - sess.lastUAY
+		sess.lastUAX = ax
+		sess.lastUAY = ay
+
+		w := sess.entry.W
+		h := sess.entry.H
+		if w < 2 {
+			w = 2
+		}
+		if h < 2 {
+			h = 2
+		}
+		pdx := roundMulDiv(dax, w-1, 65535)
+		pdy := roundMulDiv(day, h-1, 65535)
+		if pdx != 0 || pdy != 0 {
+			s.feedMove(sess, pdx, pdy)
+		}
+		return
+	}
+
+	w := sess.entry.W
+	h := sess.entry.H
+	if w < 2 {
+		w = 2
+	}
+	if h < 2 {
+		h = 2
+	}
+	tx := sess.entry.X + roundMulDiv(ax, w-1, 65535)
+	ty := sess.entry.Y + roundMulDiv(ay, h-1, 65535)
+	tx = clampInt(tx, sess.entry.X, sess.entry.X+w-1)
+	ty = clampInt(ty, sess.entry.Y, sess.entry.Y+h-1)
+
+	s.injector.MoveAbs(tx, ty)
+	sess.umoveN++
+	if sess.umoveN == 1 || sess.umoveN%150 == 0 {
+		cx, cy := s.injector.CursorPos()
+		log.Printf("KVM：Universal 移动 #%d (AX=%d, AY=%d)，目标 (%d,%d)，真实光标 (%d,%d)",
+			sess.umoveN, ax, ay, tx, ty, cx, cy)
+	}
+}
+
+// roundMulDiv 计算 a*b/c 并四舍五入（a≥0，c>0）。
+func roundMulDiv(a, b, c int) int {
+	return (a*b + c/2) / c
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // startReflow 惰性启动本会话的 reflow 协程（move 首次到达时）。
@@ -617,8 +940,8 @@ func (s *Service) stopReflow(sess *slaveSession) {
 	sess.rfStopO.Do(func() { close(stop) })
 }
 
-// flushReflow 立即把 pending 位移全部注入（返回实际注入的 dx,dy），
-// 供切回检测等需要光标即时到位的路径使用。
+// flushReflow 立即把 pending 注入排空（相对通道），供会话结束等路径使用。
+// 返回相对通道实际注入的 dx,dy。
 func (s *Service) flushReflow(sess *slaveSession) (int, int) {
 	sess.rfMu.Lock()
 	dx, dy := sess.rfDX, sess.rfDY
@@ -630,9 +953,8 @@ func (s *Service) flushReflow(sess *slaveSession) (int, int) {
 	return dx, dy
 }
 
-// reflowLoop 按固定节拍重排注入。每拍排空 pending 的约 1/reflowHorizon
-// （有符号、保底各 1px 防滞留），位移总和精确守恒；空闲后协程自动退出，
-// 下一次 move 再惰性重启。
+// reflowLoop 按固定节拍重排注入（仅相对通道使用）。相对通道每拍排空 pending 位移的约
+// 1/reflowHorizon（有符号、保底各 1px 防滞留），位移总和精确守恒。
 func (s *Service) reflowLoop(sess *slaveSession, stop chan struct{}) {
 	t := time.NewTicker(s.currentReflowStep())
 	defer t.Stop()
@@ -683,16 +1005,22 @@ func (s *Service) detectLeave(sess *slaveSession, dx int) bool {
 	now := time.Now()
 
 	cx, cy := s.injector.CursorPos()
-	// 深入距离武装：光标离开共享边缘足够远后才允许触发切回
-	dist := abs(cx - sess.entryX)
-	if dist > sess.maxDist {
-		sess.maxDist = dist
+	// 深入距离武装：光标离开共享边缘向屏幕内移动足够远后才允许触发切回
+	inward := 0
+	if sess.dir == "right" {
+		inward = cx - sess.entryX
+	} else {
+		inward = sess.entryX - cx
+	}
+	if inward > sess.maxDist {
+		sess.maxDist = inward
 	}
 	if !sess.armed {
 		if sess.maxDist >= armPixels {
 			sess.armed = true
+		} else {
+			return false
 		}
-		return false
 	}
 
 	atEdge := false
@@ -700,9 +1028,11 @@ func (s *Service) detectLeave(sess *slaveSession, dx int) bool {
 		inY := cy >= r.Y && cy < r.Y+r.H
 		if sess.dir == "right" && inY && cx <= r.X+edgeBand {
 			atEdge = true
+			break
 		}
 		if sess.dir == "left" && inY && cx >= r.X+r.W-1-edgeBand {
 			atEdge = true
+			break
 		}
 	}
 	if !atEdge {
@@ -753,18 +1083,18 @@ func (s *Service) trySwitch(dir string) {
 	if peer == nil {
 		log.Printf("KVM：%s 方向的邻居 %q 不在线", dir,
 			map[bool]string{true: right, false: left}[dir == "right"])
-		s.setCooldown(1500 * time.Millisecond)
+		s.setCooldown(cooldownFailed)
 		return
 	}
 	// 只与已配对的节点跨屏
 	if s.cfg.TokenForPeer == nil {
 		log.Printf("KVM：跳过 %q（未配对）", peer.Name)
-		s.setCooldown(1500 * time.Millisecond)
+		s.setCooldown(cooldownFailed)
 		return
 	}
 	if _, ok := s.cfg.TokenForPeer(peer.ID); !ok {
 		log.Printf("KVM：跳过 %q（未配对，请先在面板中配对）", peer.Name)
-		s.setCooldown(1500 * time.Millisecond)
+		s.setCooldown(cooldownFailed)
 		return
 	}
 
@@ -791,15 +1121,26 @@ func (s *Service) trySwitch(dir string) {
 	}
 	if conn == nil {
 		log.Printf("KVM：连接 %q 失败: %v", peer.Name, respErr)
-		s.setCooldown(1500 * time.Millisecond)
+		s.setCooldown(cooldownFailed)
 		return
 	}
 
-	sess, err := s.masterHandshake(conn, peer.ID)
+	cx, cy := s.injector.CursorPos()
+	curMon := s.currentMonitorAt(cx, cy)
+	aw, ah := float64(curMon.W), float64(curMon.H)
+	if aw < 1 {
+		aw = 1920
+	}
+	if ah < 1 {
+		ah = 1080
+	}
+	ny := s.entryRatio(float64(cx), float64(cy))
+
+	sess, err := s.masterHandshake(conn, peer.ID, curMon)
 	if err != nil {
 		conn.Close()
 		log.Printf("KVM：与 %q 握手失败: %v", peer.Name, err)
-		s.setCooldown(1500 * time.Millisecond)
+		s.setCooldown(cooldownFailed)
 		return
 	}
 
@@ -814,25 +1155,30 @@ func (s *Service) trySwitch(dir string) {
 	}
 
 	s.mu.Lock()
+	sess.dir = dir
+	sess.virtX, sess.virtY = float64(cx), float64(cy)
+	sess.lastX, sess.lastY = sess.virtX, sess.virtY
+	sess.anchorW, sess.anchorH = aw, ah
+	if dir == "right" {
+		sess.normX = 0
+	} else {
+		sess.normX = 65535
+	}
+	sess.normY = clamp01(ny) * 65535.0
 	s.master = sess
 	s.mu.Unlock()
 	diag.Incr("kvm.master.start")
-	diag.SetSession("kvm_master", map[string]any{"peer": peer.Name, "dir": dir, "since": time.Now().Format("15:04:05")})
+	diag.SetSession("kvm_master", map[string]any{"peer": peer.Name, "dir": dir,
+		"channel": map[bool]string{true: "universal", false: "relative"}[sess.abs],
+		"since":   time.Now().Format("15:04:05")})
 	inputSetSuppress(true)
-	cx, cy := s.injector.CursorPos()
-	sess.virtX = float64(cx)
-	sess.virtY = float64(cy)
-	sess.lastX, sess.lastY = sess.virtX, sess.virtY
-	// 速度补偿系数在 OnMouseMove 锁内实时读取（面板热生效），会话不再快照。
-	// 这里只打标定参考日志：本机指针速度 + 两机屏宽（比例可换算该设多大）。
-	mW := s.monitorWidthAt(cx, cy)
-	log.Printf("KVM 速度补偿标定参考：本机指针速度=%d 本机所在屏宽=%d 对端入口宽=%d "+
-		"当前系数=%d%%（拖动面板即时生效，无需重启）",
-		s.injector.MouseSpeed(), mW, sess.slavePW, s.currentSpeedPercent())
-	// 入口垂直比例：光标在"主控离场所属显示器"内的高度比例（0..1）。
-	// 用所在显示器而非整个虚拟桌面，主控多屏时才能把比例正确对应到被控主屏，
-	// 实现"主控比例 → 被控主屏同比例"。找不到所在显示器时退回整桌面比例。
-	ny := s.entryRatio(float64(cx), float64(cy))
+	if sess.abs {
+		log.Printf("KVM：本会话走 Universal 0..65535 绝对注入（锚点 %d×%d 屏，缩放补偿 X%.2f/Y%.2f）",
+			int(aw), int(ah), sess.gainX, sess.gainY)
+	} else {
+		log.Printf("KVM：控制通道：相对位移（跨分辨率与缩放比静态补偿 X%.2f/Y%.2f，支持副机多屏漫游）",
+			sess.gainX, sess.gainY)
+	}
 	select {
 	case sess.sendCh <- wireMsg{T: "enter", Dir: dir, Y: ny}:
 	default:
@@ -845,19 +1191,29 @@ func (s *Service) trySwitch(dir string) {
 	go s.masterPinger(sess)
 }
 
-// monitorWidthAt 返回光标 (x,y) 所属显示器的物理宽（与 entryRatio 用同一块屏
-// 为基准）。找不到匹配屏时退回主屏宽，再兜底 0（scaleGain 据此退回 1.0）。
-func (s *Service) monitorWidthAt(x, y int) int {
-	var primaryW int
+// currentMonitorAt 返回光标 (x,y) 所属显示器；找不到时退回主显示器，
+// 再退回默认 1920x1080 100% 缩放显示器。
+func (s *Service) currentMonitorAt(x, y int) input.Rect {
+	var primary input.Rect
 	for _, m := range s.currentMonitors() {
 		if m.Primary {
-			primaryW = m.W
+			primary = m
 		}
 		if x >= m.X && x < m.X+m.W && y >= m.Y && y < m.Y+m.H {
-			return m.W
+			return m
 		}
 	}
-	return primaryW
+	if primary.W > 0 && primary.H > 0 {
+		return primary
+	}
+	return input.Rect{X: 0, Y: 0, W: 1920, H: 1080, Primary: true, Scale: 1.0, DPI: 96}
+}
+
+// monitorWHAt 返回光标 (x,y) 所属显示器的物理宽高（与 entryRatio 用同一块屏
+// 为基准）——Universal 通道以它作 ±65535 归一化分母。
+func (s *Service) monitorWHAt(x, y int) (float64, float64) {
+	m := s.currentMonitorAt(x, y)
+	return math.Max(float64(m.W), 1), math.Max(float64(m.H), 1)
 }
 
 // entryRatio 计算光标 (x,y) 在其所属显示器内的高度比例（0..1）。
@@ -879,7 +1235,7 @@ func (s *Service) entryRatio(x, y float64) float64 {
 	return 0.5
 }
 
-func (s *Service) masterHandshake(conn net.Conn, peerID string) (*masterSession, error) {
+func (s *Service) masterHandshake(conn net.Conn, peerID string, curMon input.Rect) (*masterSession, error) {
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
 	br := bufio.NewReaderSize(conn, 16*1024)
 	bw := bufio.NewWriter(conn)
@@ -891,7 +1247,28 @@ func (s *Service) masterHandshake(conn net.Conn, peerID string) (*masterSession,
 	if !ok {
 		return nil, fmt.Errorf("未配对")
 	}
-	if err := writeMsg(bw, wireMsg{T: "hello", Token: token, ID: s.cfg.SelfID, Name: s.nodeName}); err != nil {
+	mscale := curMon.Scale
+	if mscale <= 0 {
+		mscale = 1.0
+	}
+	mw := curMon.W
+	mh := curMon.H
+	if mw <= 0 {
+		mw = 1920
+	}
+	if mh <= 0 {
+		mh = 1080
+	}
+	if err := writeMsg(bw, wireMsg{
+		T:      "hello",
+		Token:  token,
+		ID:     s.cfg.SelfID,
+		Name:   s.nodeName,
+		MW:     mw,
+		MH:     mh,
+		MScale: mscale,
+		Abs:    false,
+	}); err != nil {
 		return nil, err
 	}
 	var resp wireMsg
@@ -901,12 +1278,30 @@ func (s *Service) masterHandshake(conn net.Conn, peerID string) (*masterSession,
 	if resp.T != "ok" {
 		return nil, fmt.Errorf("%s", resp.Msg)
 	}
+
+	s.mu.Lock()
+	speedPct := s.cfg.SpeedPercent
+	s.mu.Unlock()
+
+	pscale := resp.PScale
+	if pscale <= 0 {
+		pscale = 1.0
+	}
+	baseGx, baseGy := calcStaticGain(mw, mh, mscale, resp.PW, resp.PH, pscale, 100)
+	gx, gy := calcStaticGain(mw, mh, mscale, resp.PW, resp.PH, pscale, speedPct)
+
 	sess := &masterSession{
-		conn:    conn,
-		w:       bw,
-		sendCh:  make(chan wireMsg, 512),
-		stop:    make(chan struct{}),
-		slavePW: resp.PW, // 被控端入口显示器物理宽（旧版对端为 0）
+		conn:      conn,
+		w:         bw,
+		sendCh:    make(chan wireMsg, 512),
+		stop:      make(chan struct{}),
+		slavePW:   resp.PW,  // 被控端入口显示器物理宽（旧版对端为 0）
+		slavePH:   resp.PH,  // 被控端入口显示器物理高（并集吸附基准；旧版为 0）
+		abs:       resp.Abs, // Universal 通道：两端都声明支持才启用（B4）
+		baseGainX: baseGx,
+		baseGainY: baseGy,
+		gainX:     gx,
+		gainY:     gy,
 	}
 	conn.SetDeadline(time.Time{}) // 清除握手超时，后续由 ping/读超时保活
 	return sess, nil
@@ -919,7 +1314,7 @@ func (s *Service) masterSender(sess *masterSession) {
 		case <-sess.stop:
 			return
 		case m := <-sess.sendCh:
-			if m.T == "move" {
+			if m.T == "move" || m.T == "umove" {
 				diag.Incr("kvm.move.sent")
 			}
 			if err := writeMsg(sess.w, m); err != nil {
@@ -949,6 +1344,8 @@ func (s *Service) masterReader(sess *masterSession, peerName string) {
 			return
 		case "pong":
 			// 被控端对 ping 的应答，读超时随之刷新
+		case "band":
+			// 兼容旧对端的回报消息，忽略即可
 		}
 	}
 }
@@ -974,11 +1371,13 @@ func (s *Service) endMasterSession(sess *masterSession, sendLeave bool, reason s
 	sess.stopOnce.Do(func() {
 		close(sess.stop)
 		inputSetSuppress(false)
-		if sendLeave {
+		if sendLeave && sess.conn != nil && sess.w != nil {
 			sess.conn.SetWriteDeadline(time.Now().Add(time.Second))
 			writeMsg(sess.w, wireMsg{T: "leave"})
 		}
-		sess.conn.Close()
+		if sess.conn != nil {
+			sess.conn.Close()
+		}
 		s.mu.Lock()
 		if s.master == sess {
 			s.master = nil
@@ -987,7 +1386,7 @@ func (s *Service) endMasterSession(sess *masterSession, sendLeave bool, reason s
 			diag.SetSession("kvm_master", nil)
 		}
 		s.mu.Unlock()
-		s.setCooldown(1500 * time.Millisecond)
+		s.setCooldown(cooldownSwitch)
 		log.Printf("KVM：控制结束（%s）", reason)
 	})
 }
@@ -1019,32 +1418,86 @@ func (s *Service) OnMouseMove(dx, dy int) {
 		log.Printf("KVM：鼠标原始输入链路已连通")
 	}
 	if m := s.master; m != nil {
-		m.virtX += float64(dx)
-		m.virtY += float64(dy)
+		if m.abs {
+			// MWB 原生绝对坐标模型：
+			// normX, normY 直接追踪光标在受控端屏幕上的绝对位置（0..65535）。
+			// 物理位移 dx, dy 映射到 65535 空间：
+			m.normX += float64(dx) * 65535.0 / m.anchorW
+			m.normY += float64(dy) * 65535.0 / m.anchorH
+			if m.normY < 0 {
+				m.normY = 0
+			} else if m.normY > 65535 {
+				m.normY = 65535
+			}
+
+			// 边缘推回检测（切回主控机）：
+			// 阈值设为 umovePushThreshold（500，约占屏幕 0.76%，在 1080p 下约 8~15px），防止微小手抖误切回
+			if m.dir == "right" {
+				// 入口在副机左侧 (0)：向左推越过入口阈值即切回
+				if m.normX < -umovePushThreshold {
+					s.mu.Unlock()
+					s.endMasterSession(m, true, "光标推回共享边缘")
+					return
+				}
+				if m.normX > 65535 {
+					m.normX = 65535 // 副机右侧未配置跨屏，钳在右边缘
+				}
+			} else if m.dir == "left" {
+				// 入口在副机右侧 (65535)：向右推越过入口阈值即切回
+				if m.normX > 65535.0+umovePushThreshold {
+					s.mu.Unlock()
+					s.endMasterSession(m, true, "光标推回共享边缘")
+					return
+				}
+				if m.normX < 0 {
+					m.normX = 0 // 副机左侧未配置跨屏，钳在左边缘
+				}
+			}
+
+			now := time.Now()
+			if now.Sub(m.lastSent) < s.cfg.MoveInterval {
+				s.mu.Unlock()
+				return
+			}
+			m.lastSent = now
+			ax := clampInt(int(math.Round(m.normX)), 0, 65535)
+			ay := clampInt(int(math.Round(m.normY)), 0, 65535)
+			msg := wireMsg{T: "umove", AX: ax, AY: ay}
+			select {
+			case m.sendCh <- msg:
+			default: // 队列满则丢弃移动事件，位移由后续事件补足
+			}
+			s.mu.Unlock()
+			return
+		}
+
+		// 相对通道：静态跨分辨率与实际设置缩放比补偿 + 亚像素余数结转，
+		// 绝不随手速漂移，副机操作系统自然处理多显示器跨屏。
+		m.virtX += float64(dx) * m.gainX
+		m.virtY += float64(dy) * m.gainY
 		now := time.Now()
 		if now.Sub(m.lastSent) < s.cfg.MoveInterval {
 			s.mu.Unlock()
 			return
 		}
 		m.lastSent = now
-		// 发送自上次发送以来的累计位移（Raw 计数按手调系数放大，未裁剪，
-		// 副机自行处理边界）。系数在锁内实时读取 s.cfg.SpeedPercent，故面板
-		// 拖动即时生效；lastX/Y 消费全部原始计数，亚像素余数结转 gainResX/Y。
 		rdx := m.virtX - m.lastX
 		rdy := m.virtY - m.lastY
-		m.lastX = m.virtX
-		m.lastY = m.virtY
-		gain := speedGainPct(s.cfg.SpeedPercent)
-		fx := rdx*gain + m.gainResX
-		fy := rdy*gain + m.gainResY
-		ddx := int(math.Trunc(fx))
-		ddy := int(math.Trunc(fy))
-		m.gainResX = fx - float64(ddx)
-		m.gainResY = fy - float64(ddy)
-		msg := wireMsg{T: "move", DX: ddx, DY: ddy}
-		select {
-		case m.sendCh <- msg:
-		default: // 队列满则丢弃移动事件，位移由后续事件补足
+		m.lastX, m.lastY = m.virtX, m.virtY
+
+		fx := rdx + m.resX
+		fy := rdy + m.resY
+		ddx := int(math.Round(fx))
+		ddy := int(math.Round(fy))
+		m.resX = fx - float64(ddx)
+		m.resY = fy - float64(ddy)
+
+		if ddx != 0 || ddy != 0 {
+			msg := wireMsg{T: "move", DX: ddx, DY: ddy}
+			select {
+			case m.sendCh <- msg:
+			default: // 队列满则丢弃移动事件，位移由后续事件补足
+			}
 		}
 		s.mu.Unlock()
 		return
@@ -1122,9 +1575,9 @@ func (s *Service) OnMouseMove(dx, dy int) {
 		s.mu.Unlock()
 		return
 	}
-	// 触发窗口与失败/释放冷却一致（1.5s）：切换失败后尽快允许重试，
-	// 不再锁死 3 秒；切换进行中的重复触发由 trySwitch 入口守卫兜底。
-	s.attemptUntil = now.Add(1500 * time.Millisecond)
+	// 触发窗口与成功防抖短冷却一致（200ms）：切换成功或结束控制后瞬间即可再次滑入，
+	// 彻底消除 1.5 秒死卡；切换进行中的重复触发由 trySwitch 入口守卫兜底。
+	s.attemptUntil = now.Add(cooldownSwitch)
 	s.mu.Unlock()
 	go s.trySwitch(dir)
 }
@@ -1261,11 +1714,59 @@ func clamp01(v float64) float64 {
 	return v
 }
 
-// speedGainPct 把手调百分比（kvm_speed_percent）折算为发送位移系数；
-// <=0 视为 100（1.0x，即不补偿）。
-func speedGainPct(pct int) float64 {
-	if pct <= 0 {
-		return 1
+func clampFloat(v, lo, hi float64) float64 {
+	if v < lo {
+		return lo
 	}
-	return float64(pct) / 100.0
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+// calcStaticGain 根据主控当前显示器 (mw, mh, mscale)、被控入口显示器 (pw, ph, pscale)
+// 以及用户自定义速度系数百分比 (speedPct, 100=1.0x) 计算静态跨分辨率与缩放比位移增益。
+//
+// 核心数学推导：
+// 人眼在主控端实际操作的有效逻辑视口为 Lm_x = mw / mscale, Lm_y = mh / mscale。
+// 被控端目标物理跨度为 pw, ph。
+// 为消除高分屏高缩放导致的失真，静态基准增益为：
+//
+//	gainX = pw / Lm_x = (pw * mscale) / mw
+//	gainY = ph / Lm_y = (ph * mscale) / mh
+//
+// 再叠加用户自定义百分比 speedPct / 100.0，并在 [0.2, 5.0] 安全区间钳位。
+func calcStaticGain(mw, mh int, mscale float64, pw, ph int, pscale float64, speedPct int) (float64, float64) {
+	if mw <= 0 {
+		mw = 1920
+	}
+	if mh <= 0 {
+		mh = 1080
+	}
+	if mscale <= 0 {
+		mscale = 1.0
+	}
+	if pw <= 0 {
+		pw = mw
+	}
+	if ph <= 0 {
+		ph = mh
+	}
+	if pscale <= 0 {
+		pscale = 1.0
+	}
+	if speedPct <= 0 {
+		speedPct = 100
+	}
+
+	lmX := float64(mw) / mscale
+	lmY := float64(mh) / mscale
+
+	baseX := float64(pw) / lmX
+	baseY := float64(ph) / lmY
+
+	userFactor := float64(speedPct) / 100.0
+	gx := clampFloat(baseX*userFactor, 0.2, 5.0)
+	gy := clampFloat(baseY*userFactor, 0.2, 5.0)
+	return gx, gy
 }

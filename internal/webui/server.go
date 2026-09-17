@@ -440,9 +440,9 @@ func (s *Server) apiSetConfig(w http.ResponseWriter, r *http.Request) {
 			errs = append(errs, "kvm_touchpad_speed 需要 10~1000 的整数（100=基准）")
 		}
 	}
-	// KVM 手感调参：主控移动合拍间隔、被控重排节拍、速度补偿系数（毫秒/百分比）。
+	// KVM 手感调参：主控移动合拍间隔、被控重排节拍（毫秒）。
 	// 与邻居一致走热更新通道（保存即触发 core.SyncKVM → kvm.UpdateTunables），
-	// 无需重启。move>=0（0=默认8），reflow 可为 -1（关闭重排），speed 0~500。
+	// 无需重启。move>=0（0=默认8），reflow 可为 -1（关闭重排）。
 	if v, ok := in["kvm_move_interval_ms"]; ok {
 		if fv, ok := v.(float64); ok && fv >= 0 {
 			s.cfg.KVMMoveMs = int(fv)
@@ -464,7 +464,7 @@ func (s *Server) apiSetConfig(w http.ResponseWriter, r *http.Request) {
 			s.cfg.KVMSpeedPct = int(fv)
 			kvmChanged = true
 		} else {
-			errs = append(errs, "kvm_speed_percent 需要 0~500 的整数（100=不补偿）")
+			errs = append(errs, "kvm_speed_percent 需要 0~500 的整数（100=基准 1.0x）")
 		}
 	}
 	if len(errs) > 0 {

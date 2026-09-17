@@ -7,6 +7,8 @@ package input
 type Rect struct {
 	X, Y, W, H int
 	Primary    bool
+	Scale      float64
+	DPI        int
 }
 
 // Callbacks 输入事件回调集合（非 Windows 平台不会被调用）。
@@ -33,6 +35,7 @@ func Start(cb Callbacks) error {
 type DefaultInjector struct{}
 
 func (DefaultInjector) MoveAbs(int, int)                   {}
+func (DefaultInjector) MoveNorm(int, int)                  {}
 func (DefaultInjector) MoveRel(int, int)                   {}
 func (DefaultInjector) Button(bool, int)                   {}
 func (DefaultInjector) Wheel(int32, bool)                  {}

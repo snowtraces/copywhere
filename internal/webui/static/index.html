@@ -810,9 +810,9 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
           <div class="hint">被控端把收到的位移拆成恒定小步注入以消除台阶感（-1 = 关闭）。</div>
         </div>
         <div class="set-row col">
-          <div class="srow"><b>速度补偿系数</b><span class="sval" id="v_speed">100%</span></div>
+          <div class="srow"><b>速度微调倍率</b><span class="sval" id="v_speed">100%</span></div>
           <input type="range" id="cfg_kvm_speed_pct" min="50" max="300" step="5" value="100" oninput="syncKvmScales()">
-          <div class="hint">本机作主控时位移 × 此值 / 100。A→B 偏慢调高 A 机系数、B→A 偏慢调高 B 机系数（各机自设）；运行日志有 KVM 切换的标定参考。</div>
+          <div class="hint">系统已按两端屏幕分辨率与实际设置缩放比自动计算科学基准，此项用于个性化微调（100% = 自动标准速度）。</div>
         </div>
         <div class="set-row">
           <div class="info"><b>触控板双指滚动（实验性）</b>

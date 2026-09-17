@@ -51,17 +51,19 @@ const (
 	inputMouse    = 0
 	inputKeyboard = 1
 
-	mouseEventfMove       = 0x0001
-	mouseEventfLeftDown   = 0x0002
-	mouseEventfLeftUp     = 0x0004
-	mouseEventfRightDown  = 0x0008
-	mouseEventfRightUp    = 0x0010
-	mouseEventfMiddleDown = 0x0020
-	mouseEventfMiddleUp   = 0x0040
-	mouseEventfXDown      = 0x0080
-	mouseEventfXUp        = 0x0100
-	mouseEventfWheel      = 0x0800
-	mouseEventfHWheel     = 0x1000
+	mouseEventfMove        = 0x0001
+	mouseEventfAbsolute    = 0x8000 // 归一化绝对坐标（0..65535，见 InjectMoveNorm）
+	mouseEventfVirtualDesk = 0x4000 // 0..65535 覆盖整个虚拟桌面而非仅主屏
+	mouseEventfLeftDown    = 0x0002
+	mouseEventfLeftUp      = 0x0004
+	mouseEventfRightDown   = 0x0008
+	mouseEventfRightUp     = 0x0010
+	mouseEventfMiddleDown  = 0x0020
+	mouseEventfMiddleUp    = 0x0040
+	mouseEventfXDown       = 0x0080
+	mouseEventfXUp         = 0x0100
+	mouseEventfWheel       = 0x0800
+	mouseEventfHWheel      = 0x1000
 
 	keyeventfExtendedKey = 0x0001
 	keyeventfKeyUp       = 0x0002
@@ -93,6 +95,9 @@ var (
 	procSetProcessDpiAwarenessContext = user32.NewProc("SetProcessDpiAwarenessContext")
 	procEnumDisplayMonitors           = user32.NewProc("EnumDisplayMonitors")
 	procGetMonitorInfoW               = user32.NewProc("GetMonitorInfoW")
+
+	shcore               = windows.NewLazySystemDLL("shcore.dll")
+	procGetDpiForMonitor = shcore.NewProc("GetDpiForMonitor")
 )
 
 // Callbacks 是输入事件回调集合，全部在钩子线程上调用，必须非阻塞。
@@ -147,13 +152,16 @@ func Start(cb Callbacks) error {
 // Rect 是虚拟桌面坐标系中的一个矩形。
 type Rect struct {
 	X, Y, W, H int
-	Primary    bool // 是否为系统主显示器
+	Primary    bool    // 是否为系统主显示器
+	Scale      float64 // 缩放比例，例如 1.0 (100%), 1.25 (125%), 1.5 (150%), 2.0 (200%)
+	DPI        int     // 屏幕 DPI，例如 96, 120, 144, 192
 }
 
 // DefaultInjector 是基于 SendInput 的注入器。
 type DefaultInjector struct{}
 
 func (DefaultInjector) MoveAbs(x, y int)                    { InjectMoveAbs(x, y) }
+func (DefaultInjector) MoveNorm(nx, ny int)                 { InjectMoveNorm(nx, ny) }
 func (DefaultInjector) MoveRel(dx, dy int)                  { InjectMoveRel(dx, dy) }
 func (DefaultInjector) Button(down bool, button int)        { InjectButton(down, button) }
 func (DefaultInjector) Wheel(delta int32, horizontal bool)  { InjectWheel(delta, horizontal) }
@@ -194,20 +202,37 @@ func enumMonitorsProc(hMon, hdc, lprect, lparam uintptr) uintptr {
 	var mi monitorinfo
 	mi.cbSize = uint32(unsafe.Sizeof(mi))
 	if r, _, _ := procGetMonitorInfoW.Call(hMon, uintptr(unsafe.Pointer(&mi))); r != 0 {
+		scale := 1.0
+		dpi := 96
+		if procGetDpiForMonitor.Find() == nil {
+			var dpiX, dpiY uint32
+			// MDT_EFFECTIVE_DPI = 0
+			if res, _, _ := procGetDpiForMonitor.Call(hMon, 0, uintptr(unsafe.Pointer(&dpiX)), uintptr(unsafe.Pointer(&dpiY))); res == 0 && dpiX > 0 {
+				dpi = int(dpiX)
+				scale = float64(dpiX) / 96.0
+			}
+		}
 		enumMu.Lock()
 		enumOut = append(enumOut, Rect{
 			X: int(mi.rcMonitor.left), Y: int(mi.rcMonitor.top),
 			W:       int(mi.rcMonitor.right - mi.rcMonitor.left),
 			H:       int(mi.rcMonitor.bottom - mi.rcMonitor.top),
 			Primary: mi.dwFlags&1 != 0, // MONITORINFOF_PRIMARY
+			Scale:   scale,
+			DPI:     dpi,
 		})
 		enumMu.Unlock()
 	}
 	return 1 // 继续枚举
 }
 
+var enumCallMu sync.Mutex
+
 // Monitors 枚举所有显示器的虚拟桌面矩形。
 func Monitors() []Rect {
+	enumCallMu.Lock()
+	defer enumCallMu.Unlock()
+
 	enumCbOnce.Do(func() {
 		enumCb = windows.NewCallback(enumMonitorsProc)
 	})
@@ -246,6 +271,45 @@ func SetCursorPos(x, y int) { procSetCursorPos.Call(uintptr(x), uintptr(y)) }
 // 物理虚拟桌面像素坐标，位置精确且与屏数、缩放无关。
 func InjectMoveAbs(x, y int) {
 	SetCursorPos(x, y)
+}
+
+// InjectMoveNorm 以归一化绝对坐标（0..65535，覆盖整个虚拟桌面）注入移动（B4）。
+//
+// 此处直接反算回虚拟桌面物理像素后通过 SetCursorPos 绝对定位注入：
+//  1. Windows 原生 SendInput + MOUSEEVENTF_VIRTUALDESK 在多显示器（尤其存在负坐标原点、
+//     主副屏异构 DPI 缩放如 PerMonitorV2）下，系统底层 csrss 存在坐标映射缺陷，
+//     极易将归一化坐标强制映射回虚拟桌面左上角 (SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN)，
+//     导致多屏下光标直接被钉死在副屏顶角（如 (-329,-1440)）无法动弹；
+//  2. SetCursorPos 直接操作物理桌面像素坐标系，位置绝对精准，彻底规避多屏/负坐标/DPI 陷阱，
+//     同时由 Windows 系统级触发 WM_MOUSEMOVE 投递给光标下窗口，支持平滑拖拽与交互。
+func InjectMoveNorm(nx, ny int) {
+	if nx < 0 {
+		nx = 0
+	} else if nx > 65535 {
+		nx = 65535
+	}
+	if ny < 0 {
+		ny = 0
+	} else if ny > 65535 {
+		ny = 65535
+	}
+	x, y := NormalizeToVirtualDesktop(nx, ny)
+	SetCursorPos(x, y)
+}
+
+// NormalizeToVirtualDesktop 把 0..65535 归一化坐标反算为虚拟桌面像素坐标，
+// 端点对齐桌面边缘（0→首像素、65535→末像素），四舍五入以与调用方
+// （kvm.injectPixelsNorm）的正向折算互为精确往返。
+// 仅在 SendInput 失败退回 SetCursorPos 时使用。
+func NormalizeToVirtualDesktop(nx, ny int) (x, y int) {
+	vx, vy, vw, vh := VirtualScreen()
+	if vw < 2 {
+		vw = 2
+	}
+	if vh < 2 {
+		vh = 2
+	}
+	return vx + (nx*(vw-1)+32767)/65535, vy + (ny*(vh-1)+32767)/65535
 }
 
 // InjectButton 注入鼠标按键。button: 1=左 2=右 3=中 4/5=侧键。
@@ -561,12 +625,14 @@ func keyHookProc(nCode int, wParam, lParam uintptr) uintptr {
 	return r
 }
 
-func sendMouse(flags uint32, dx, dy int32, data int32) {
+// sendMouse 组装并投递一条鼠标 INPUT，返回 SendInput 是否成功（注入 1 个事件）。
+func sendMouse(flags uint32, dx, dy int32, data int32) bool {
 	var in inputStruct
 	in.typ = inputMouse
 	mi := mouseInput{dx: dx, dy: dy, mouseData: uint32(data), dwFlags: flags}
 	copy(in.u[:], unsafe.Slice((*byte)(unsafe.Pointer(&mi)), unsafe.Sizeof(mi)))
-	procSendInput.Call(1, uintptr(unsafe.Pointer(&in)), uintptr(unsafe.Sizeof(in)))
+	r, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&in)), uintptr(unsafe.Sizeof(in)))
+	return r == 1
 }
 
 func sendKey(vk uint32, scan uint16, flags uint32) {
