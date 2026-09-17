@@ -396,8 +396,7 @@ func (r *touchRecognizer) update(cs []touchContact) {
 }
 
 // drain 把累积位移折算成滚轮。方向沿用真机校准结果：双指下移（dy>0）=
-// 滚轮向上（+120），双指右移（dx>0）= 滚轮向右（+120，横向轮）——与
-// 用户系统实际表现一致（2026-09 真机反馈：原垂直方向相反，已翻转）。
+// 滚轮向上（+120），双指右移（dx>0）= 滚轮向左（-120，横向轮，已按需求左右对调）。
 // 输出倍率由 touchSpeedPct 控制（kvm_touchpad_speed，越大越快）。
 // touchEmitWheel 拒收（钩子滚轮权威 / 起步缓冲）时保留累积、停止本轮
 // 折算，待门控放行后的下一帧一次性补发。
@@ -417,13 +416,13 @@ func (r *touchRecognizer) drain() {
 		r.accY += step
 	}
 	for r.accX >= step {
-		if !touchEmitWheel(120, true) {
+		if !touchEmitWheel(-120, true) {
 			break
 		}
 		r.accX -= step
 	}
 	for r.accX <= -step {
-		if !touchEmitWheel(-120, true) {
+		if !touchEmitWheel(120, true) {
 			break
 		}
 		r.accX += step

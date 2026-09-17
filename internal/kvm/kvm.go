@@ -228,8 +228,16 @@ type masterSession struct {
 	resY      float64 // 亚像素位移结转余数
 	slavePW   int     // 被控端入口显示器物理宽
 	slavePH   int     // 被控端入口显示器物理高
-	stop      chan struct{}
-	stopOnce  sync.Once
+	// lockX/lockY：MWB 光标钉住策略——主控期间把 A 机光标强制钉在触发点
+	// 边缘像素，阻止精确触控板手势（PT_GESTURE2，绕过 WH_MOUSE_LL）被系统
+	// 投递给 A 机边缘可滚动窗口（双滚问题）。Raw Input dx/dy 旁路独立于
+	// 光标实际位置，钉住光标不影响移动数据采集与转发。
+	lockX int
+	lockY int
+	// origY：切换触发时的原始光标 Y，主控结束时将光标复位回此行。
+	origY int
+	stop     chan struct{}
+	stopOnce sync.Once
 }
 
 type slaveSession struct {
@@ -1165,6 +1173,14 @@ func (s *Service) trySwitch(dir string) {
 		sess.normX = 65535
 	}
 	sess.normY = clamp01(ny) * 65535.0
+	// MWB 光标钉住：记录锁定目标。
+	// lockX = cx（边缘 X，保持切换触发位置）
+	// lockY = 屏幕底部（通常是任务栏区域，非 pointer-aware 窗口）。
+	// 系统手势（WM_POINTERWHEEL）将投递给任务栏而不是可滚动内容区。
+	// origY 保存原始光标行，用于主控结束时复位。
+	sess.lockX = cx
+	sess.lockY = curMon.Y + curMon.H - 1
+	sess.origY = cy
 	s.master = sess
 	s.mu.Unlock()
 	diag.Incr("kvm.master.start")
@@ -1172,6 +1188,11 @@ func (s *Service) trySwitch(dir string) {
 		"channel": map[bool]string{true: "universal", false: "relative"}[sess.abs],
 		"since":   time.Now().Format("15:04:05")})
 	inputSetSuppress(true)
+	// MWB 光标钉住：先移动光标到底部，再用 ClipCursor 锁死。
+	// 顺序很重要：先移位再锁，否则 ClipCursor 生效后、MoveAbs 前
+	// 存在短暂窗口期光标仍在原始边缘位置（可滚动区）。
+	s.injector.MoveAbs(sess.lockX, sess.lockY)
+	input.ClipCursorTo(sess.lockX, sess.lockY)
 	if sess.abs {
 		log.Printf("KVM：本会话走 Universal 0..65535 绝对注入（锚点 %d×%d 屏，缩放补偿 X%.2f/Y%.2f）",
 			int(aw), int(ah), sess.gainX, sess.gainY)
@@ -1371,6 +1392,10 @@ func (s *Service) endMasterSession(sess *masterSession, sendLeave bool, reason s
 	sess.stopOnce.Do(func() {
 		close(sess.stop)
 		inputSetSuppress(false)
+		input.ClipCursorRelease()
+		// MWB 光标复位：解除锁定后把光标复位回边缘原始行。
+		// lockX 是边缘 X，origY 是切换前的 Y，避免光标因锁定而残留在屏幕底部。
+		s.injector.MoveAbs(sess.lockX, sess.origY)
 		if sendLeave && sess.conn != nil && sess.w != nil {
 			sess.conn.SetWriteDeadline(time.Now().Add(time.Second))
 			writeMsg(sess.w, wireMsg{T: "leave"})

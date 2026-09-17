@@ -54,6 +54,12 @@ func CursorPos() (int, int) { return 0, 0 }
 // SetCursorPos 非 Windows 占位。
 func SetCursorPos(int, int) {}
 
+// ClipCursorTo 非 Windows 占位。
+func ClipCursorTo(int, int) {}
+
+// ClipCursorRelease 非 Windows 占位。
+func ClipCursorRelease() {}
+
 var errNotSupported = errStr("copywhere 的 KVM 功能仅支持 Windows")
 
 type errStr string
