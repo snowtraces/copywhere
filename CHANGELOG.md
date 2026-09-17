@@ -1,6 +1,6 @@
 # 更新日志
 
-## Unreleased
+## v0.4.0 (2026-09-17)
 
 - **新增**：**富文本剪贴板同步**——复制 Word/网页/邮件等带格式内容时，
   HTML Format 与 Rich Text Format 随纯文本一并搬运，对端 Ctrl+V 粘贴保留
