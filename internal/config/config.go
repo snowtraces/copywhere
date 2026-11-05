@@ -20,6 +20,7 @@ type Config struct {
 	ReceiveDir    string `json:"receive_dir"`                     // 接收文件保存目录
 	AutoPaste     bool   `json:"auto_paste"`                      // 收到文件后自动写入本机剪贴板
 	TextSync      bool   `json:"text_sync"`                       // 同步剪贴板文本
+	ShellMenu     *bool  `json:"shell_menu,omitempty"`            // 资源管理器右键菜单「用 copywhere 发送」（缺省开启）
 	AnnounceSec   int    `json:"announce_interval_sec"`           // 广播间隔（秒）
 	PeerTTLSec    int    `json:"peer_ttl_sec"`                    // 节点存活时长（秒）
 	KVMEnabled    *bool  `json:"kvm_enabled,omitempty"`           // 鼠标键盘跨屏开关（缺省开启）
@@ -30,6 +31,7 @@ type Config struct {
 	KVMMoveMs     int    `json:"kvm_move_interval_ms"`            // 主控移动合拍间隔（ms）；0=默认(8)，>0 自定义
 	KVMReflowMs   int    `json:"kvm_reflow_step_ms"`              // 被控重排注入节拍（ms）；0=默认(4)，-1=关闭直注，>0 自定义
 	KVMSpeedPct   int    `json:"kvm_speed_percent"`               // 本机作为主控的位移速度调节百分比（100=1.0x；<=0 视为 100）
+	KVMEdgeDZ     *int   `json:"kvm_edge_dead_zone,omitempty"`    // 边缘死区高度（逻辑像素，按屏缩放比换算）：缺省 48，0=关闭
 	KVMTouchpad   *bool  `json:"kvm_touchpad_gestures,omitempty"` // 实验性：触控板双指滚动跨屏识别（缺省关闭）
 	KVMTouchSpd   int    `json:"kvm_touchpad_speed"`              // 触控板滚动输出倍率百分比（100=基准；<=0 视为 100）
 	WebPort       int    `json:"web_port"`                        // GUI 面板端口（gui 命令；0=默认，负数=随机）
@@ -69,6 +71,17 @@ func (c *Config) KVMSpeedFactor() int {
 	return c.KVMSpeedPct
 }
 
+// KVMEdgeDeadZone 返回边缘死区高度（逻辑像素，kvm 层按显示器缩放比换算成物理
+// 像素）。屏幕上下两端是系统 UI 热区——窗口关闭按钮、右下角"显示桌面"、任务栏
+// ——光标推到那里属于日常操作，不应触发跨屏或切回。
+// 老配置没有该字段 → 返回 -1，由 kvm 层落默认值（48）；显式 0 = 关闭死区。
+func (c *Config) KVMEdgeDeadZone() int {
+	if c.KVMEdgeDZ == nil {
+		return -1
+	}
+	return *c.KVMEdgeDZ
+}
+
 // Default 返回默认配置。
 func Default() (*Config, error) {
 	host, _ := os.Hostname()
@@ -79,6 +92,8 @@ func Default() (*Config, error) {
 	if err != nil {
 		home = "."
 	}
+	// 边缘死区默认值写进新配置，便于用户在 config.json 里发现这个开关
+	edgeDeadZone := 48
 	return &Config{
 		NodeName:      host,
 		DiscoveryPort: 47830,
@@ -91,6 +106,7 @@ func Default() (*Config, error) {
 		PeerTTLSec:    12,
 		KVMPort:       47832,
 		KVMSpeedPct:   100,
+		KVMEdgeDZ:     &edgeDeadZone,
 		WebPort:       47890,
 	}, nil
 }
@@ -162,6 +178,13 @@ func Load(path string) (*Config, error) {
 // KVMOn 返回 KVM 是否启用（字段缺省即启用）。
 func (c *Config) KVMOn() bool {
 	return c.KVMEnabled == nil || *c.KVMEnabled
+}
+
+// ShellMenuOn 返回资源管理器右键菜单（「用 copywhere 发送」）是否启用。
+// 字段缺省即启用：右键发送是本机的核心投送入口，用户升级后无需额外配置；
+// 面板「设置 → 通用」可随时关闭（同时移除已注册的菜单项）。
+func (c *Config) ShellMenuOn() bool {
+	return c.ShellMenu == nil || *c.ShellMenu
 }
 
 // KVMTouchpadOn 返回触控板手势识别是否启用（实验性，缺省关闭）。

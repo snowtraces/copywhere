@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -25,6 +26,12 @@ type fakeCore struct {
 	peers  []discovery.Peer
 	sent   []string
 	files  [][]string
+
+	// 右键菜单（/api/send-paths 与 shell_menu 开关）
+	shell        [][]string
+	shellMenuSet []bool
+	shellMenuErr error
+	pairedPeers  map[string]bool
 
 	mu            sync.Mutex // 保护以下字段（apiSetConfig 的 goroutine 异步写入）
 	kvmOldLeft    string
@@ -55,12 +62,42 @@ func (f *fakeCore) SendFiles(paths []string, total int64) {
 	f.files = append(f.files, paths)
 }
 
+// ShellSend 记录右键菜单交来的路径批次；shellMenuSet 记录开关调用。
+func (f *fakeCore) ShellSend(paths []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.shell = append(f.shell, paths)
+}
+
+func (f *fakeCore) SetShellMenu(on bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.shellMenuSet = append(f.shellMenuSet, on)
+	return f.shellMenuErr
+}
+
+func (f *fakeCore) shellSnapshot() [][]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([][]string(nil), f.shell...)
+}
+
+func (f *fakeCore) shellMenuSnapshot() []bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]bool(nil), f.shellMenuSet...)
+}
+
 func (f *fakeCore) sentSnapshot() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.sent...)
 }
-func (f *fakeCore) PairedWith(id string) bool     { return false }
+func (f *fakeCore) PairedWith(id string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.pairedPeers[id]
+}
 func (f *fakeCore) RejectedWith(id string) bool   { return false }
 func (f *fakeCore) PairedList() []trust.Paired    { return nil }
 func (f *fakeCore) WatchMode() string             { return "none" }
@@ -241,6 +278,103 @@ func TestConfigSave(t *testing.T) {
 	}
 }
 
+// postJSON 是测试里的 JSON POST 辅助（统一断言状态码）。
+func postJSON(t *testing.T, url string, body any) *http.Response {
+	t.Helper()
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(url, "application/json", strings.NewReader(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+// TestSendPathsEndpoint 覆盖右键菜单的入口语义：路径存在才转交、无可用节点时
+// 必须给出可展示的原因（右键没有界面，原因由 helper 弹窗呈现）。
+func TestSendPathsEndpoint(t *testing.T) {
+	srv, core := newTestServer(t)
+	base, key := splitURL(srv)
+	dir := t.TempDir()
+	file := filepath.Join(dir, "报告.txt")
+	if err := os.WriteFile(file, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	url := base + "api/send-paths?key=" + key
+
+	// 1) 无在线节点 → 409
+	resp := postJSON(t, url, map[string]any{"paths": []string{file}})
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict || !strings.Contains(string(body), "未发现在线节点") {
+		t.Fatalf("无节点应 409 且说明原因，实际 %d %s", resp.StatusCode, body)
+	}
+
+	// 2) 有在线节点但未配对 → 409
+	core.peers = []discovery.Peer{{ID: "p1", Name: "peer-a", IPs: []string{"10.0.0.2"}, TCPPort: 47831}}
+	resp = postJSON(t, url, map[string]any{"paths": []string{file}})
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict || !strings.Contains(string(body), "未配对") {
+		t.Fatalf("未配对应 409 且说明原因，实际 %d %s", resp.StatusCode, body)
+	}
+
+	// 3) 已配对 → 200，路径交给 App 合并发送
+	core.pairedPeers = map[string]bool{"p1": true}
+	resp = postJSON(t, url, map[string]any{"paths": []string{file}})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("已配对应 200，实际 %d", resp.StatusCode)
+	}
+	shell := core.shellSnapshot()
+	if len(shell) != 1 || len(shell[0]) != 1 || shell[0][0] != file {
+		t.Fatalf("路径应转交 ShellSend，实际 %v", shell)
+	}
+
+	// 4) 路径不存在 → 400（文件刚被删除/移动）
+	resp = postJSON(t, url, map[string]any{"paths": []string{filepath.Join(dir, "gone.txt")}})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("路径不存在应 400，实际 %d", resp.StatusCode)
+	}
+}
+
+// TestShellMenuConfigToggle 覆盖面板开关：切换时注册/注销菜单，注册失败不落盘。
+func TestShellMenuConfigToggle(t *testing.T) {
+	srv, core := newTestServer(t)
+	base, key := splitURL(srv)
+	url := base + "api/config?key=" + key
+
+	// 默认开启（字段缺省即开）
+	if !srv.cfg.ShellMenuOn() {
+		t.Fatal("默认应开启右键菜单")
+	}
+	resp := postJSON(t, url, map[string]any{"shell_menu": false})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("关闭应成功，实际 %d", resp.StatusCode)
+	}
+	if srv.cfg.ShellMenuOn() {
+		t.Fatal("shell_menu=false 未生效")
+	}
+	if got := core.shellMenuSnapshot(); len(got) != 1 || got[0] != false {
+		t.Fatalf("应调用 SetShellMenu(false)，实际 %v", got)
+	}
+
+	// 注册失败：返回 500 且配置回滚，避免"面板说开着、菜单其实没注册"
+	core.shellMenuErr = errors.New("注册表被拦截")
+	resp = postJSON(t, url, map[string]any{"shell_menu": true})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("注册失败应 500，实际 %d", resp.StatusCode)
+	}
+	if srv.cfg.ShellMenuOn() {
+		t.Fatal("注册失败应回滚开关")
+	}
+}
+
 func TestKVMConfigSave(t *testing.T) {
 	srv, core := newTestServer(t)
 	base, key := splitURL(srv)
@@ -268,6 +402,44 @@ func TestKVMConfigSave(t *testing.T) {
 	// 跨屏开关应热停用（SetKVMEnabled(false)）
 	if len(core.kvmEnabledSet) != 1 || core.kvmEnabledSet[0] != false {
 		t.Fatalf("kvm_enabled 应触发热启停回调，实际 %v", core.kvmEnabledSet)
+	}
+}
+
+// TestKVMEdgeDeadZoneConfig 覆盖边缘死区配置：0 = 关闭死区也能正确落盘并触发
+// KVM 热更新；越界值返回 400 且不改动配置。
+func TestKVMEdgeDeadZoneConfig(t *testing.T) {
+	srv, core := newTestServer(t)
+	base, key := splitURL(srv)
+	url := base + "api/config?key=" + key
+
+	resp := postJSON(t, url, map[string]any{"kvm_edge_dead_zone": 0})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("保存死区配置应成功，实际 %d", resp.StatusCode)
+	}
+	if srv.cfg.KVMEdgeDZ == nil || *srv.cfg.KVMEdgeDZ != 0 {
+		t.Fatalf("kvm_edge_dead_zone 应为 0，实际 %v", srv.cfg.KVMEdgeDZ)
+	}
+	// 该字段走 kvmChanged → SyncKVMFrom 热更新通道（异步）
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, _, calls := core.kvmSyncSnapshot(); calls > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, _, calls := core.kvmSyncSnapshot(); calls != 1 {
+		t.Fatalf("死区改动应触发 1 次 SyncKVMFrom，实际 %d", calls)
+	}
+
+	// 越界值：400 拒绝且不改配置
+	resp = postJSON(t, url, map[string]any{"kvm_edge_dead_zone": 999})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("越界死区应 400，实际 %d", resp.StatusCode)
+	}
+	if srv.cfg.KVMEdgeDZ == nil || *srv.cfg.KVMEdgeDZ != 0 {
+		t.Fatalf("越界值不应改动配置，实际 %v", srv.cfg.KVMEdgeDZ)
 	}
 }
 
@@ -510,5 +682,27 @@ func TestFaviconsServed(t *testing.T) {
 		if len(body) == 0 {
 			t.Fatalf("%s 内容不应为空", tc.path)
 		}
+	}
+}
+
+// 注册表操作被安全软件挂起时，面板保存不能跟着卡死。
+func TestRunWithTimeout(t *testing.T) {
+	if err := runWithTimeout(func() error { return nil }, time.Second); err != nil {
+		t.Fatalf("正常返回时不应报错: %v", err)
+	}
+	wantErr := errors.New("拒绝访问")
+	if err := runWithTimeout(func() error { return wantErr }, time.Second); !errors.Is(err, wantErr) {
+		t.Fatalf("应原样返回业务错误，实际 %v", err)
+	}
+	start := time.Now()
+	err := runWithTimeout(func() error { time.Sleep(2 * time.Second); return nil }, 50*time.Millisecond)
+	if err == nil {
+		t.Fatal("挂起的操作应超时报错")
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("超时应立即返回，实际等了 %v", d)
+	}
+	if !strings.Contains(err.Error(), "超时") {
+		t.Fatalf("错误文案应说明超时，实际 %v", err)
 	}
 }

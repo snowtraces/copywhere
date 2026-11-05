@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -33,6 +34,11 @@ type Core interface {
 	IsPaused() bool
 	SendFiles(paths []string, total int64)
 	SendText(text string)
+	// ShellSend 接收资源管理器右键菜单交来的本地路径（已校验存在），
+	// 短窗口合并后发送；与面板拖入不同，路径无需上传。
+	ShellSend(paths []string)
+	// SetShellMenu 注册/注销资源管理器右键菜单（指向当前 exe）。
+	SetShellMenu(on bool) error
 	// 配对
 	PairedWith(id string) bool
 	RejectedWith(id string) bool
@@ -94,6 +100,7 @@ type stateJSON struct {
 	KVMTouchpad bool   `json:"kvm_touchpad_gestures"`
 	KVMLeft     string `json:"kvm_left"`
 	KVMRight    string `json:"kvm_right"`
+	ShellMenu   bool   `json:"shell_menu"` // 资源管理器右键菜单是否已启用
 	WatchMode   string `json:"watch_mode"` // 剪贴板监听方式：listener | viewer | none
 }
 
@@ -173,6 +180,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/pause", s.apiPause)
 	mux.HandleFunc("POST /api/send-text", s.apiSendText)
 	mux.HandleFunc("POST /api/upload", s.apiUpload)
+	mux.HandleFunc("POST /api/send-paths", s.apiSendPaths)
 	mux.HandleFunc("POST /api/open", s.apiOpen)
 	mux.HandleFunc("POST /api/pair", s.apiPair)
 	mux.HandleFunc("GET /api/pair/pending", s.apiPairPending)
@@ -254,6 +262,7 @@ func (s *Server) stateView() stateJSON {
 		KVMTouchpad: s.cfg.KVMTouchpadOn(),
 		KVMLeft:     s.cfg.KVMLeft,
 		KVMRight:    s.cfg.KVMRight,
+		ShellMenu:   s.cfg.ShellMenuOn(),
 		WatchMode:   s.core.WatchMode(),
 	}
 }
@@ -390,6 +399,19 @@ func (s *Server) apiSetConfig(w http.ResponseWriter, r *http.Request) {
 			errs = append(errs, "text_sync 需要布尔值")
 		}
 	}
+	// 资源管理器右键菜单：开关即注册/注销（HKCU 项），失败则整体不落盘
+	oldShellMenu := s.cfg.ShellMenu
+	shellMenuChanged := false
+	if v, ok := in["shell_menu"]; ok {
+		if bv, ok := v.(bool); ok {
+			if s.cfg.ShellMenuOn() != bv {
+				shellMenuChanged = true
+			}
+			s.cfg.ShellMenu = &bv
+		} else {
+			errs = append(errs, "shell_menu 需要布尔值")
+		}
+	}
 	// KVM 布局：允许空串（清除某一侧）；邻居名本机即时热更新，并推送到对端。
 	// 记录改动前的值：取消（清空）或换人时向旧邻居推送移除通知。
 	oldKVMLeft, oldKVMRight := s.cfg.KVMLeft, s.cfg.KVMRight
@@ -467,9 +489,33 @@ func (s *Server) apiSetConfig(w http.ResponseWriter, r *http.Request) {
 			errs = append(errs, "kvm_speed_percent 需要 0~500 的整数（100=基准 1.0x）")
 		}
 	}
+	// 边缘死区（逻辑像素）：屏幕上下两端的系统 UI 热区（关闭按钮/显示桌面/
+	// 任务栏）不触发跨屏或切回。0 = 关闭死区。热更新到 kvm 层，无需重启。
+	if v, ok := in["kvm_edge_dead_zone"]; ok {
+		if fv, ok := v.(float64); ok && fv >= 0 && fv <= 400 {
+			dz := int(fv)
+			s.cfg.KVMEdgeDZ = &dz
+			kvmChanged = true
+		} else {
+			errs = append(errs, "kvm_edge_dead_zone 需要 0~400 的整数（0=关闭死区）")
+		}
+	}
 	if len(errs) > 0 {
 		http.Error(w, strings.Join(errs, "；"), http.StatusBadRequest)
 		return
+	}
+	// 注册表操作可能失败（权限/杀软拦截）：先做，失败则回滚开关且不落盘，
+	// 避免"配置说开着、菜单其实没注册"的静默不一致。注册表写入还可能被
+	// 安全软件长时间挂起，这里加超时，免得整个保存请求跟着卡死。
+	if shellMenuChanged {
+		// 先取值再起 goroutine：超时分支会回滚 s.cfg.ShellMenu，在 goroutine 里
+		// 读当前配置既构成数据竞争，语义也错——要注册的是用户请求的状态。
+		on := s.cfg.ShellMenuOn()
+		if err := runWithTimeout(func() error { return s.core.SetShellMenu(on) }, shellMenuTimeout); err != nil {
+			s.cfg.ShellMenu = oldShellMenu
+			http.Error(w, "更新资源管理器右键菜单失败: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	if err := s.cfg.Save(s.cfgPath); err != nil {
 		http.Error(w, "保存配置失败: "+err.Error(), http.StatusInternalServerError)
@@ -583,6 +629,63 @@ func (s *Server) apiUpload(w http.ResponseWriter, r *http.Request) {
 		s.core.SendFiles(paths, total)
 	}()
 	writeJSON(w, map[string]any{"ok": true, "count": len(paths), "total": total})
+}
+
+// apiSendPaths 接收资源管理器右键菜单交来的本地路径（由 shell-send 子命令调用）。
+// 与 /api/upload 的区别：这些文件本来就在本机，无需上传——校验存在后直接交给
+// App 合并发送，因此几 GB 的目录也能"右键即发"。
+// 安全边界：面板只监听 127.0.0.1 且需要访问令牌（helper 从本机地址文件取），
+// 这里只做 Stat 校验并转交发送，不读取、不回显文件内容。
+func (s *Server) apiSendPaths(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Paths []string `json:"paths"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&in); err != nil {
+		http.Error(w, "请求体不是合法 JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	paths := make([]string, 0, len(in.Paths))
+	for _, p := range in.Paths {
+		if p == "" {
+			continue
+		}
+		if _, err := os.Stat(p); err != nil {
+			log.Printf("右键菜单发送忽略不可访问的路径 %s: %v", p, err)
+			continue
+		}
+		paths = append(paths, p)
+	}
+	if len(paths) == 0 {
+		http.Error(w, "没有可发送的文件（路径不存在或为空）", http.StatusBadRequest)
+		return
+	}
+	// 右键操作没有任何界面：无可用节点时必须把原因交回 helper 弹窗，
+	// 否则用户只会看到"什么都没发生"。
+	if n, reason := s.sendablePeerSummary(); n == 0 {
+		http.Error(w, reason, http.StatusConflict)
+		return
+	}
+	s.core.ShellSend(paths)
+	writeJSON(w, map[string]any{"ok": true, "count": len(paths)})
+}
+
+// sendablePeerSummary 统计可直接投递的在线节点（已配对且未被鉴权拒绝），
+// 为 0 时同时给出可展示的原因。
+func (s *Server) sendablePeerSummary() (int, string) {
+	peers := s.core.Peers()
+	if len(peers) == 0 {
+		return 0, "未发现在线节点：请确认对端已运行 copywhere，且两台机器在同一网段"
+	}
+	n := 0
+	for _, p := range peers {
+		if s.core.PairedWith(p.ID) && !s.core.RejectedWith(p.ID) {
+			n++
+		}
+	}
+	if n == 0 {
+		return 0, "在线节点均未配对（或鉴权被拒）：请先在面板中完成配对"
+	}
+	return n, ""
 }
 
 // apiPair 主动向指定节点发起配对（同步等待对端裁决）。
@@ -800,5 +903,24 @@ func bytesHuman(n int64) string {
 		return fmt.Sprintf("%.1fKB", float64(n)/kb)
 	default:
 		return fmt.Sprintf("%dB", n)
+	}
+}
+
+// shellMenuTimeout 是注册表菜单操作的上限：安全软件拦截时写入可能长时间挂起，
+// 面板的"保存"不能跟着一起卡死。
+const shellMenuTimeout = 5 * time.Second
+
+// runWithTimeout 在 goroutine 里执行 fn 并限制等待时间。
+//
+// 超时后 fn 仍可能在后台跑完（无法强杀系统调用），这里只保证调用方不被拖住；
+// 每次调用最多留一个悬挂的 goroutine，不会积累。
+func runWithTimeout(fn func() error, d time.Duration) error {
+	done := make(chan error, 1)
+	go func() { done <- fn() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(d):
+		return errors.New("注册表操作超时（可能被安全软件拦截，请把 copywhere 加入信任列表）")
 	}
 }

@@ -47,6 +47,10 @@ type Options struct {
 	GUI bool
 	// Sink 非 nil 时接收结构化事件（webui.Bus 实现），供 GUI 面板实时展示。
 	Sink EventSink
+	// LogFile 非 nil 时日志额外落盘（gui 模式写 ~/.copywhere/gui.log）。
+	// windowsgui 构建没有控制台，文件是出问题时唯一能查的痕迹；
+	// 与面板事件流同时写入，二者互不影响。
+	LogFile io.Writer
 }
 
 // Progress 描述一次文件传输的实时进度（发送或接收）。
@@ -130,6 +134,8 @@ type App struct {
 	pendingMu sync.Mutex
 	pending   []pendingEntry
 
+	shellBatcher *pathBatcher // 右键菜单发送的合并器（见 shellsend.go）
+
 	rejectedMu sync.Mutex
 	rejected   map[string]bool // 因 token 不一致被暂停发送的节点（按指纹）
 
@@ -145,9 +151,16 @@ type pairRequest struct {
 }
 
 func newApp(cfg *config.Config) (*App, error) {
-	store := discovery.NewStore(nodeID())
+	return newAppWithID(cfg, nodeID())
+}
+
+// newAppWithID 以指定节点指纹构造 App；生产路径恒用 newApp（指纹取 MachineGuid），
+// 传入自定义指纹只为让同进程内的多节点测试能区分彼此。
+func newAppWithID(cfg *config.Config, id string) (*App, error) {
+	store := discovery.NewStore(id)
 	store.SetLocalSubnets(localSubnets())
-	a := &App{cfg: cfg, store: store, selfID: nodeID(), rejected: map[string]bool{}}
+	a := &App{cfg: cfg, store: store, selfID: id, rejected: map[string]bool{}}
+	a.shellBatcher = newPathBatcher(shellBatchWindow, shellBatchMaxWait, a.shellSendFiles)
 	store.SetRestartCallback(a.onPeerRestart)
 	// 信任库与配置同目录（peers.json）；读取失败不阻断启动，仅退化为空库
 	cfgPath := cfg.Path
@@ -245,18 +258,33 @@ func shortHash(s string) string {
 // 避免“传输/发现静默失效、只剩剪贴板监控”的半残状态。
 func precheckPorts(cfg *config.Config) error {
 	if ln, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", cfg.TransferPort)); err != nil {
-		return fmt.Errorf("传输端口 %d/tcp 被占用: %w（是否已有另一个 copywhere 实例在运行？）",
-			cfg.TransferPort, err)
+		return portListenError("传输", "tcp", cfg.TransferPort, err)
 	} else {
 		ln.Close()
 	}
 	if c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: cfg.DiscoveryPort}); err != nil {
-		return fmt.Errorf("发现端口 %d/udp 被占用: %w（是否已有另一个 copywhere 实例在运行？）",
-			cfg.DiscoveryPort, err)
+		return portListenError("发现", "udp", cfg.DiscoveryPort, err)
 	} else {
 		c.Close()
 	}
 	return nil
+}
+
+// portListenError 把监听失败翻译成用户能照着排查的报错。
+//
+// 只有"地址已被占用"才归因到"已有实例在运行"（并点名占用者）；其余原因原样
+// 带出系统错误——把它们都说成"另一个 copywhere 在跑"会让用户白找一圈实例。
+func portListenError(role, network string, port int, err error) error {
+	if !isAddrInUse(err) {
+		return fmt.Errorf("%s端口 %d/%s 监听失败: %w", role, port, network, err)
+	}
+	return &PortInUseError{
+		Role:    role,
+		Network: network,
+		Port:    port,
+		Owner:   portOwner(port, network == "udp"),
+		Err:     err,
+	}
 }
 
 // Run 启动完整服务：发现 + 传输 + 剪贴板监控（+ 可选 TUI），阻塞直到退出。
@@ -293,7 +321,12 @@ func Start(ctx context.Context, cfg *config.Config, opts Options) (*App, error) 
 		log.SetOutput(a.ui.Hub) // 日志进入 TUI 的日志页
 	case opts.Sink != nil:
 		a.sink = opts.Sink
-		log.SetOutput(&sinkWriter{sink: a.sink}) // 日志进入 GUI 面板事件流
+		var w io.Writer = &sinkWriter{sink: a.sink}
+		if opts.LogFile != nil {
+			// 面板事件流 + 磁盘文件：顺序上事件流在前（它不会失败），文件在后
+			w = io.MultiWriter(w, opts.LogFile)
+		}
+		log.SetOutput(w) // 日志进入 GUI 面板事件流（并落盘）
 	default:
 		log.SetOutput(ui.NewHub(os.Stdout)) // 纯日志模式，镜像到标准输出
 	}
@@ -503,6 +536,7 @@ func (a *App) startKVM() {
 			MoveInterval: cfg.KVMMoveInterval(),
 			ReflowStep:   cfg.KVMReflowStep(),
 			SpeedPercent: cfg.KVMSpeedFactor(),
+			EdgeDeadZone: cfg.KVMEdgeDeadZone(),
 			TokenForPeer: func(id string) (string, bool) {
 				e, ok := a.trust.Get(id)
 				return e.PeerToken, ok && e.PeerToken != ""
@@ -516,7 +550,12 @@ func (a *App) startKVM() {
 	ctx, cancel := context.WithCancel(a.parentOrBackground())
 	if err := svc.Start(ctx); err != nil {
 		cancel()
-		log.Printf("KVM 服务启动失败: %v", err)
+		// 端口被占是"鼠标移不进来"最常见的原因，顺手把占用者写进日志。
+		if owner := portOwner(cfg.KVMPort, false); owner != "" {
+			log.Printf("KVM 服务启动失败: %v（端口 %d 被 %s 占用，别的机器鼠标将无法移入）", err, cfg.KVMPort, owner)
+		} else {
+			log.Printf("KVM 服务启动失败: %v（别的机器鼠标将无法移入）", err)
+		}
 		return
 	}
 	a.kvmSvc = svc
@@ -732,6 +771,7 @@ func (a *App) SyncKVMFrom(oldLeft, oldRight string) {
 	if svc := a.currentKVM(); svc != nil {
 		svc.UpdateNeighbors(a.cfg.KVMLeft, a.cfg.KVMRight)
 		svc.UpdateTunables(a.cfg.KVMMoveInterval(), a.cfg.KVMReflowStep(), a.cfg.KVMSpeedFactor())
+		svc.SetEdgeDeadZone(a.cfg.KVMEdgeDeadZone())
 	}
 	// 旧左邻不再是我的左邻 → 我不再是它的右邻；右邻同理
 	if oldLeft != "" && oldLeft != a.cfg.KVMLeft {

@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=0.2.0">
-<link rel="icon" type="image/png" sizes="192x192" href="/favicon.png?v=0.2.0">
-<link rel="alternate icon" href="/favicon.ico?v=0.2.0" type="image/x-icon">
-<link rel="apple-touch-icon" href="/favicon.png?v=0.2.0">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg?v=0.5.0">
+<link rel="icon" type="image/png" sizes="192x192" href="/favicon.png?v=0.5.0">
+<link rel="alternate icon" href="/favicon.ico?v=0.5.0" type="image/x-icon">
+<link rel="apple-touch-icon" href="/favicon.png?v=0.5.0">
 <title>copywhere</title>
 <style>
 /* ============================================================
@@ -752,6 +752,11 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
             <button data-theme-opt="dark">深色</button>
           </div>
         </div>
+        <div class="set-row">
+          <div class="info"><b>资源管理器右键菜单</b>
+            <div class="hint">在文件/文件夹的右键菜单中显示「用 copywhere 发送」：选中即发到全部在线节点，不受阈值限制（默认开启，关闭后立即移除菜单项）</div></div>
+          <div class="ctl"><label class="switch"><input type="checkbox" id="cfg_shell_menu"><span class="knob"></span></label></div>
+        </div>
         <div class="set-note"><b>配对认证</b><br>认证采用配对制：在左侧设备坞或「屏幕布局」配对后即可互通，无需配置 token。</div>
       </div>
 
@@ -813,6 +818,11 @@ input[type=range]::-moz-range-thumb { width: 12px; height: 16px; background: var
           <div class="srow"><b>速度微调倍率</b><span class="sval" id="v_speed">100%</span></div>
           <input type="range" id="cfg_kvm_speed_pct" min="50" max="300" step="5" value="100" oninput="syncKvmScales()">
           <div class="hint">系统已按两端屏幕分辨率与实际设置缩放比自动计算科学基准，此项用于个性化微调（100% = 自动标准速度）。</div>
+        </div>
+        <div class="set-row col">
+          <div class="srow"><b>边缘死区</b><span class="sval" id="v_deadzone">48px</span></div>
+          <input type="range" id="cfg_kvm_edge_dead_zone" min="0" max="200" step="4" value="48" oninput="syncKvmScales()">
+          <div class="hint">屏幕上下两端这么大的区域不触发跨屏/切回：右上角的窗口关闭按钮、右下角的「显示桌面」与任务栏都在这里，把光标顶过去属于日常操作（按各屏缩放比换算，0 = 关闭死区）。</div>
         </div>
         <div class="set-row">
           <div class="info"><b>触控板双指滚动（实验性）</b>
@@ -2042,9 +2052,13 @@ async function loadCfg() {
     $("cfg_receive_dir").value = c.receive_dir || "";
     $("cfg_text_sync").checked = !!c.text_sync;
     $("cfg_auto_paste").checked = !!c.auto_paste;
+    // shell_menu 字段缺省即开启（老配置无该字段时也应显示为开）
+    $("cfg_shell_menu").checked = c.shell_menu !== false;
     $("cfg_kvm_move_ms").value = c.kvm_move_interval_ms ?? 0;
     $("cfg_kvm_reflow_ms").value = c.kvm_reflow_step_ms ?? 0;
     $("cfg_kvm_speed_pct").value = c.kvm_speed_percent || 100;
+    // kvm_edge_dead_zone 字段缺省即默认死区（老配置无该字段时也显示为 48）
+    $("cfg_kvm_edge_dead_zone").value = c.kvm_edge_dead_zone ?? 48;
     $("cfg_kvm_touchpad").checked = !!c.kvm_touchpad_gestures;
     $("cfg_kvm_touchpad_speed").value = c.kvm_touchpad_speed || 100;
     syncKvmScales();
@@ -2084,6 +2098,9 @@ $("cfg_node_name").addEventListener("change", e => {
 });
 $("cfg_text_sync").addEventListener("change", e => saveFields({ text_sync: e.target.checked }));
 $("cfg_auto_paste").addEventListener("change", e => saveFields({ auto_paste: e.target.checked }));
+$("cfg_shell_menu").addEventListener("change", e =>
+  saveFields({ shell_menu: e.target.checked },
+    e.target.checked ? "已启用右键菜单「用 copywhere 发送」" : "已移除右键菜单项"));
 $("cfg_kvm_touchpad").addEventListener("change", e => saveFields({ kvm_touchpad_gestures: e.target.checked }));
 $("cfg_max_auto_copy_mb").addEventListener("change", e =>
   saveFields({ max_auto_copy_mb: Number(e.target.value || 0) }));
@@ -2096,6 +2113,7 @@ for (const [id, key] of [
   ["cfg_kvm_move_ms", "kvm_move_interval_ms"],
   ["cfg_kvm_reflow_ms", "kvm_reflow_step_ms"],
   ["cfg_kvm_speed_pct", "kvm_speed_percent"],
+  ["cfg_kvm_edge_dead_zone", "kvm_edge_dead_zone"],
   ["cfg_kvm_touchpad_speed", "kvm_touchpad_speed"],
 ]) {
   $(id).addEventListener("change", e => saveFields({ [key]: Number(e.target.value || 0) }));
@@ -2108,6 +2126,8 @@ function syncKvmScales() {
   const rv = Number($("cfg_kvm_reflow_ms").value);
   $("v_reflow").textContent = rv < 0 ? "已关闭" : (rv === 0 ? "默认 4ms" : rv + "ms");
   $("v_speed").textContent = Number($("cfg_kvm_speed_pct").value || 100) + "%";
+  const dz = Number($("cfg_kvm_edge_dead_zone").value);
+  $("v_deadzone").textContent = dz > 0 ? dz + "px" : "已关闭";
   $("v_touchspeed").textContent = Number($("cfg_kvm_touchpad_speed").value || 100) + "%";
 }
 

@@ -192,6 +192,7 @@ func newTestServiceCfg(t *testing.T, inj Injector, over Config) (*Service, int) 
 		Port: port, EntryMonitor: -1, SelfID: "SLAVE-ID",
 		MoveInterval: over.MoveInterval,
 		ReflowStep:   over.ReflowStep,
+		EdgeDeadZone: over.EdgeDeadZone,
 		// 测试约定：主控机指纹 MASTER-ID 的配对令牌为 "tok"
 		PairTokenFor: func(id string) (string, bool) { return "tok", id == "MASTER-ID" },
 	}, "SLAVE", store, 12*time.Second, inj)
@@ -600,6 +601,36 @@ func TestEdgePushCooldownGate(t *testing.T) {
 	svc.mu.Unlock()
 	if !until2.Equal(until) {
 		t.Fatal("尝试窗口内的推动不应重置窗口")
+	}
+}
+
+// 回归：入口点必须避开死区——否则两端缩放比不同时，进来就贴着被控屏的
+// 上下死区，用户想立刻推回切回却没反应。
+func TestSlaveEntryAvoidsDeadZone(t *testing.T) {
+	inj := newFakeInjector()
+	_, port := newTestServiceCfg(t, inj, Config{ReflowStep: -1, EdgeDeadZone: DefaultEdgeDeadZone})
+	tm := dialMaster(t, port, "tok")
+	if _, err := tm.recv(); err != nil {
+		t.Fatal(err)
+	}
+	// 比例 0.01 → 1080 屏的 10 行，落在顶部 48px 死区内
+	tm.send(wireMsg{T: "enter", Dir: "right", Y: 0.01})
+	waitFor(t, func() bool { return inj.absCount() > 0 }, "入口绝对注入")
+	if _, y := inj.lastAbs(); y != DefaultEdgeDeadZone {
+		t.Fatalf("入口应挪到死区下沿 %d, got %d", DefaultEdgeDeadZone, y)
+	}
+
+	// 比例 0.99 → 落在底部死区，同样挪出
+	inj2 := newFakeInjector()
+	_, port2 := newTestServiceCfg(t, inj2, Config{ReflowStep: -1, EdgeDeadZone: DefaultEdgeDeadZone})
+	tm2 := dialMaster(t, port2, "tok")
+	if _, err := tm2.recv(); err != nil {
+		t.Fatal(err)
+	}
+	tm2.send(wireMsg{T: "enter", Dir: "right", Y: 0.99})
+	waitFor(t, func() bool { return inj2.absCount() > 0 }, "入口绝对注入")
+	if _, y := inj2.lastAbs(); y != 1080-DefaultEdgeDeadZone-1 {
+		t.Fatalf("入口应挪到底部死区上沿 %d, got %d", 1080-DefaultEdgeDeadZone-1, y)
 	}
 }
 
@@ -1129,4 +1160,247 @@ func TestSlaveMoveCrossesToSecondaryMonitor(t *testing.T) {
 		cx, _ := inj.CursorPos()
 		return cx <= -500
 	}, "深入副屏")
+}
+
+// ---------- 边缘死区：屏幕上下两端不跨屏 ----------
+
+// 死区几何：上下两端各 dz 像素内为死区，中段照常；按显示器缩放比换算，
+// 并压到屏高三分之一以内。
+func TestEdgeDeadZoneGeometry(t *testing.T) {
+	m := input.Rect{X: 0, Y: 0, W: 1920, H: 1080, Scale: 1.0}
+	if !inEdgeDeadZone(0, m, 48) || !inEdgeDeadZone(47, m, 48) {
+		t.Fatal("顶部死区应覆盖 0..47")
+	}
+	if !inEdgeDeadZone(1080-48, m, 48) || !inEdgeDeadZone(1079, m, 48) {
+		t.Fatal("底部死区应覆盖最后 48 像素")
+	}
+	if inEdgeDeadZone(48, m, 48) || inEdgeDeadZone(1080-49, m, 48) {
+		t.Fatal("死区之外应可跨屏")
+	}
+	if inEdgeDeadZone(0, m, 0) || inEdgeDeadZone(-1, m, 48) || inEdgeDeadZone(1080, m, 48) {
+		t.Fatal("死区关闭/屏外坐标不应命中死区")
+	}
+	// 多屏：y 必须按该显示器自身区间判断（副屏在主屏上方时同样生效）
+	above := input.Rect{X: 0, Y: -1080, W: 1920, H: 1080, Scale: 1.0}
+	if !inEdgeDeadZone(-1080, above, 48) || !inEdgeDeadZone(-1, above, 48) {
+		t.Fatal("副屏（负 Y）上下两端也应有死区")
+	}
+	if inEdgeDeadZone(-540, above, 48) {
+		t.Fatal("副屏中段不应是死区")
+	}
+
+	// 缩放比换算：200% 下 48 逻辑像素 = 96 物理像素
+	if got := scaleDeadZone(48, 2.0, 1080); got != 96 {
+		t.Fatalf("200%% 缩放应换算为 96px, got %d", got)
+	}
+	if got := scaleDeadZone(48, 0, 1080); got != 48 {
+		t.Fatalf("缩放比未知按 100%% 处理, got %d", got)
+	}
+	// 边角值：再小也保留 1px；不超过屏高三分之一；屏高为 0 则无死区
+	if got := scaleDeadZone(1, 0.1, 1080); got != 1 {
+		t.Fatalf("最小死区应保留 1px, got %d", got)
+	}
+	if got := scaleDeadZone(400, 1.0, 300); got != 100 {
+		t.Fatalf("死区应钳到屏高 1/3（300→100）, got %d", got)
+	}
+	if got := scaleDeadZone(48, 1.0, 0); got != 0 {
+		t.Fatalf("屏高为 0 时应无死区, got %d", got)
+	}
+	if got := normalizeEdgeDeadZone(-1); got != DefaultEdgeDeadZone {
+		t.Fatalf("负值应落默认死区, got %d", got)
+	}
+	if got := normalizeEdgeDeadZone(0); got != 0 {
+		t.Fatalf("0 应表示关闭死区, got %d", got)
+	}
+	if got := normalizeEdgeDeadZone(9999); got != maxEdgeDeadZone {
+		t.Fatalf("超大值应钳到上限, got %d", got)
+	}
+}
+
+// 回归：把光标顶到屏幕右上角去点窗口关闭按钮时不能跨屏。
+// 死区内的推动被忽略，边缘中段的同样推动照常触发。
+func TestMasterEdgePushDeadZoneSuppressesSwitch(t *testing.T) {
+	inj := newFakeInjector()
+	svc := NewService(Config{Port: 47899, Right: "GHOST", SelfID: "S-ID",
+		EdgeDeadZone: DefaultEdgeDeadZone},
+		"S", discovery.NewStore("self"), 12*time.Second, inj)
+
+	// 贴右边缘但在顶部死区里（关闭按钮所在）
+	inj.setCursor(1918, 20)
+	for i := 0; i < 4; i++ {
+		svc.OnMouseMove(20, 0)
+	}
+	svc.mu.Lock()
+	triggered := time.Now().Before(svc.attemptUntil)
+	accum := svc.pushAccum
+	svc.mu.Unlock()
+	if triggered || accum != 0 {
+		t.Fatalf("死区内推动不应跨屏: attempt=%v accum=%d", triggered, accum)
+	}
+
+	// 同一位置底部死区（显示桌面/任务栏）
+	inj.setCursor(1918, 1070)
+	svc.OnMouseMove(20, 0)
+	svc.mu.Lock()
+	triggered = time.Now().Before(svc.attemptUntil)
+	svc.mu.Unlock()
+	if triggered {
+		t.Fatal("底部死区内推动不应跨屏")
+	}
+
+	// 边缘中段：照常触发
+	inj.setCursor(1918, 540)
+	svc.OnMouseMove(20, 0)
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	if !time.Now().Before(svc.attemptUntil) {
+		t.Fatal("死区之外的推动应照常触发切换")
+	}
+}
+
+// 回归：死区里推过的量不能"带到"中段——否则在角上顶了半天，再回中段轻推一下
+// 就跨屏了（累积残留）。
+func TestEdgeDeadZoneDoesNotCarryAccumulation(t *testing.T) {
+	inj := newFakeInjector()
+	svc := NewService(Config{Port: 47899, Right: "GHOST", SelfID: "S-ID",
+		EdgeDeadZone: DefaultEdgeDeadZone},
+		"S", discovery.NewStore("self"), 12*time.Second, inj)
+
+	inj.setCursor(1918, 540)
+	svc.OnMouseMove(4, 0) // 中段：推 4px，未到 8px 阈值
+	inj.setCursor(1918, 20)
+	svc.OnMouseMove(20, 0) // 顶部死区：清零
+	inj.setCursor(1918, 540)
+	svc.OnMouseMove(4, 0) // 中段：又是 4px，仍不足
+
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	if time.Now().Before(svc.attemptUntil) {
+		t.Fatal("死区清零后中段 4px 不应触发切换")
+	}
+	if svc.pushAccum != 4 {
+		t.Fatalf("中段累积应为 4（死区内的推动已清零）, got %d", svc.pushAccum)
+	}
+}
+
+// 回归：死区可关闭（0）——此时贴角推动与旧行为一致，用于对照。
+func TestEdgeDeadZoneDisabled(t *testing.T) {
+	inj := newFakeInjector()
+	svc := NewService(Config{Port: 47899, Right: "GHOST", SelfID: "S-ID", EdgeDeadZone: 0},
+		"S", discovery.NewStore("self"), 12*time.Second, inj)
+	inj.setCursor(1918, 20) // 右上角
+	svc.OnMouseMove(20, 0)
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+	if !time.Now().Before(svc.attemptUntil) {
+		t.Fatal("关闭死区后贴角推动应照常触发")
+	}
+}
+
+// 回归：控制别人时把光标顶到被控机右上角（关闭按钮）不应被弹回本机。
+func TestDetectLeaveDeadZone(t *testing.T) {
+	inj := newFakeInjector()
+	svc := NewService(Config{Port: 47899, SelfID: "S-ID", EdgeDeadZone: DefaultEdgeDeadZone},
+		"S", discovery.NewStore("self"), 12*time.Second, inj)
+	sess := &slaveSession{
+		dir: "right", entryX: 1910, armed: true, maxDist: 200,
+		leaveEdges: []input.Rect{{X: 0, Y: 0, W: 1920, H: 1080, Scale: 1.0}},
+	}
+	// 死区清零：中段推 4px（不足阈值）→ 死区推 → 回中段推 4px 仍不切回
+	inj.setCursor(1, 540)
+	svc.detectLeave(sess, -4)
+	inj.setCursor(1, 20)
+	svc.detectLeave(sess, -20)
+	if sess.pushAccum != 0 {
+		t.Fatalf("死区内推动应清零累积, got %d", sess.pushAccum)
+	}
+
+	// 贴近共享边缘（左边缘）但落在顶部死区：连续推也不切回
+	inj.setCursor(1, 20)
+	for i := 0; i < 4; i++ {
+		if svc.detectLeave(sess, -20) {
+			t.Fatal("死区内推动不应切回")
+		}
+	}
+	// 底部死区同理
+	inj.setCursor(1, 1070)
+	if svc.detectLeave(sess, -20) {
+		t.Fatal("底部死区内推动不应切回")
+	}
+	// 中段：立即切回
+	inj.setCursor(1, 540)
+	if !svc.detectLeave(sess, -20) {
+		t.Fatal("死区之外推动应触发切回")
+	}
+}
+
+// 回归：Universal 通道下在被控机屏幕上下两端推回边缘不切回，只把坐标钳在
+// 共享边缘；移出死区后再推回则照常切回。
+func TestUMoveSwitchbackDeadZone(t *testing.T) {
+	inj := newFakeInjector()
+	svc, _ := newTestService(t, inj)
+	sess := &masterSession{
+		abs: true, dir: "right",
+		normX: 100, normY: 20, // 顶部死区内（1080 屏的 48px ≈ 2913 单位）
+		slavePH: 1080, slaveScale: 1.0,
+		anchorW: 1920, anchorH: 1080,
+		sendCh: make(chan wireMsg, 16), stop: make(chan struct{}),
+	}
+	svc.mu.Lock()
+	svc.master = sess
+	svc.cfg.MoveInterval = 0
+	svc.cfg.EdgeDeadZone = DefaultEdgeDeadZone
+	svc.mu.Unlock()
+
+	svc.OnMouseMove(-100, 0) // 向左推回共享边缘
+	select {
+	case <-sess.stop:
+		t.Fatal("死区内推回不应切回")
+	case <-time.After(120 * time.Millisecond):
+	}
+	svc.mu.Lock()
+	nx, hasMaster := sess.normX, svc.master != nil
+	svc.mu.Unlock()
+	if !hasMaster {
+		t.Fatal("死区内推回不应结束会话")
+	}
+	if nx != 0 {
+		t.Fatalf("死区内贴边应钳在 0，不累积过冲: got %v", nx)
+	}
+
+	// 移出死区（屏幕中段）后再次推回：应切回
+	svc.mu.Lock()
+	sess.normY = 32767
+	svc.mu.Unlock()
+	svc.OnMouseMove(-100, 0)
+	select {
+	case <-sess.stop:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("死区之外推回应触发切回")
+	}
+}
+
+// 热更新：SetEdgeDeadZone 归一化后立即生效，0 关闭、负数落默认、超大值钳上限。
+func TestSetEdgeDeadZoneHotApply(t *testing.T) {
+	inj := newFakeInjector()
+	svc, _ := newTestService(t, inj) // 测试基线：EdgeDeadZone=0（关闭）
+	if got := svc.cfg.EdgeDeadZone; got != 0 {
+		t.Fatalf("测试基线应为关闭死区, got %d", got)
+	}
+	svc.SetEdgeDeadZone(64)
+	if got := svc.cfg.EdgeDeadZone; got != 64 {
+		t.Fatalf("热更新未生效: got %d", got)
+	}
+	svc.SetEdgeDeadZone(-5)
+	if got := svc.cfg.EdgeDeadZone; got != DefaultEdgeDeadZone {
+		t.Fatalf("负值应落默认死区: got %d", got)
+	}
+	svc.SetEdgeDeadZone(0)
+	if got := svc.cfg.EdgeDeadZone; got != 0 {
+		t.Fatalf("0 应关闭死区: got %d", got)
+	}
+	svc.SetEdgeDeadZone(9999)
+	if got := svc.cfg.EdgeDeadZone; got != maxEdgeDeadZone {
+		t.Fatalf("超大值应钳到上限: got %d", got)
+	}
 }

@@ -5,6 +5,11 @@
 // 推动，即切换到该方向配置的邻居；在邻居屏幕上把光标推回共享边缘（穿越其
 // 本机多屏布局到达暴露边缘）即释放，控制权回到本机。
 //
+// 边缘死区：屏幕上下两端是系统 UI 热区——窗口右上角的关闭按钮、右下角的
+// "显示桌面"、任务栏——把光标顶到这些位置属于日常操作，绝不能触发跨屏或
+// 切回。因此边缘触发只在"边缘中段"生效，上下两端各留一条死区（高度按该
+// 显示器的缩放比换算，见 DefaultEdgeDeadZone）。
+//
 // 多显示器：被控端入口固定为其主显示器（primary）的共享边缘；随后以相对
 // 位移注入，副机本地多屏由操作系统自然跨越。
 package kvm
@@ -33,6 +38,14 @@ const (
 	DefaultMoveInterval = 8 * time.Millisecond
 	// DefaultReflowStep 被控端重排（reflow）注入节拍（≈250Hz）。
 	DefaultReflowStep = 4 * time.Millisecond
+	// DefaultEdgeDeadZone 边缘死区高度（逻辑像素，实现时按显示器缩放比换算为
+	// 物理像素）。屏幕上下两端 48 逻辑像素内不触发跨屏/切回：足够盖住 100%
+	// 缩放下 32px 的标题栏关闭按钮与 40px 的任务栏（显示桌面），又不至于让
+	// 可跨屏的边缘中段被挤没。
+	DefaultEdgeDeadZone = 48
+	// maxEdgeDeadZone 死区上限（逻辑像素）：面板滑块与配置值都钳到这个范围，
+	// 避免误填一个把整条边缘吃光的巨大值。
+	maxEdgeDeadZone = 400
 	// reflowHorizon 每拍排空 pending 的比例分母：每拍注入约 1/horizon，
 	// 网络成批到达时约 horizon 拍内追平，空闲时以最小步继续细分平滑。
 	reflowHorizon = 3
@@ -74,6 +87,10 @@ type Config struct {
 	PairTokenFor func(id string) (string, bool)
 	// SpeedPercent 本机作为主控的位移速度调节百分比（100=基准 1.0x；<=0 视为 100）。
 	SpeedPercent int
+	// EdgeDeadZone 边缘死区高度（逻辑像素，按显示器缩放比换算）：
+	// 距屏幕上下两端这么近的边缘推动不触发跨屏，也不触发切回。
+	// <0 使用 DefaultEdgeDeadZone，0 关闭死区，>0 自定义（钳到 maxEdgeDeadZone）。
+	EdgeDeadZone int
 }
 
 // Injector 是输入注入接口（生产环境为 input.DefaultInjector，测试用假实现）。
@@ -228,6 +245,9 @@ type masterSession struct {
 	resY      float64 // 亚像素位移结转余数
 	slavePW   int     // 被控端入口显示器物理宽
 	slavePH   int     // 被控端入口显示器物理高
+	// slaveScale 被控端入口显示器缩放比：边缘死区在 0..65535 空间里要按它换算
+	// （Windows 的 48 逻辑像素在 200% 缩放下是 96 物理像素）。
+	slaveScale float64
 	// lockX/lockY：MWB 光标钉住策略——主控期间把 A 机光标强制钉在触发点
 	// 边缘像素，阻止精确触控板手势（PT_GESTURE2，绕过 WH_MOUSE_LL）被系统
 	// 投递给 A 机边缘可滚动窗口（双滚问题）。Raw Input dx/dy 旁路独立于
@@ -235,7 +255,7 @@ type masterSession struct {
 	lockX int
 	lockY int
 	// origY：切换触发时的原始光标 Y，主控结束时将光标复位回此行。
-	origY int
+	origY    int
 	stop     chan struct{}
 	stopOnce sync.Once
 }
@@ -353,6 +373,7 @@ func NewService(cfg Config, nodeName string, store *discovery.Store,
 	}
 	cfg.MoveInterval = normalizeMoveInterval(cfg.MoveInterval)
 	cfg.ReflowStep = normalizeReflowStep(cfg.ReflowStep)
+	cfg.EdgeDeadZone = normalizeEdgeDeadZone(cfg.EdgeDeadZone)
 	if cfg.SpeedPercent <= 0 {
 		cfg.SpeedPercent = 100
 	}
@@ -393,6 +414,77 @@ func (s *Service) UpdateTunables(moveInterval, reflowStep time.Duration, speedPc
 		s.cfg.MoveInterval, s.cfg.ReflowStep, speedPct)
 }
 
+// SetEdgeDeadZone 热更新边缘死区高度（逻辑像素；<0 用默认，0 关闭），
+// 下一次移动事件即生效：主控触发与切回判定都在锁内读取该值。
+func (s *Service) SetEdgeDeadZone(px int) {
+	px = normalizeEdgeDeadZone(px)
+	s.mu.Lock()
+	old := s.cfg.EdgeDeadZone
+	s.cfg.EdgeDeadZone = px
+	s.mu.Unlock()
+	if old == px {
+		return
+	}
+	if px == 0 {
+		log.Printf("KVM：边缘死区已关闭（上下两端也会触发跨屏）")
+		return
+	}
+	log.Printf("KVM：边缘死区已更新为 %d 逻辑像素（屏幕上下两端不触发跨屏/切回）", px)
+}
+
+// edgeDeadZoneLocked 返回某显示器上的死区高度（物理像素，已按该屏缩放比换算，
+// 并限制在屏高的三分之一内）。调用方必须持有 s.mu；返回 0 表示死区关闭。
+func (s *Service) edgeDeadZoneLocked(m input.Rect) int {
+	return scaleDeadZone(s.cfg.EdgeDeadZone, m.Scale, m.H)
+}
+
+// umoveDeadZoneNormLocked 把边缘死区换算成 Universal 通道的 0..65535 单位
+// （被控端入口显示器高度即满量程）。调用方必须持有 s.mu。
+func (s *Service) umoveDeadZoneNormLocked(m *masterSession) float64 {
+	h := m.slavePH
+	scale := m.slaveScale
+	if h <= 0 {
+		// 旧版对端不回执物理尺寸：退回主控锚点屏高度估算（比例近似，够用）
+		h, scale = int(m.anchorH), 1.0
+	}
+	if h <= 0 {
+		return 0
+	}
+	dz := scaleDeadZone(s.cfg.EdgeDeadZone, scale, h)
+	if dz <= 0 {
+		return 0
+	}
+	return float64(dz) / float64(h) * 65535.0
+}
+
+// scaleDeadZone 把逻辑像素死区换算成物理像素，并把上限压到屏高的三分之一：
+// 极端小屏或误填的巨大值也不至于让整条边缘都推不动。
+func scaleDeadZone(logicalPx int, scale float64, height int) int {
+	if logicalPx <= 0 || height <= 0 {
+		return 0
+	}
+	if scale <= 0 {
+		scale = 1.0
+	}
+	dz := int(math.Round(float64(logicalPx) * scale))
+	if dz < 1 {
+		dz = 1
+	}
+	if limit := height / 3; dz > limit {
+		dz = limit
+	}
+	return dz
+}
+
+// inEdgeDeadZone 报告光标 y 是否落在显示器 m 上下两端的死区里。
+// 这些位置是系统 UI 热区（窗口关闭按钮、显示桌面、任务栏），不参与边缘触发。
+func inEdgeDeadZone(y int, m input.Rect, dz int) bool {
+	if dz <= 0 || m.H <= 0 || y < m.Y || y >= m.Y+m.H {
+		return false
+	}
+	return y < m.Y+dz || y >= m.Y+m.H-dz
+}
+
 // Stop 热停用 KVM：同步关闭被控端监听（保证 Stop 返回后端口可立即重新
 // 绑定，支持快速关-开切换）并结束全部活动会话（主控向对端发 leave，
 // 对端立即干净交还控制权）。
@@ -428,6 +520,17 @@ func (s *Service) currentReflowStep() time.Duration {
 	return s.cfg.ReflowStep
 }
 
+// currentEdgeDeadZone 在锁内读边缘死区（逻辑像素）。
+//
+// 该字段与 MoveInterval/ReflowStep 不同：面板滑块会热更新它（SetEdgeDeadZone 在
+// 锁内写），而被控连接协程处理 enter 消息时恰好也可能读它——锁外直接读
+// s.cfg.EdgeDeadZone 就是数据竞争，必须走这里。
+func (s *Service) currentEdgeDeadZone() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.EdgeDeadZone
+}
+
 func normalizeMoveInterval(d time.Duration) time.Duration {
 	if d <= 0 {
 		return DefaultMoveInterval
@@ -441,6 +544,17 @@ func normalizeReflowStep(d time.Duration) time.Duration {
 		return DefaultReflowStep
 	}
 	return d
+}
+
+// normalizeEdgeDeadZone：<0 → 默认；0 → 关闭；>0 → 钳到上限。
+func normalizeEdgeDeadZone(px int) int {
+	if px < 0 {
+		return DefaultEdgeDeadZone
+	}
+	if px > maxEdgeDeadZone {
+		return maxEdgeDeadZone
+	}
+	return px
 }
 
 // inputSetSuppress 包一层避免各处直接依赖 input 包细节。
@@ -769,6 +883,16 @@ func (s *Service) handleSlaveConn(conn net.Conn) {
 			if ey >= entry.Y+entry.H { // 比例=1 时防越界一行
 				ey = entry.Y + entry.H - 1
 			}
+			// 入口点避开死区：两端缩放比不同时（如 4K@100% 主控 + 1080p 被控），
+			// 主控中段的入口比例落到被控屏可能已在死区里——那样用户想立刻推回
+			// 切回却没反应。把入口挪出死区，保证"进来就能推回去"。
+			if dz := scaleDeadZone(s.currentEdgeDeadZone(), entry.Scale, entry.H); dz > 0 {
+				if ey < entry.Y+dz {
+					ey = entry.Y + dz
+				} else if ey >= entry.Y+entry.H-dz {
+					ey = entry.Y + entry.H - dz - 1
+				}
+			}
 			// 入口点必须落在桌面并集内：入口信息异常（幽灵显示器等）时兜底钳位，
 			// 绝不能把光标放到桌面外（真机事故：副屏左上角）。
 			ocx, ocy := ex, ey
@@ -1031,20 +1155,30 @@ func (s *Service) detectLeave(sess *slaveSession, dx int) bool {
 		}
 	}
 
-	atEdge := false
+	atEdge, onDead := false, false
 	for _, r := range sess.leaveEdges {
-		inY := cy >= r.Y && cy < r.Y+r.H
-		if sess.dir == "right" && inY && cx <= r.X+edgeBand {
-			atEdge = true
-			break
+		if cy < r.Y || cy >= r.Y+r.H {
+			continue
 		}
-		if sess.dir == "left" && inY && cx >= r.X+r.W-1-edgeBand {
-			atEdge = true
-			break
+		onEdge := (sess.dir == "right" && cx <= r.X+edgeBand) ||
+			(sess.dir == "left" && cx >= r.X+r.W-1-edgeBand)
+		if !onEdge {
+			continue
 		}
+		// 上下两端的死区不参与切回：被控机的关闭按钮/显示桌面也在这，
+		// 否则"控制别人时点一下关闭按钮"就被弹回本机。
+		if inEdgeDeadZone(cy, r, s.edgeDeadZoneLocked(r)) {
+			onDead = true
+			continue
+		}
+		atEdge = true
+		break
 	}
 	if !atEdge {
-		if now.Sub(sess.pushLast) > pushGapLeave {
+		if onDead {
+			// 死区内贴边：推多少都不算，也不留未完成的推动到中段再触发
+			sess.pushAccum = 0
+		} else if now.Sub(sess.pushLast) > pushGapLeave {
 			sess.pushAccum = 0
 		}
 		sess.pushLast = now
@@ -1312,17 +1446,18 @@ func (s *Service) masterHandshake(conn net.Conn, peerID string, curMon input.Rec
 	gx, gy := calcStaticGain(mw, mh, mscale, resp.PW, resp.PH, pscale, speedPct)
 
 	sess := &masterSession{
-		conn:      conn,
-		w:         bw,
-		sendCh:    make(chan wireMsg, 512),
-		stop:      make(chan struct{}),
-		slavePW:   resp.PW,  // 被控端入口显示器物理宽（旧版对端为 0）
-		slavePH:   resp.PH,  // 被控端入口显示器物理高（并集吸附基准；旧版为 0）
-		abs:       resp.Abs, // Universal 通道：两端都声明支持才启用（B4）
-		baseGainX: baseGx,
-		baseGainY: baseGy,
-		gainX:     gx,
-		gainY:     gy,
+		conn:       conn,
+		w:          bw,
+		sendCh:     make(chan wireMsg, 512),
+		stop:       make(chan struct{}),
+		slavePW:    resp.PW,  // 被控端入口显示器物理宽（旧版对端为 0）
+		slavePH:    resp.PH,  // 被控端入口显示器物理高（并集吸附基准；旧版为 0）
+		slaveScale: pscale,   // 被控端入口显示器缩放比（死区换算基准）
+		abs:        resp.Abs, // Universal 通道：两端都声明支持才启用（B4）
+		baseGainX:  baseGx,
+		baseGainY:  baseGy,
+		gainX:      gx,
+		gainY:      gy,
 	}
 	conn.SetDeadline(time.Time{}) // 清除握手超时，后续由 ping/读超时保活
 	return sess, nil
@@ -1456,23 +1591,38 @@ func (s *Service) OnMouseMove(dx, dy int) {
 			}
 
 			// 边缘推回检测（切回主控机）：
-			// 阈值设为 umovePushThreshold（500，约占屏幕 0.76%，在 1080p 下约 8~15px），防止微小手抖误切回
+			// 阈值设为 umovePushThreshold（500，约占屏幕 0.76%，在 1080p 下约 8~15px），防止微小手抖误切回。
+			// 死区：光标在被控机屏幕上下两端时不切回，只把坐标钳在共享边缘——
+			// 那里是窗口关闭按钮与"显示桌面"，点它们不该把控制权弹回本机。
+			deadZoneY := s.umoveDeadZoneNormLocked(m)
+			inDeadZone := deadZoneY > 0 &&
+				(m.normY < deadZoneY || m.normY > 65535.0-deadZoneY)
 			if m.dir == "right" {
 				// 入口在副机左侧 (0)：向左推越过入口阈值即切回
-				if m.normX < -umovePushThreshold {
-					s.mu.Unlock()
-					s.endMasterSession(m, true, "光标推回共享边缘")
-					return
+				if m.normX < 0 {
+					if !inDeadZone && m.normX < -umovePushThreshold {
+						s.mu.Unlock()
+						s.endMasterSession(m, true, "光标推回共享边缘")
+						return
+					}
+					if inDeadZone {
+						m.normX = 0 // 死区内贴边：钳住，不累积过冲
+					}
 				}
 				if m.normX > 65535 {
 					m.normX = 65535 // 副机右侧未配置跨屏，钳在右边缘
 				}
 			} else if m.dir == "left" {
 				// 入口在副机右侧 (65535)：向右推越过入口阈值即切回
-				if m.normX > 65535.0+umovePushThreshold {
-					s.mu.Unlock()
-					s.endMasterSession(m, true, "光标推回共享边缘")
-					return
+				if m.normX > 65535 {
+					if !inDeadZone && m.normX > 65535.0+umovePushThreshold {
+						s.mu.Unlock()
+						s.endMasterSession(m, true, "光标推回共享边缘")
+						return
+					}
+					if inDeadZone {
+						m.normX = 65535 // 死区内贴边：钳住，不累积过冲
+					}
 				}
 				if m.normX < 0 {
 					m.normX = 0 // 副机左侧未配置跨屏，钳在左边缘
@@ -1532,26 +1682,45 @@ func (s *Service) OnMouseMove(dx, dy int) {
 		return
 	}
 
-	// 本地模式：暴露边缘推动检测（原始位移 + 真实光标位置）
+	// 本地模式：暴露边缘推动检测（原始位移 + 真实光标位置）。
+	// 屏幕上下两端的死区不参与：那是关闭按钮/显示桌面/任务栏的地盘，
+	// 推到那里属于日常操作，不该把控制权送出去。
 	now := time.Now()
 	x, y := s.injector.CursorPos()
 	leftExp, rightExp := exposedEdges(s.currentMonitors())
-	dir, push := "", 0
-	if dx > 0 {
-		for _, r := range rightExp {
-			if x >= r.X+r.W-1-edgeBand && y >= r.Y && y < r.Y+r.H {
-				dir, push = "right", dx
-				break
+	dir, push, onDead := "", 0, false
+	if dx != 0 {
+		side, exp := "right", rightExp
+		if dx < 0 {
+			side, exp = "left", leftExp
+		}
+		for _, r := range exp {
+			if y < r.Y || y >= r.Y+r.H {
+				continue
 			}
+			onEdge := false
+			if side == "right" {
+				onEdge = x >= r.X+r.W-1-edgeBand
+			} else {
+				onEdge = x <= r.X+edgeBand
+			}
+			if !onEdge {
+				continue
+			}
+			if inEdgeDeadZone(y, r, s.edgeDeadZoneLocked(r)) {
+				onDead = true
+				continue
+			}
+			dir, push = side, abs(dx)
+			break
 		}
 	}
-	if dir == "" && dx < 0 {
-		for _, r := range leftExp {
-			if x <= r.X+edgeBand && y >= r.Y && y < r.Y+r.H {
-				dir, push = "left", -dx
-				break
-			}
-		}
+	if dir == "" && onDead {
+		// 死区内贴边：推多少都不算，也不留未完成的推动到中段再触发
+		s.pushDir, s.pushAccum = "", 0
+		s.pushLast = now
+		s.mu.Unlock()
+		return
 	}
 	if dir == "" {
 		// 反向移动抵消累积（下限 0）而非整笔清零：高回报率鼠标贴边斜推时

@@ -2,6 +2,7 @@ package webui
 
 import (
 	_ "embed"
+	"log"
 
 	"fyne.io/systray"
 )
@@ -44,7 +45,9 @@ type TrayOptions struct {
 
 // RunTray 阻塞运行系统托盘图标，直到退出菜单项或宿主调用 QuitTray。
 func RunTray(opts TrayOptions) {
+	log.Printf("托盘：开始创建图标")
 	systray.Run(func() {
+		log.Printf("托盘：图标已创建并交给资源管理器")
 		systray.SetTitle("copywhere")
 		mOpen := systray.AddMenuItem("打开面板", "在浏览器中打开控制面板")
 		mOpen.SetIcon(iconOpen)
