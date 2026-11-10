@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="alternate icon" type="image/png" href="/favicon.png">
+<title>copywhere</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="bgfx" aria-hidden="true"></div>
+
+<header class="topbar">
+  <div class="brand" title="copywhere — 局域网剪贴板 / 文件自动同步">
+    <div class="mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M8 4h8v3H8zM6 7h12v13H6zM9 11h6M9 14h6M9 17h4"/></svg>
+    </div>
+    <b>COPYWHERE</b>
+    <span class="ver" id="verLabel">—</span>
+  </div>
+
+  <nav class="tabs" role="tablist" aria-label="主视图">
+    <button role="tab" id="tab-workspace" data-view="workspace" class="active" aria-selected="true">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M4 5h16v11H4zM9 20h6M12 16v4"/></svg>
+      工作台
+    </button>
+    <button role="tab" id="tab-layout" data-view="layout" aria-selected="false">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M3 5h8v14H3zM13 5h8v14h-8z"/></svg>
+      屏幕布局
+    </button>
+  </nav>
+
+  <div class="grow"></div>
+
+  <div class="chips">
+    <span class="chip" title="本机节点名与地址"><b id="selfName">—</b><span class="dim" id="selfIP">—</span></span>
+    <span class="chip" id="syncChip" title="自动同步开关状态">
+      <span class="dot" id="syncDot"></span><span id="syncText">同步中</span>
+    </span>
+  </div>
+
+  <div class="top-actions">
+    <button class="iconbtn" id="btnPause" title="暂停自动同步" aria-label="暂停自动同步">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg>
+    </button>
+    <button class="iconbtn" id="btnLogs" title="运行日志（Ctrl+L）" aria-label="运行日志">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M4 4h16v16H4zM7 9l3 3-3 3M13 15h4"/></svg>
+      <span class="badge" id="logBadge" hidden>0</span>
+    </button>
+    <button class="iconbtn" id="btnTheme" title="切换主题" aria-label="切换主题">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg>
+    </button>
+    <button class="iconbtn" id="btnSettings" title="设置（Ctrl+,）" aria-label="设置">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM4 12l-1 2 2 3 2-1 2 1 1 2h4l1-2 2-1 2 1 2-3-1-2 1-2-2-3-2 1-2-1-1-2h-4l-1 2-2 1-2-1-2 3z"/></svg>
+    </button>
+  </div>
+</header>
+
+<div class="main-row">
+  <aside class="dock" aria-label="设备坞">
+    <div class="dock-cap">本机</div>
+    <div class="dev-card self">
+      <div class="head">
+        <div class="avatar" id="selfAvatar">?</div>
+        <div class="who">
+          <div class="nm"><span class="nm-txt" id="dockSelfName">—</span><span class="tag ok" id="dockSelfTag">本机</span></div>
+          <div class="sub" id="dockSelfIP">—</div>
+        </div>
+      </div>
+      <div class="meta" id="dockSelfMeta"></div>
+    </div>
+
+    <div class="dock-cap">在线节点</div>
+    <div id="peerList" class="peer-list"></div>
+    <div class="dock-empty" id="peerEmpty" hidden>
+      暂无在线节点<br>
+      对端运行 copywhere 后经 UDP 广播自动出现在这里
+    </div>
+
+    <div class="dock-foot">
+      <button class="chipbtn" id="btnOpenDir">打开接收目录</button>
+      <button class="chipbtn" id="btnCopyPairHint" title="在另一台机器同样打开 copywhere，即可互相发现">如何配对？</button>
+    </div>
+  </aside>
+
+  <section class="space stage active" id="view-workspace" data-file-drop-target role="tabpanel" aria-labelledby="tab-workspace">
+    <div class="stage-head">
+      <h1>传输工作台</h1>
+      <span class="sub" id="stageSub">—</span>
+      <span class="grow"></span>
+      <button class="chipbtn" id="btnClearFeed" title="只清空本窗口显示，不影响对端">清空显示</button>
+    </div>
+
+    <div class="timeline" id="timeline" aria-live="polite">
+      <div class="feed-empty" id="feedEmpty">
+        <div class="fe-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M3 12h5l2-5 4 10 2-5h5"/></svg>
+        </div>
+        <p class="fe-title">还没有传输记录</p>
+        <p class="fe-hint">复制文本 / 截图 / 文件（Ctrl+C）会自动同步到所有在线节点；<br>
+        也可以把文件拖进本窗口，或在下方输入框直接发送文本。</p>
+      </div>
+    </div>
+
+    <div class="xfer-strip" id="xferStrip" aria-live="polite"></div>
+
+    <div class="composer" data-file-drop-target>
+      <button class="iconbtn" id="btnAttach" title="选择文件或文件夹" aria-label="选择文件或文件夹">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M21 12l-8 8a5 5 0 0 1-7-7l8-8a4 4 0 0 1 6 6l-8 8a2 2 0 0 1-3-3l7-7"/></svg>
+      </button>
+      <textarea class="cinput" id="composerInput" rows="1"
+        placeholder="输入文本，回车发送 / Shift+回车换行；或把文件拖进窗口"
+        aria-label="要发送的文本"></textarea>
+      <button class="btn primary" id="btnSend" title="发送文本（Enter）">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M4 12l16-8-6 16-2-6zM12 14l4-4"/></svg>
+        发送
+      </button>
+    </div>
+    <div class="drop-hint" id="dropHint" aria-hidden="true">松开即投送到所有在线节点</div>
+  </section>
+
+  <section class="space layout-space" id="view-layout" role="tabpanel" aria-labelledby="tab-layout">
+    <div class="stage-head">
+      <h1>屏幕布局</h1>
+      <span class="sub">把光标推过本机屏幕边缘即可控制相邻机器，配置实时生效并同步到对端</span>
+      <span class="grow"></span>
+      <label class="switch" title="跨屏总开关">
+        <input type="checkbox" id="kvmToggle">
+        <span class="knob" aria-hidden="true"></span>
+        <span>跨屏</span>
+      </label>
+    </div>
+
+    <div class="layout-canvas" id="layoutCanvas">
+      <div class="screen-slot empty" id="slotLeft" data-side="left">
+        <span class="side-label">左邻 · 推向左边缘控制</span>
+        <div class="bezel">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          <span class="scr-sub">拖动节点到左侧</span>
+        </div>
+        <div class="stand"></div><div class="base"></div>
+      </div>
+
+      <div class="screen-slot self">
+        <span class="side-label">本机</span>
+        <div class="bezel">
+          <span class="initial" id="layoutSelfInitial">?</span>
+          <span class="scr-name" id="layoutSelfName">—</span>
+          <span class="scr-sub" id="layoutSelfIP">—</span>
+        </div>
+        <div class="stand"></div><div class="base"></div>
+      </div>
+
+      <div class="screen-slot empty" id="slotRight" data-side="right">
+        <span class="side-label">右邻 · 推向右边缘控制</span>
+        <div class="bezel">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          <span class="scr-sub">拖动节点到右侧</span>
+        </div>
+        <div class="stand"></div><div class="base"></div>
+      </div>
+    </div>
+
+    <div class="layout-pick">
+      <div class="dock-cap">可用节点</div>
+      <div class="chip-row" id="layoutPeers"></div>
+      <p class="hint">提示：也可直接点击节点卡片上的「左 / 右」或拖到对应槽位；清除邻居点槽位右上角 ×。</p>
+    </div>
+  </section>
+</div>
+
+<footer class="statusbar">
+  <span id="statusLeft">Wails v3 · WebView2</span>
+  <span class="grow"></span>
+  <span id="statusRight">—</span>
+</footer>
+
+<!-- 运行日志抽屉 -->
+<aside class="logdrawer" id="logDrawer" aria-label="运行日志" aria-hidden="true">
+  <div class="log-head">
+    <b>运行日志</b>
+    <span class="sub" id="logCount">0 行</span>
+    <span class="grow"></span>
+    <button class="chipbtn" id="btnCopyLogs">复制</button>
+    <button class="chipbtn" id="btnClearLogs">清空</button>
+    <button class="iconbtn" id="btnCloseLogs" aria-label="关闭日志">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+    </button>
+  </div>
+  <div class="log-box" id="logBox" role="log" aria-live="polite"></div>
+</aside>
+
+<!-- 设置 -->
+<div class="sheet-backdrop" id="settingsBackdrop" hidden>
+  <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <header class="sheet-head">
+      <h2 id="settingsTitle">设置</h2>
+      <span class="grow"></span>
+      <button class="iconbtn" id="btnCloseSettings" aria-label="关闭设置">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </header>
+    <div class="sheet-body" id="settingsBody">
+      <section class="cfg-group">
+        <h3>通用</h3>
+        <label class="field">
+          <span class="field-label">节点名</span>
+          <input type="text" id="cfgNodeName" autocomplete="off">
+          <span class="field-hint">对端设备坞里显示的名字，下一次广播生效</span>
+        </label>
+        <label class="field">
+          <span class="field-label">接收目录</span>
+          <span class="input-row">
+            <input type="text" id="cfgReceiveDir" autocomplete="off">
+            <button class="chipbtn" id="btnBrowseReceiveDir">打开</button>
+          </span>
+        </label>
+        <label class="field">
+          <span class="field-label">自动同步阈值（MB）</span>
+          <input type="number" id="cfgThreshold" min="0" step="1">
+          <span class="field-hint">超过该大小不自动同步；手动发送不受限制。0 = 不限制</span>
+        </label>
+        <div class="field-row">
+          <label class="switch"><input type="checkbox" id="cfgAutoPaste"><span class="knob"></span><span>收到文件自动写回剪贴板</span></label>
+          <label class="switch"><input type="checkbox" id="cfgTextSync"><span class="knob"></span><span>同步剪贴板文本</span></label>
+        </div>
+      </section>
+
+      <section class="cfg-group">
+        <h3>跨屏（KVM）</h3>
+        <div class="field-row">
+          <label class="switch"><input type="checkbox" id="cfgKvmEnabled"><span class="knob"></span><span>启用鼠标键盘跨屏</span></label>
+          <label class="switch"><input type="checkbox" id="cfgKvmTouchpad"><span class="knob"></span><span>触控板手势识别（实验性）</span></label>
+        </div>
+        <div class="field-grid">
+          <label class="field">
+            <span class="field-label">触控板滚动倍率（%）</span>
+            <input type="number" id="cfgTouchSpeed" min="10" max="1000" step="10">
+          </label>
+          <label class="field">
+            <span class="field-label">位移速度（%，100=基准）</span>
+            <input type="number" id="cfgSpeedPct" min="0" max="500" step="5">
+          </label>
+          <label class="field">
+            <span class="field-label">主控移动合拍间隔（ms）</span>
+            <input type="number" id="cfgMoveMs" min="0" step="1">
+            <span class="field-hint">0 = 默认（8ms）</span>
+          </label>
+          <label class="field">
+            <span class="field-label">被控重排节拍（ms）</span>
+            <input type="number" id="cfgReflowMs" min="-1" step="1">
+            <span class="field-hint">0 = 默认（4ms），-1 = 关闭</span>
+          </label>
+        </div>
+      </section>
+
+      <section class="cfg-group">
+        <h3>已配对设备</h3>
+        <div id="pairedList" class="paired-list"></div>
+      </section>
+
+      <section class="cfg-group">
+        <h3>外观</h3>
+        <div class="seg" id="themeSeg" role="radiogroup" aria-label="主题">
+          <button data-theme-value="auto" role="radio" aria-checked="false">跟随系统</button>
+          <button data-theme-value="light" role="radio" aria-checked="false">浅色</button>
+          <button data-theme-value="dark" role="radio" aria-checked="true">深色</button>
+        </div>
+      </section>
+
+      <section class="cfg-group about">
+        <h3>关于</h3>
+        <dl class="kv">
+          <dt>版本</dt><dd id="aboutVersion">—</dd>
+          <dt>配置</dt><dd id="aboutConfig" class="mono">—</dd>
+          <dt>接收目录</dt><dd id="aboutReceiveDir" class="mono">—</dd>
+          <dt>端口</dt><dd id="aboutPorts" class="mono">—</dd>
+          <dt>剪贴板监听</dt><dd id="aboutWatch">—</dd>
+          <dt>承载</dt><dd id="aboutMode">—</dd>
+        </dl>
+      </section>
+    </div>
+    <footer class="sheet-foot">
+      <span class="sub" id="settingsHint">修改后立即保存并生效，无需重启</span>
+      <span class="grow"></span>
+      <button class="btn" id="btnReloadSettings">放弃修改</button>
+      <button class="btn primary" id="btnSaveSettings">保存</button>
+    </footer>
+  </section>
+</div>
+
+<!-- 配对确认 -->
+<div class="modal-backdrop" id="pairBackdrop" hidden>
+  <section class="modal" role="dialog" aria-modal="true" aria-labelledby="pairTitle">
+    <h2 id="pairTitle">配对请求</h2>
+    <p class="modal-text" id="pairText">—</p>
+    <p class="modal-hint">同意后双方交换独立配对令牌，之后可在面板中随时解除。</p>
+    <div class="modal-acts">
+      <button class="btn" id="btnPairDecline">拒绝</button>
+      <button class="btn primary" id="btnPairAccept">接受配对</button>
+    </div>
+  </section>
+</div>
+
+<!-- 确认框 -->
+<div class="modal-backdrop" id="confirmBackdrop" hidden>
+  <section class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <h2 id="confirmTitle">确认</h2>
+    <p class="modal-text" id="confirmText">—</p>
+    <div class="modal-acts">
+      <button class="btn" id="btnConfirmCancel">取消</button>
+      <button class="btn danger" id="btnConfirmOk">确定</button>
+    </div>
+  </section>
+</div>
+
+<!-- 图片灯箱 -->
+<div class="lightbox" id="lightbox" hidden>
+  <img id="lightboxImg" alt="">
+  <div class="lightbox-bar">
+    <span id="lightboxName"></span>
+    <button class="chipbtn" id="btnLightboxOpen">打开文件</button>
+    <button class="chipbtn" id="btnLightboxClose">关闭</button>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toastWrap" aria-live="assertive" aria-atomic="false"></div>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

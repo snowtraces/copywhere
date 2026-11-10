@@ -33,6 +33,8 @@ func usage() {
   copywhere init                            生成默认配置
   copywhere run [-config 路径] [-plain]     启动服务（节点发现 + 传输 + 剪贴板监控）
   copywhere gui [-config 路径]              启动服务 + 系统托盘 + 浏览器控制面板
+  copywhere wails [-config 路径]            启动服务 + 系统托盘 + Wails v3 桌面窗口
+                                            （WebView2；构建为 copywhere-wails.exe 时双击即用）
   copywhere nodes [-config 路径] [-wait 4s] 扫描并列出局域网在线节点
   copywhere send [-config 路径] [-text 内容] [-wait 4s] 文件/目录...
                                             立即发送到所有在线节点（不受大小阈值限制）
@@ -59,10 +61,18 @@ func usage() {
 
 func main() {
 	log.SetFlags(log.Ltime)
-	// 无参数（资源管理器双击 exe）→ 直接进入 gui 模式
+	// 无参数（资源管理器双击 exe）→ 启动 GUI。
+	// 可执行文件名为 copywhere-wails.exe 时默认走 Wails 桌面窗口，
+	// 这样同一份源码可以产出两个双击即用的入口。
 	if len(os.Args) < 2 {
 		hideOwnConsole()
-		if err := cmdGui(nil); err != nil {
+		var err error
+		if strings.Contains(strings.ToLower(filepath.Base(os.Args[0])), "wails") {
+			err = cmdWails(nil)
+		} else {
+			err = cmdGui(nil)
+		}
+		if err != nil {
 			guiFatal(err)
 		}
 		return
@@ -76,6 +86,8 @@ func main() {
 		err = cmdRun(os.Args[2:])
 	case "gui":
 		err = cmdGui(os.Args[2:])
+	case "wails":
+		err = cmdWails(os.Args[2:])
 	case "nodes":
 		err = cmdNodes(os.Args[2:])
 	case "send":

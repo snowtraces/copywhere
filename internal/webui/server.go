@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -342,157 +343,21 @@ func (s *Server) apiGetConfig(w http.ResponseWriter, r *http.Request) {
 
 // apiSetConfig 更新并保存配置：所有字段即时生效（KVM 开关热启停、
 // 节点名下一次广播生效、邻居自动同步到对端），无需重启。
+// 具体逻辑在 ApplyConfig 中，与 Wails 桌面窗口共用。
 func (s *Server) apiSetConfig(w http.ResponseWriter, r *http.Request) {
 	var in map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, "请求体不是合法 JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	var errs []string
-	applyStr := func(key string, dst *string) {
-		if v, ok := in[key]; ok {
-			sv, ok := v.(string)
-			if !ok || strings.TrimSpace(sv) == "" {
-				errs = append(errs, key+" 需要非空字符串")
-				return
-			}
-			*dst = sv
+	if _, err := ApplyConfig(s.core, s.cfg, s.cfgPath, in); err != nil {
+		var ae *ApplyError
+		if errors.As(err, &ae) {
+			http.Error(w, ae.Message, ae.Status)
+			return
 		}
-	}
-	applyStr("receive_dir", &s.cfg.ReceiveDir)
-	nodeNameChanged := false
-	if v, ok := in["node_name"]; ok {
-		if sv, ok := v.(string); ok && strings.TrimSpace(sv) != "" {
-			if s.cfg.NodeName != sv {
-				nodeNameChanged = true
-			}
-			s.cfg.NodeName = sv
-		}
-	}
-	if v, ok := in["max_auto_copy_mb"]; ok {
-		if fv, ok := v.(float64); ok && fv >= 0 {
-			s.cfg.MaxAutoCopyMB = int64(fv)
-		} else {
-			errs = append(errs, "max_auto_copy_mb 需要非负数字")
-		}
-	}
-	if v, ok := in["auto_paste"]; ok {
-		if bv, ok := v.(bool); ok {
-			s.cfg.AutoPaste = bv
-		} else {
-			errs = append(errs, "auto_paste 需要布尔值")
-		}
-	}
-	if v, ok := in["text_sync"]; ok {
-		if bv, ok := v.(bool); ok {
-			s.cfg.TextSync = bv
-		} else {
-			errs = append(errs, "text_sync 需要布尔值")
-		}
-	}
-	// KVM 布局：允许空串（清除某一侧）；邻居名本机即时热更新，并推送到对端。
-	// 记录改动前的值：取消（清空）或换人时向旧邻居推送移除通知。
-	oldKVMLeft, oldKVMRight := s.cfg.KVMLeft, s.cfg.KVMRight
-	kvmChanged := false
-	applyKVM := func(key string, dst *string) {
-		if v, ok := in[key]; ok {
-			sv, ok := v.(string)
-			if !ok {
-				errs = append(errs, key+" 需要字符串")
-				return
-			}
-			*dst = strings.TrimSpace(sv)
-			kvmChanged = true
-		}
-	}
-	applyKVM("kvm_left", &s.cfg.KVMLeft)
-	applyKVM("kvm_right", &s.cfg.KVMRight)
-	kvmEnableChanged := false
-	if v, ok := in["kvm_enabled"]; ok {
-		if bv, ok := v.(bool); ok {
-			if s.cfg.KVMOn() != bv {
-				kvmEnableChanged = true
-			}
-			s.cfg.KVMEnabled = &bv
-		} else {
-			errs = append(errs, "kvm_enabled 需要布尔值")
-		}
-	}
-	// 触控板手势识别（实验性）：开关与速度倍率均即时生效，无需重启
-	touchpadChanged := false
-	if v, ok := in["kvm_touchpad_gestures"]; ok {
-		if bv, ok := v.(bool); ok {
-			if s.cfg.KVMTouchpadOn() != bv {
-				touchpadChanged = true
-			}
-			s.cfg.KVMTouchpad = &bv
-		} else {
-			errs = append(errs, "kvm_touchpad_gestures 需要布尔值")
-		}
-	}
-	if v, ok := in["kvm_touchpad_speed"]; ok {
-		if fv, ok := v.(float64); ok && fv >= 10 && fv <= 1000 {
-			if s.cfg.KVMTouchpadSpeedPct() != int(fv) {
-				touchpadChanged = true
-			}
-			s.cfg.KVMTouchSpd = int(fv)
-		} else {
-			errs = append(errs, "kvm_touchpad_speed 需要 10~1000 的整数（100=基准）")
-		}
-	}
-	// KVM 手感调参：主控移动合拍间隔、被控重排节拍（毫秒）。
-	// 与邻居一致走热更新通道（保存即触发 core.SyncKVM → kvm.UpdateTunables），
-	// 无需重启。move>=0（0=默认8），reflow 可为 -1（关闭重排）。
-	if v, ok := in["kvm_move_interval_ms"]; ok {
-		if fv, ok := v.(float64); ok && fv >= 0 {
-			s.cfg.KVMMoveMs = int(fv)
-			kvmChanged = true
-		} else {
-			errs = append(errs, "kvm_move_interval_ms 需要非负整数")
-		}
-	}
-	if v, ok := in["kvm_reflow_step_ms"]; ok {
-		if fv, ok := v.(float64); ok && fv >= -1 {
-			s.cfg.KVMReflowMs = int(fv)
-			kvmChanged = true
-		} else {
-			errs = append(errs, "kvm_reflow_step_ms 需要 -1 或非负整数")
-		}
-	}
-	if v, ok := in["kvm_speed_percent"]; ok {
-		if fv, ok := v.(float64); ok && fv >= 0 && fv <= 500 {
-			s.cfg.KVMSpeedPct = int(fv)
-			kvmChanged = true
-		} else {
-			errs = append(errs, "kvm_speed_percent 需要 0~500 的整数（100=基准 1.0x）")
-		}
-	}
-	if len(errs) > 0 {
-		http.Error(w, strings.Join(errs, "；"), http.StatusBadRequest)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-	if err := s.cfg.Save(s.cfgPath); err != nil {
-		http.Error(w, "保存配置失败: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	log.Printf("配置已通过面板更新并保存")
-	if nodeNameChanged {
-		// 广播名每次公告时取当前值：下一次广播（约 announce_interval 秒）即生效
-		log.Printf("节点名已更新为 %q，将在下一次广播生效", s.cfg.NodeName)
-	}
-	if kvmEnableChanged {
-		// 跨屏开关即时生效：热启动/停用 KVM 服务与监听，无需重启
-		s.core.SetKVMEnabled(s.cfg.KVMOn())
-	}
-	if touchpadChanged {
-		// 触控板手势识别与速度倍率即时生效（实验性），无需重启
-		s.core.SetTouchpadGestures(s.cfg.KVMTouchpadOn())
-		s.core.SetTouchpadSpeed(s.cfg.KVMTouchpadSpeedPct())
-	}
-	if kvmChanged {
-		// 邻居改动即时生效（本机热更新 + 推送到对端，自动互为镜像；
-		// 取消/换人时同步通知旧邻居解除）
-		go s.core.SyncKVMFrom(oldKVMLeft, oldKVMRight)
 	}
 	writeJSON(w, map[string]any{"ok": true})
 }

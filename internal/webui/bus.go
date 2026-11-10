@@ -34,8 +34,9 @@ const (
 	EvPairReq  = "pair_request"
 )
 
-// fileJSON 是 ui.FileRecord 的 JSON 视图。
-type fileJSON struct {
+// FileView 是 ui.FileRecord 的 JSON 视图。
+// 导出供其它前端（Wails 桌面窗口）复用同一份记录视图，避免两套字段定义漂移。
+type FileView struct {
 	Time   string `json:"time"`
 	Date   string `json:"date"` // 日期（2006-01-02），供面板做日期分组
 	In     bool   `json:"in"`
@@ -103,10 +104,10 @@ func (b *Bus) Logs() []string {
 }
 
 // Files 返回缓存文件记录的副本（旧在前）。
-func (b *Bus) Files() []fileJSON {
+func (b *Bus) Files() []FileView {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	out := make([]fileJSON, len(b.files))
+	out := make([]FileView, len(b.files))
 	for i, r := range b.files {
 		out[i] = fileToJSON(r)
 	}
@@ -156,8 +157,8 @@ func (b *Bus) publishLocked(ev Event, targets map[chan Event]struct{}) {
 	}
 }
 
-func fileToJSON(r ui.FileRecord) fileJSON {
-	return fileJSON{
+func fileToJSON(r ui.FileRecord) FileView {
+	return FileView{
 		Time:   r.Time.Format("15:04:05"),
 		Date:   r.Time.Format("2006-01-02"),
 		In:     r.In,

@@ -47,6 +47,9 @@ type Options struct {
 	GUI bool
 	// Sink 非 nil 时接收结构化事件（webui.Bus 实现），供 GUI 面板实时展示。
 	Sink EventSink
+	// LogFile 非 nil 时日志额外落盘（GUI 无控制台时的排障依据）。
+	// 与面板事件流同时写入，二者互不影响。
+	LogFile io.Writer
 }
 
 // Progress 描述一次文件传输的实时进度（发送或接收）。
@@ -293,7 +296,12 @@ func Start(ctx context.Context, cfg *config.Config, opts Options) (*App, error) 
 		log.SetOutput(a.ui.Hub) // 日志进入 TUI 的日志页
 	case opts.Sink != nil:
 		a.sink = opts.Sink
-		log.SetOutput(&sinkWriter{sink: a.sink}) // 日志进入 GUI 面板事件流
+		var w io.Writer = &sinkWriter{sink: a.sink}
+		if opts.LogFile != nil {
+			// 事件流在前（不会失败），文件在后：日志同时进面板与磁盘。
+			w = io.MultiWriter(w, opts.LogFile)
+		}
+		log.SetOutput(w) // 日志进入 GUI 面板事件流（并落盘）
 	default:
 		log.SetOutput(ui.NewHub(os.Stdout)) // 纯日志模式，镜像到标准输出
 	}
@@ -1008,6 +1016,16 @@ func (a *App) SendText(text string) {
 		a.pushPending(pendingEntry{kind: "text", text: text, expires: time.Now().Add(pendingTTL)})
 		log.Printf("部分节点不可达，%s 内将对在线节点重试", pendingTTL)
 	}
+}
+
+// CopyText 把文本写回本机剪贴板，并标记为本机写入，避免被剪贴板监控再次
+// 广播给所有节点。供桌面端「复制内容」按钮使用。
+func (a *App) CopyText(text string) error {
+	if err := clip.SetText(text); err != nil {
+		return err
+	}
+	a.ownSeq.Store(clip.Seq())
+	return nil
 }
 
 // SendRich 同步带格式文本：对公告 CapRich 的节点走 rich 通道（HTML/RTF 一并

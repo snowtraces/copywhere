@@ -24,6 +24,10 @@
 - **图形界面（推荐）**：双击 exe 即得——系统托盘 + 浏览器控制面板，对话式传输工作台、
   全局拖拽投送、屏幕布局（KVM）、Ctrl+K 命令面板、深浅双主题，SSE 实时刷新，
   仅监听 `127.0.0.1`
+- **Wails v3 桌面窗口（实验性）**：`copywhere wails`（或双击 `copywhere-wails.exe`）
+  打开独立的 WebView2 窗口，不再占用浏览器标签页；工作台 / 设备坞 / 屏幕布局 /
+  设置 / 日志全部由窗口内的 Go 绑定直接驱动，文件拖入即拿真实路径投送，
+  关闭窗口收进托盘继续同步，二次启动自动唤回已有窗口
 - **剪贴板全类型同步**：文件（CF_HDROP）、文本（含 HTML/RTF 富格式，跨机粘贴
   保留样式）、截图（Win+Shift+S / PrintScreen 直接写入剪贴板的图片）自动同步；
   接收端自动回贴。事件驱动检测（`AddClipboardFormatListener`，毫秒级）+ 轮询兜底
@@ -72,6 +76,22 @@ copywhere version    # 查看版本号
 exe 图标与版本信息由 `cmd/copywhere/rsrc_windows_amd64.syso` 提供（`go build` 自动嵌入）；
 重新生成方式见 [docs/release.md](docs/release.md)。
 
+#### Wails v3 桌面窗口版（实验性）
+
+同一份源码可以额外产出一个「双击即开独立窗口」的入口（可执行文件名含 `wails` 时
+无参数启动会进入该模式；也可以显式执行 `copywhere.exe wails`）：
+
+```powershell
+go build -ldflags "-H windowsgui" -o copywhere-wails.exe ./cmd/copywhere
+copywhere-wails.exe                  # 或 copywhere.exe wails
+```
+
+- 依赖系统 WebView2 运行时（Windows 10 1803+ / Windows 11 一般已预装；
+  缺失时请安装 Microsoft Edge WebView2 Runtime）。
+- 不使用 Node / npm：前端是内嵌的静态 HTML/CSS/JS，`go build` 一条命令完成。
+- 窗口模式与 `gui` / `run` 共用同一个单实例锁，不能同时启动；关闭窗口只是收进托盘。
+- 设计说明、验证记录与已知限制见 [docs/wails-ui.md](docs/wails-ui.md)。
+
 ## 快速开始（两台机器 A、B）
 
 1. **启动**：两台机器上分别**双击 `copywhere.exe`**——托盘常驻，浏览器自动打开控制面板。
@@ -118,6 +138,31 @@ exe 图标与版本信息由 `cmd/copywhere/rsrc_windows_amd64.syso` 提供（`g
 
 **安全**：面板仅监听 `127.0.0.1`，首次经托盘 URL 携带随机访问令牌并种下 cookie；
 面板地址同时写入 `~/.copywhere/panel_url.txt` 备查。`gui` 与 `run` 通过命名互斥锁互斥。
+
+### 桌面窗口（`wails`，实验性）
+
+```powershell
+copywhere-wails.exe            # 双击（exe 名含 wails 时无参数即进入该模式）
+copywhere.exe wails            # 或显式指定子命令
+```
+
+同一套服务、同一套配置与事件总线，把承载方式从浏览器换成进程内的 WebView2 窗口：
+
+- **顶栏**：本机名/地址、同步状态、暂停、运行日志、主题、设置；窗口关闭 = 收进托盘
+- **设备坞**：本机与在线节点卡片，配对 / 解除配对 / 设为左邻右邻直接操作
+- **传输工作台**：左收右发的对话式时间线、图片缩略图与灯箱、文本点击展开、
+  一键复制回本机剪贴板、接收文件双击打开；进行中的收发有实时进度条
+- **发送**：Enter 发文本（Shift+Enter 换行）、附件按钮选择文件/文件夹，
+  或把文件直接拖进窗口——拿到的是**真实路径**，无需先上传临时目录
+- **屏幕布局**：左邻 / 本机 / 右邻三屏画布，拖拽节点或点「左 / 右」按钮即配置，
+  即时生效并自动同步到对端
+- **设置**：节点名、接收目录、阈值、自动回贴、文本同步、跨屏开关与调参、
+  已配对设备管理；与网页面板共用同一条 `ApplyConfig` 校验与热更新链路
+- **日志抽屉**：`Ctrl+L`，错误行着色、未读角标；剩余快捷键 `Ctrl+K` 聚焦输入、
+  `Ctrl+,` 设置、`Esc` 关闭弹层
+
+窗口模式同样启动本地 HTTP 面板（仅 `127.0.0.1`）作为回退入口；再次双击 exe 会
+**唤回已有窗口**而不是新开进程。实现与验证记录见 [docs/wails-ui.md](docs/wails-ui.md)。
 
 ### 终端方式（`run`）
 
