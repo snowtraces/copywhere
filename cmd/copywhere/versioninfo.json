@@ -23,5 +23,5 @@
   "VarFileInfo": {
     "Translation": { "LangID": "0804", "CharsetID": "04B0" }
   },
-  "IconPath": "internal/webui/icon.ico"
+  "IconPath": "internal/panel/icon.ico"
 }

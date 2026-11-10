@@ -1,15 +1,14 @@
-// Package webui 提供 gui 命令的系统托盘与浏览器控制面板：
-// 事件总线（Bus）、本地 HTTP 服务（REST + SSE）、托盘图标。
+// Package panel 提供与 UI 载体无关的运行事件总线与记录视图。
 //
-// 安全模型：只监听 127.0.0.1，所有请求需携带随机访问 token
-// （托盘打开面板时通过 URL 参数带入，服务端随后种下 cookie）。
-package webui
+// Wails 桌面窗口通过 app.Options.Sink 接入 Bus，把日志 / 传输记录 / 进度 /
+// 配对请求转成窗口事件；这里不做网络暴露，也不依赖具体前端。
+package panel
 
 import (
 	"sync"
 
 	"copywhere/internal/app"
-	"copywhere/internal/ui"
+	"copywhere/internal/record"
 )
 
 const (
@@ -18,7 +17,7 @@ const (
 	chBuffer    = 256
 )
 
-// Event 是推送给面板的一条事件；Data 为已定义的 JSON 视图结构。
+// Event 是推送给前端的一条事件；Data 为已定义的 JSON 视图结构。
 type Event struct {
 	Type string `json:"type"`
 	Data any    `json:"data"`
@@ -34,11 +33,11 @@ const (
 	EvPairReq  = "pair_request"
 )
 
-// FileView 是 ui.FileRecord 的 JSON 视图。
+// FileView 是 record.File 的 JSON 视图。
 // 导出供其它前端（Wails 桌面窗口）复用同一份记录视图，避免两套字段定义漂移。
 type FileView struct {
 	Time   string `json:"time"`
-	Date   string `json:"date"` // 日期（2006-01-02），供面板做日期分组
+	Date   string `json:"date"` // 日期（2006-01-02），供前端做日期分组
 	In     bool   `json:"in"`
 	Peer   string `json:"peer"`
 	Name   string `json:"name"`
@@ -48,12 +47,12 @@ type FileView struct {
 	Text   bool   `json:"text"` // true=文本同步记录（name 为内容预览）
 }
 
-// Bus 收集运行事件：缓存日志与文件记录供面板补齐历史，
+// Bus 收集运行事件：缓存日志与文件记录供前端补齐历史，
 // 并向所有已连接的 SSE 订阅者实时推送。实现 app.EventSink。
 type Bus struct {
 	mu    sync.Mutex
 	logs  []string
-	files []ui.FileRecord
+	files []record.File
 	subs  map[chan Event]struct{}
 }
 
@@ -74,7 +73,7 @@ func (b *Bus) Log(line string) {
 }
 
 // AddFile 实现 app.EventSink：缓存一条文件记录并推送。
-func (b *Bus) AddFile(r ui.FileRecord) {
+func (b *Bus) AddFile(r record.File) {
 	b.mu.Lock()
 	b.files = append(b.files, r)
 	if len(b.files) > maxFileRecs {
@@ -89,7 +88,7 @@ func (b *Bus) Progress(p app.Progress) {
 	b.publish(Event{Type: EvProgress, Data: p})
 }
 
-// PairRequest 实现 app.EventSink：推送配对请求（面板弹出确认框）。
+// PairRequest 实现 app.EventSink：推送配对请求（前端弹出确认框）。
 func (b *Bus) PairRequest(id, name string) {
 	b.publish(Event{Type: EvPairReq, Data: map[string]string{"id": id, "name": name}})
 }
@@ -157,7 +156,7 @@ func (b *Bus) publishLocked(ev Event, targets map[chan Event]struct{}) {
 	}
 }
 
-func fileToJSON(r ui.FileRecord) FileView {
+func fileToJSON(r record.File) FileView {
 	return FileView{
 		Time:   r.Time.Format("15:04:05"),
 		Date:   r.Time.Format("2006-01-02"),

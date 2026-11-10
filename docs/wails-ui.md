@@ -1,8 +1,9 @@
-# Wails v3 桌面窗口（实验性）
+# Wails v3 桌面窗口
 
-> 基线：`78a5626`（v0.4.0）。本分支（`feat/wails-ui`）在此基线上新增第三套前端：
-> 浏览器面板（`gui`）与终端界面（`run`）之外的 **Wails v3 独立窗口**。
-> 状态：可运行、可构建、有单测；尚未并入发布流水线与默认入口。
+> 基线：`78a5626`（v0.4.0）。本分支（`feat/wails-ui`）用 Wails v3 桌面窗口替代了
+> 历史上的浏览器面板（`gui` + `internal/webui` + `fyne.io/systray`）和终端三页
+> TUI（`internal/ui`），**只保留一种 UI**：双击 exe 打开的桌面窗口。
+> 状态：可运行、可构建、有单测；尚未并入发布流水线。
 
 ## 1. 为什么做、做了什么
 
@@ -11,45 +12,51 @@
 「独立应用窗口 + WebView2 + 原生托盘/菜单/对话框」，正好覆盖这些痛点，
 同时保留 Web 前端在富交互（时间线、布局画布、灯箱）上的成本优势。
 
-本分支因此**不重写核心**，只新增一层桌面壳与新前端：
+本分支因此**不重写核心**，只保留一个桌面壳与新前端，并删除了两套冗余 UI：
 
-- 完整复用 `internal/app`（发现/传输/剪贴板/KVM）、`internal/config`、
-  `internal/webui`（事件总线与配置应用）；
+- 完整复用 `internal/app`（发现/传输/剪贴板/KVM）、`internal/config`、`internal/record`；
+- 新增 `internal/panel`（共享层：事件总线、配置应用、图标、Shell 辅助）；
 - 新增 `internal/wailsui`：Wails 应用装配、绑定服务、事件桥、托盘、窗口生命周期；
-- 新增 `internal/wailsui/frontend`：不依赖 Node/npm 的静态 HTML/CSS/JS 前端，
-  沿用网页面板的 WIREFRAME / TERMINAL 视觉（等宽字体、1px 线框、终端配色、深浅双主题）。
+- 新增 `internal/wailsui/frontend`：不依赖 Node/npm 的静态 HTML/CSS/JS，
+  沿用旧面板的 WIREFRAME / TERMINAL 视觉（等宽字体、1px 线框、终端配色、深浅双主题）；
+- 删除 `internal/webui`（HTTP/SSE 面板、浏览器打开、`fyne.io/systray` 托盘、
+  内嵌 `index.html`）与 `internal/ui`（bubbletea TUI），依赖从 30+ 收敛到
+  `wails/v3` + `x/sys` 两条直接依赖。
 
 ## 2. 目录结构与职责
 
 ```
 cmd/copywhere/
-  main.go              # 新增 wails 子命令；exe 名含 wails 时无参数默认进入窗口模式
-  wails.go             # 单实例、隔离配置、日志落盘、本地 HTTP 面板回退、启动/收尾
+  main.go              # 无参数 → 桌面窗口；run 为无窗口服务；其余 CLI 子命令
+  wails.go             # 单实例、日志落盘、启动/收尾（不再有 HTTP 面板）
 internal/wailsui/
   app.go               # Wails 应用装配：窗口、托盘、事件桥、拖放、尺寸记忆、退出
   service.go           # 绑定给前端的 Service（视图 + 操作），Core 接口便于测试
   util.go              # 图片预览白名单 / base64
-  activate_windows.go  # 二次启动：按窗口类+标题+同 exe 名查找并唤回
+  activate_windows.go  # 二次启动：枚举窗口 + 校验同 exe 名后唤回
   frontend/            # index.html + app.css + app.js（go:embed）
-internal/webui/
-  config_apply.go      # 从 apiSetConfig 抽出的 ApplyConfig（面板与桌面端共用）
-  bus.go               # FileView 改为导出，供桌面端复用记录视图
-  icon_export.go       # AppIcon/FaviconPNG 导出，避免二进制资源重复入库
+internal/panel/
+  bus.go               # 事件总线（日志/记录/进度/配对请求）
+  config_apply.go      # ApplyConfig：设置页唯一入口（校验 + 落盘 + 热更新）
+  core.go              # 配置应用依赖的核心能力接口
+  icons.go / reveal.go # 应用图标、资源管理器定位
+internal/record/
+  record.go            # 收发记录视图（核心与桌面窗口共用）
 ```
 
 ## 3. 通信模型
 
 - **前端 → Go**：`Call.ByName("copywhere/internal/wailsui.Service.<Method>", ...)`
-  （`Service` 的 FQN 由包路径 + 类型名生成，`service_test.go` 锁死该值与关键方法）。
+  （FQN 由包路径 + 类型名生成，`service_test.go` 锁死该值与关键方法）。
 - **Go → 前端**：
-  - `cw:event`：与 `webui.Bus` 同构的 `{type, data}`。`log` / `file` / `progress` /
-    `pair_request` 直接转发；`peers` / `state` 由桌面端每 2 秒用自己的 camelCase
-    视图推送（旧面板的 snake_case 快照被过滤，避免两套字段混用）。
+  - `cw:event`：与共享事件总线同构的 `{type, data}`（`log` / `file` / `progress` /
+    `pair_request`），由 `panel.Bus` 转发。
   - `cw:toast`：轻提示（拖放投送结果、操作失败原因）。
+  - `peers` / `state`：每 2 秒由 Service 以 camelCase 视图推送。
 - **拖放**：窗口开启 `EnableFileDrop`，Go 端监听 `WindowFilesDropped` 拿到真实路径，
   直接 `core.SendFiles(paths, 0)`；前端只负责高亮与提示。
-- **配置**：`SaveSettings` 调用 `webui.ApplyConfig`，与网页面板共享校验、落盘与
-  热更新（KVM 启停、触控板手势、邻居同步）。
+- **配置**：`SaveSettings` → `panel.ApplyConfig`，完成校验、落盘与热更新
+  （KVM 启停、触控板手势、邻居同步）。
 
 ## 4. 生命周期
 
@@ -58,9 +65,9 @@ internal/webui/
 | 关闭按钮 | `WindowClosing` 钩子里 `Hide()` + `Cancel()`，进程与同步继续，托盘常驻 |
 | 托盘 | 打开窗口 / 自动同步复选框 / 打开接收目录 / 退出；左键打开菜单 |
 | 退出 | 标记 quitting → 保存窗口尺寸 → 取消核心上下文 → `app.Quit()`；宿主随后 `Wait()` |
-| 二次启动 | 命名互斥锁拦截 → 枚举同 exe 名的 Wails 主窗口并 `SW_RESTORE` + 置前（约 200ms） |
+| 二次启动 | 命名互斥锁拦截 → 枚举「WailsWebviewWindow + 标题 + 同 exe 名」窗口，`SW_RESTORE` + 置前 |
 | 尺寸记忆 | 拖动/缩放 400ms 去抖落盘 `~/.copywhere/wails-window.json`，启动恢复尺寸、位置居中 |
-| 单实例 | 与 `gui` / `run` 共用 `Local\copywhere-singleton`；窗口模式仍有本地 HTTP 面板作为回退 |
+| 单实例 | 与 `run` 共用 `Local\copywhere-singleton`；没有本地 HTTP 端口，也不再有浏览器回退 |
 
 ## 5. 前端功能
 
@@ -85,7 +92,7 @@ internal/webui/
 
 ![Wails 屏幕布局](images/wails-layout.png)
 
-设置（与网页面板共用 ApplyConfig，保存即生效）：
+设置（`panel.ApplyConfig`，保存即生效）：
 
 ![Wails 设置](images/wails-settings.png)
 
@@ -93,27 +100,28 @@ internal/webui/
 
 ## 7. 构建与运行
 
-要求：Go 1.26+（与 go.mod 一致）、Windows 10 1803+ / Windows 11、系统 WebView2 运行时。
-Wails 依赖固定为 `github.com/wailsapp/wails/v3 v3.1.0`，Windows 构建不需要 CGO。
-发布构建实测 15,130,112 B（v0.4.0 基线 9,192,448 B，+5.9 MB：Wails 运行时与
-WebView2 宿主代码，不含系统 WebView2 本身）。
+要求：Go 1.26.4+（与 go.mod 一致）、Windows 10 1803+ / Windows 11、系统 WebView2
+运行时。Wails 依赖固定为 `github.com/wailsapp/wails/v3 v3.1.0`，Windows 构建不需要 CGO。
+发布构建实测 13,173,760 B（v0.4.0 基线 9,192,448 B，+3.8 MiB：Wails 运行时与
+WebView2 宿主代码，不含系统 WebView2 本身；移除旧面板/TUI 后比初版 Wails 分支
+又小了约 1.9 MB）。
 
 ```powershell
 # 开发构建（控制台可见，便于看日志）
-go build -o copywhere-wails.exe ./cmd/copywhere
-copywhere-wails.exe                 # exe 名含 wails → 无参数进入窗口模式
-copywhere-wails.exe wails           # 显式子命令
+go build -o copywhere.exe ./cmd/copywhere
+copywhere.exe                 # 双击/无参数 → 桌面窗口
+copywhere.exe wails           # 显式子命令（等价）
 
 # 发布构建
 go build -trimpath -ldflags "-s -w -H windowsgui -X copywhere/internal/app.Version=v0.4.0-wails" `
-  -o copywhere-wails.exe ./cmd/copywhere
+  -o copywhere.exe ./cmd/copywhere
 ```
 
 冒烟测试（自动退出，隔离端口，可与本机正在运行的实例并存）：
 
 ```powershell
-copywhere-wails.exe wails -config .\smoke-config.json -smoke 8s
-# 退出时会把事件总线日志打到控制台：[smoke] ...
+copywhere.exe wails -config .\smoke-config.json -smoke 8s
+# 退出时会把事件总线日志打到控制台/日志文件：[smoke] ...
 ```
 
 调试：设置 `CW_WAILS_DEBUG_PORT=9222` 后可用 CDP 连接 WebView2
@@ -125,14 +133,18 @@ copywhere-wails.exe wails -config .\smoke-config.json -smoke 8s
 
 ## 8. 验证记录（本机实测）
 
-- `go build ./...`、`go vet ./internal/wailsui ./internal/webui ./cmd/copywhere` 通过。
-- `go test ./internal/wailsui` 覆盖：状态/节点视图、发送校验、设置保存与落盘、
-  KVM 邻居、配对流程、图片预览安全边界、事件桥、绑定 FQN。
+- `go build ./...`、`go vet ./internal/wailsui ./internal/panel ./cmd/copywhere` 通过。
+- `go test ./...` 全绿；`go test -race ./internal/wailsui` 通过。
+- `internal/wailsui` 覆盖：状态/节点视图、发送校验、设置保存与落盘、
+  KVM 邻居、配对流程、图片预览安全边界、事件桥、绑定 FQN；
+  `internal/panel` 覆盖：配置校验、落盘、热更新与旧邻居传递。
 - 冒烟日志确认链路：`[WebView2] Environment created successfully` →
-  `Wails 桌面窗口已启动：1120x760` → `Wails 前端已加载：<UA>` → 自动退出 `err=<nil>`。
+  `Wails 桌面窗口已启动` → `Wails 前端已加载：<UA>` → 自动退出 `err=<nil>`。
 - CDP 实测：设置保存后 Go 端 `State().nodeName` 同步变化并落盘；
   `SetKVMNeighbor` 后 `State().kvmLeft` 生效；无节点发送文本返回可读错误。
-- Win32 实测：`WM_CLOSE` 后窗口隐藏、进程存活；二次启动 193ms 内恢复原窗口并退出 0。
+- 端口实测：冒烟运行期间只监听传输端口（47851/tcp），**没有**旧的 47890 面板端口；
+  `run` 无窗口模式下日志正常输出、剪贴板监控启动。
+- Win32 实测：`WM_CLOSE` 后窗口隐藏、进程存活；二次启动约 200ms 内恢复原窗口并退出 0。
 
 ## 9. 已知限制与后续
 
@@ -141,13 +153,9 @@ copywhere-wails.exe wails -config .\smoke-config.json -smoke 8s
 3. **绑定 FQN 硬编码**：前端使用 `Call.ByName`，避免引入 `wails3` CLI 生成绑定；
    若模块名或包路径变化，需同步 `app.js` 中的常量（有单测守护）。
 4. **无前端工程化**：没有 Node 构建、HMR、打包压缩；换来的是 `go build` 单命令。
-5. **本地 HTTP 面板仍在**：窗口模式也会监听 `127.0.0.1`（随机令牌），
-   作为排障与「已有实例」回退入口；若要求纯进程内、无本地端口，可在
-   `cmd/copywhere/wails.go` 中去掉 `webui.NewServer`（同时失去面板回退与右键发送定位）。
-6. **二次唤回按 exe 名匹配**：`copywhere-wails.exe` 改名为其它名字后，第二次启动
-   只会提示「已有实例」而不会唤回窗口。
-7. **未接入发布**：`.github/workflows/build.yml`、`docs/release.md` 未包含 Wails 产物；
+5. **只保留一种 UI**：`run` 退化为无窗口日志服务，不再提供 TUI；需要界面时必须
+   在交互式桌面会话中运行 `copywhere`/`copywhere wails`。
+6. **未接入发布**：`.github/workflows/build.yml`、`docs/release.md` 未包含 Wails 产物；
    `wails3` CLI 的 manifest/图标/绑定生成流程也未接入。
-8. **与网页面板的前端未统一**：两套前端共享视觉与 Go 内核，但 HTML/JS 各自维护；
-   后续若要收敛，可把 `webui/static/index.html` 拆成 tokens + 组件 + 传输适配层，
-   让两侧共用同一份 UI 代码（传输方式由适配层注入）。
+7. **单实例唤回按 exe 名匹配**：若把 exe 改名为与运行中实例不同的名字，第二次启动
+   只会提示「已有实例」而不会唤回窗口（同一 exe 名正常）。

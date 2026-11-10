@@ -1,15 +1,15 @@
 // Package wailsui 是 copywhere 的 Wails v3 桌面前端（实验性）。
 //
-// 定位：与 webui（浏览器面板）并列的前端实现。核心服务（发现/传输/剪贴板/KVM）、
+// 定位：copywhere 的唯一图形前端。核心服务（发现/传输/剪贴板/KVM）、
 // 配置与事件总线全部复用；本包只提供：
 //
-//   - 一个 Wails v3 窗口（WebView2 承载全新前端，不经过浏览器/HTTP 面板）；
+//   - 一个 Wails v3 窗口（WebView2 承载全新前端，不经过浏览器/HTTP 窗口）；
 //   - 绑定给前端的 Go 服务（传输时间线、设备坞、配对、KVM 布局、设置、日志）；
 //   - 托盘菜单、关闭到托盘、文件拖放（拿真实路径直接投送）、窗口尺寸记忆。
 //
-// 与 webui 的共享边界：
-//   - 记录视图复用 webui.Bus / webui.FileView；
-//   - 配置修改复用 webui.ApplyConfig（与面板同一条校验与热更新链路）。
+// 与共享层 panel 的边界：
+//   - 记录视图复用 panel.Bus / panel.FileView；
+//   - 配置修改复用 panel.ApplyConfig（与窗口同一条校验与热更新链路）。
 package wailsui
 
 import (
@@ -25,7 +25,7 @@ import (
 
 	appcore "copywhere/internal/app"
 	"copywhere/internal/config"
-	"copywhere/internal/webui"
+	"copywhere/internal/panel"
 )
 
 // maxImagePreview 是图片缩略图的上限：超过则回退成普通文件卡片，
@@ -96,7 +96,6 @@ type Settings struct {
 	DiscoveryPort int    `json:"discoveryPort"`
 	TransferPort  int    `json:"transferPort"`
 	KVMPort       int    `json:"kvmPort"`
-	WebPort       int    `json:"webPort"`
 	AnnounceSec   int    `json:"announceSec"`
 	PeerTTLSec    int    `json:"peerTTLSec"`
 	ConfigPath    string `json:"configPath"`
@@ -106,7 +105,7 @@ type Settings struct {
 // 抽成接口有两个目的：绑定服务可以单独测（见 service_test.go），
 // 以及明确桌面端只依赖这些操作、不碰核心内部状态。
 type Core interface {
-	webui.Core
+	panel.Core
 	// CopyText 写回本机剪贴板并标记为本机写入（避免二次广播）。
 	CopyText(text string) error
 }
@@ -117,7 +116,7 @@ type Service struct {
 	core    Core
 	cfg     *config.Config
 	cfgPath string
-	bus     *webui.Bus
+	bus     *panel.Bus
 	started time.Time
 
 	mu sync.Mutex
@@ -130,7 +129,7 @@ type Service struct {
 }
 
 // NewService 创建绑定服务。core/cfg/bus 必须非 nil。
-func NewService(core Core, cfg *config.Config, cfgPath string, bus *webui.Bus) *Service {
+func NewService(core Core, cfg *config.Config, cfgPath string, bus *panel.Bus) *Service {
 	if cfgPath == "" && cfg != nil {
 		cfgPath = cfg.Path
 	}
@@ -166,8 +165,8 @@ func (s *Service) firePauseHook(paused bool) {
 	}
 }
 
-// emitEvent 推送一条与 webui 事件总线同构的事件（type/data）。
-func (s *Service) emitEvent(ev webui.Event) {
+// emitEvent 推送一条与共享事件总线同构的事件（type/data）。
+func (s *Service) emitEvent(ev panel.Event) {
 	s.emitMu.RLock()
 	fn := s.emit
 	s.emitMu.RUnlock()
@@ -179,8 +178,8 @@ func (s *Service) emitEvent(ev webui.Event) {
 
 // EmitSnapshot 立即推送节点表与状态快照（前端加载完成/操作完成后调用）。
 func (s *Service) EmitSnapshot() {
-	s.emitEvent(webui.Event{Type: webui.EvPeers, Data: s.Peers()})
-	s.emitEvent(webui.Event{Type: webui.EvState, Data: s.State()})
+	s.emitEvent(panel.Event{Type: panel.EvPeers, Data: s.Peers()})
+	s.emitEvent(panel.Event{Type: panel.EvState, Data: s.State()})
 }
 
 // toast 让前端弹一条轻提示（拖放投送、失败原因等）。
@@ -194,9 +193,8 @@ func (s *Service) toast(msg string, isErr bool) {
 	fn("cw:toast", map[string]any{"message": msg, "error": isErr})
 }
 
-// StartBridge 把 webui 事件总线（日志/记录/进度/配对请求）转成 Wails 事件，
-// 并每 2 秒推送一次节点表与状态快照。旧面板的 peers/state 事件（snake_case）
-// 直接丢弃：本前端使用下方 Service.Peers/State 的 camelCase 视图。
+// StartBridge 把共享事件总线（日志/记录/进度/配对请求）转成 Wails 事件，
+// 并每 2 秒推送一次节点表与状态快照（camelCase 视图）。
 func (s *Service) StartBridge(ctx context.Context) {
 	ch, cancel := s.bus.Subscribe()
 	defer cancel()
@@ -209,9 +207,6 @@ func (s *Service) StartBridge(ctx context.Context) {
 		case ev, ok := <-ch:
 			if !ok {
 				return
-			}
-			if ev.Type == webui.EvPeers || ev.Type == webui.EvState {
-				continue
 			}
 			s.emitEvent(ev)
 		case <-ticker.C:
@@ -276,7 +271,7 @@ func (s *Service) Peers() []Peer {
 }
 
 // Records 返回时间线记录（旧 → 新，来自事件总线缓存）。
-func (s *Service) Records() []webui.FileView { return s.bus.Files() }
+func (s *Service) Records() []panel.FileView { return s.bus.Files() }
 
 // Logs 返回缓存的运行日志。
 func (s *Service) Logs() []string { return s.bus.Logs() }
@@ -311,11 +306,9 @@ func (s *Service) Settings() Settings {
 		KVMRight:      s.cfg.KVMRight,
 		DiscoveryPort: s.cfg.DiscoveryPort,
 		TransferPort:  s.cfg.TransferPort,
-		KVMPort:       s.cfg.KVMPort,
-		WebPort:       s.cfg.WebPort,
-		AnnounceSec:   s.cfg.AnnounceSec,
-		PeerTTLSec:    s.cfg.PeerTTLSec,
-		ConfigPath:    s.cfgPath,
+		KVMPort:       s.cfg.KVMPort, AnnounceSec: s.cfg.AnnounceSec,
+		PeerTTLSec: s.cfg.PeerTTLSec,
+		ConfigPath: s.cfgPath,
 	}
 }
 
@@ -408,14 +401,14 @@ func (s *Service) sendablePeers() (int, string) {
 	return n, ""
 }
 
-// SaveSettings 应用设置页提交的字段（与网页面板 /api/config 同一实现）。
-// in 使用面板的字段名（node_name、kvm_left 等），只提交改动过的字段即可。
+// SaveSettings 应用设置页提交的字段（与网页窗口 /api/config 同一实现）。
+// in 使用窗口的字段名（node_name、kvm_left 等），只提交改动过的字段即可。
 func (s *Service) SaveSettings(in map[string]any) error {
 	if len(in) == 0 {
 		return errors.New("没有需要保存的修改")
 	}
 	s.mu.Lock()
-	_, err := webui.ApplyConfig(s.core, s.cfg, s.cfgPath, in)
+	err := panel.ApplyConfig(s.core, s.cfg, s.cfgPath, in)
 	s.mu.Unlock()
 	if err != nil {
 		return err
@@ -496,7 +489,7 @@ func (s *Service) OpenPath(path string, selectInFolder bool) error {
 	if _, err := os.Stat(path); err != nil {
 		return fmt.Errorf("路径不存在: %s", path)
 	}
-	if err := webui.RevealInExplorer(path, selectInFolder); err != nil {
+	if err := panel.RevealInExplorer(path, selectInFolder); err != nil {
 		return fmt.Errorf("打开失败: %w", err)
 	}
 	return nil
@@ -515,7 +508,7 @@ func (s *Service) OpenReceiveDir() error {
 			return fmt.Errorf("创建接收目录失败: %w", err)
 		}
 	}
-	if err := webui.RevealInExplorer(dir, false); err != nil {
+	if err := panel.RevealInExplorer(dir, false); err != nil {
 		return fmt.Errorf("打开接收目录失败: %w", err)
 	}
 	return nil
@@ -533,7 +526,7 @@ func (s *Service) CopyText(text string) error {
 }
 
 // ImagePreview 返回接收目录内图片的 data URL（缩略图/灯箱用）。
-// 安全边界与面板 /api/file 一致：只允许接收目录内的常见图片扩展名。
+// 安全边界与窗口 /api/file 一致：只允许接收目录内的常见图片扩展名。
 func (s *Service) ImagePreview(path string) (string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {

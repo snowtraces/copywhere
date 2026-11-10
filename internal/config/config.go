@@ -32,8 +32,7 @@ type Config struct {
 	KVMSpeedPct   int    `json:"kvm_speed_percent"`               // 本机作为主控的位移速度调节百分比（100=1.0x；<=0 视为 100）
 	KVMTouchpad   *bool  `json:"kvm_touchpad_gestures,omitempty"` // 实验性：触控板双指滚动跨屏识别（缺省关闭）
 	KVMTouchSpd   int    `json:"kvm_touchpad_speed"`              // 触控板滚动输出倍率百分比（100=基准；<=0 视为 100）
-	WebPort       int    `json:"web_port"`                        // GUI 面板端口（gui 命令；0=默认，负数=随机）
-	Path          string `json:"-"`                               // 配置文件实际路径（Load 时填充；信任库/面板地址等派生文件放在同目录）
+	Path          string `json:"-"`                               // 配置文件实际路径（Load 时填充；信任库等派生文件放在同目录）
 }
 
 // KVMEntryMonitorIdx 返回被控入口显示器下标（未配置 → -1 = 主显示器）。
@@ -91,7 +90,6 @@ func Default() (*Config, error) {
 		PeerTTLSec:    12,
 		KVMPort:       47832,
 		KVMSpeedPct:   100,
-		WebPort:       47890,
 	}, nil
 }
 
@@ -150,11 +148,6 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.KVMPort <= 0 {
 		cfg.KVMPort = 47832
-	}
-	if cfg.WebPort < 0 {
-		cfg.WebPort = 0 // 负数 = 随机端口
-	} else if cfg.WebPort == 0 {
-		cfg.WebPort = 47890
 	}
 	return &cfg, nil
 }

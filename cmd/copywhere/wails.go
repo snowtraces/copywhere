@@ -9,20 +9,18 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"copywhere/internal/app"
 	"copywhere/internal/config"
+	"copywhere/internal/panel"
 	"copywhere/internal/wailsui"
-	"copywhere/internal/webui"
 )
 
-// cmdWails 启动 Wails v3 桌面窗口版：同一进程内运行完整服务（发现/传输/
-// 剪贴板/KVM）+ WebView2 窗口 + 系统托盘，不依赖浏览器。
+// cmdWails 是 copywhere 唯一的图形入口：同一进程内运行完整服务（发现/传输/
+// 剪贴板/KVM）+ Wails v3 桌面窗口（WebView2）+ 系统托盘。
 //
-// 与 gui 的关系：核心服务完全一致，只是承载 UI 的方式不同。为了避免
-// 剪贴板监控与端口冲突，两者共用同一个命名互斥锁，不能同时启动。
+// 与 run（终端）共用命名互斥锁，避免两个实例抢剪贴板监听与端口。
 func cmdWails(args []string) (err error) {
 	fs := flag.NewFlagSet("wails", flag.ExitOnError)
 	configPath := fs.String("config", "", "配置文件路径")
@@ -34,23 +32,19 @@ func cmdWails(args []string) (err error) {
 
 	defer func() {
 		if err != nil {
-			log.Printf("wails 启动/运行失败: %v", err)
+			log.Printf("桌面窗口启动/运行失败: %v", err)
 		}
 	}()
 
 	if *smoke == 0 {
 		if !acquireSingleton() {
-			// 已有实例在跑：优先把它的 Wails 窗口找出来置前；找不到（例如对方是
-			// gui 浏览器模式）再尝试打开它的浏览器面板。
+			// 已有实例：把它的窗口找出来置前；找不到就明确报错，不再有
+			// 浏览器窗口作为回退（旧 gui 方案已移除）。
 			if wailsui.ActivateExistingWindow() {
 				log.Printf("已有 copywhere 实例在运行，已激活它的桌面窗口")
 				return nil
 			}
-			if perr := openExistingPanel(*configPath); perr == nil {
-				log.Printf("已有 copywhere 实例在运行，已打开它的浏览器面板")
-				return nil
-			}
-			return fmt.Errorf("已有另一个 copywhere 实例在运行（gui / run / wails 不能同时启动）")
+			return fmt.Errorf("已有另一个 copywhere 实例在运行（run 与 wails 不能同时启动）")
 		}
 		defer releaseSingleton()
 	} else {
@@ -71,25 +65,10 @@ func cmdWails(args []string) (err error) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	bus := webui.NewBus()
+	bus := panel.NewBus()
 	a, err := app.Start(ctx, cfg, app.Options{GUI: true, Sink: bus, LogFile: logWriter})
 	if err != nil {
 		return err
-	}
-
-	// Wails 模式下仍保留本地 HTTP 面板：既是排障入口，也让"第二个实例"
-	// 的回落路径（打开已有面板）成立。面板只监听 127.0.0.1，需要访问令牌。
-	if srv, serr := webui.NewServer(a, cfg, path, bus); serr != nil {
-		log.Printf("本地 HTTP 面板启动失败（不影响桌面窗口）: %v", serr)
-	} else {
-		defer srv.Shutdown()
-		srv.StartSnapshotLoop(ctx)
-		urlFile := filepath.Join(filepath.Dir(path), "panel_url.txt")
-		if werr := os.WriteFile(urlFile, []byte(srv.URL()), 0o600); werr != nil {
-			log.Printf("记录面板地址失败: %v", werr)
-		}
-		defer os.Remove(urlFile)
-		log.Printf("本地面板（浏览器回退）: %s", srv.URL())
 	}
 
 	log.Printf("启动 Wails 桌面窗口（WebView2）")
@@ -116,24 +95,6 @@ func cmdWails(args []string) (err error) {
 		fmt.Fprintf(logWriter, "[smoke] wails 退出: err=%v\n", werr)
 	}
 	return werr
-}
-
-// openExistingPanel 读取上一次运行写下的面板地址并用浏览器打开。
-// 只用于"已有实例"的回落路径：地址里带访问令牌，文件权限 0600。
-func openExistingPanel(cfgPath string) error {
-	path := cfgPath
-	if path == "" {
-		path = config.DefaultPath()
-	}
-	data, err := os.ReadFile(filepath.Join(filepath.Dir(path), "panel_url.txt"))
-	if err != nil {
-		return err
-	}
-	url := strings.TrimSpace(string(data))
-	if url == "" {
-		return fmt.Errorf("面板地址为空")
-	}
-	return webui.OpenBrowser(url)
 }
 
 // setupWailsLogging 把日志同时写进 ~/.copywhere/wails.log 与终端（有终端时）。

@@ -1,5 +1,9 @@
 # MouseWithoutBorders（PowerToys）× copywhere 技术对比报告
 
+> 说明：本文写于浏览器面板时期（v0.4.0）。当前分支已把 GUI 统一为 Wails v3
+> 桌面窗口（无浏览器/HTTP 面板、无 TUI），文中「Web 面板 / SSE / `/api/debug`」等
+> 描述仅作历史对照。
+
 > 对比对象
 > - **MWB**：`PowerToys/src/modules/MouseWithoutBorders`（C# / .NET 8 / WinForms，约 22.7k LOC，4 个可执行体）
 > - **copywhere**：本仓库（Go 1.21+，单 exe，约 7.8k LOC 主体 + 2.6k LOC 测试）

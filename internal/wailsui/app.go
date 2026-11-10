@@ -20,7 +20,7 @@ import (
 
 	appcore "copywhere/internal/app"
 	"copywhere/internal/config"
-	"copywhere/internal/webui"
+	"copywhere/internal/panel"
 )
 
 //go:embed all:frontend
@@ -39,7 +39,7 @@ type RunOptions struct {
 	Core    *appcore.App
 	Cfg     *config.Config
 	CfgPath string
-	Bus     *webui.Bus
+	Bus     *panel.Bus
 
 	// Smoke 非零时，窗口起来后等待该时长自动退出（构建/冒烟测试用）。
 	Smoke time.Duration
@@ -225,7 +225,7 @@ func Run(opts RunOptions) error {
 // buildTray 创建系统托盘与菜单。
 func buildTray(app *application.App, svc *Service, core *appcore.App, showWindow, quit func()) {
 	tray := app.SystemTray.New()
-	tray.SetIcon(webui.AppIcon())
+	tray.SetIcon(panel.AppIcon())
 	tray.SetTooltip("copywhere — 局域网剪贴板 / 文件自动同步")
 
 	menu := app.NewMenu()

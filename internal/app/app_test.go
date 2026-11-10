@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"copywhere/internal/config"
-	"copywhere/internal/ui"
+	"copywhere/internal/record"
 )
 
 type fakeSink struct {
@@ -23,7 +23,7 @@ type fakeSink struct {
 }
 
 func (f *fakeSink) Log(line string)             { f.lastLog = line; f.logs = append(f.logs, line) }
-func (f *fakeSink) AddFile(r ui.FileRecord)     {}
+func (f *fakeSink) AddFile(r record.File)       {}
 func (f *fakeSink) Progress(p Progress)         { f.lastProg = p; f.progCount++ }
 func (f *fakeSink) PairRequest(id, name string) {}
 

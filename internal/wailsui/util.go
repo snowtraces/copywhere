@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// imageExts 与 webui 面板保持一致的图片预览白名单。
+// imageExts 是窗口图片预览的白名单。
 var imageExts = map[string]string{
 	".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
 	".gif": "image/gif", ".bmp": "image/bmp", ".webp": "image/webp",

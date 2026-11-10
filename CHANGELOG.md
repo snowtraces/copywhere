@@ -2,15 +2,20 @@
 
 ## 未发布（feat/wails-ui 实验分支，基于 v0.4.0）
 
-- **新增（实验性）**：**Wails v3 桌面窗口 UI**——`copywhere wails`（或双击
-  `copywhere-wails.exe`）在同进程内以 WebView2 窗口承载全新桌面前端：顶栏状态、
-  设备坞、对话式传输工作台、屏幕布局画布、设置、运行日志抽屉、遥测灯箱与
-  配对确认；通过 Go 绑定与事件直接驱动，不经过浏览器/HTTP 面板。
-  - 文件拖入窗口直接拿真实路径投送；关闭窗口收进托盘继续同步；二次启动唤回
-    已有窗口（按「窗口类 + 标题 + 同 exe 名」定位，避免误中同名影子窗口）。
-  - 配置修改复用网页面板的 `webui.ApplyConfig`（同一条校验/热更新链路），
-    `webui.Bus` 日志/记录/进度/配对事件转成 Wails 事件推送。
-  - 构建仍保持 `go build` 单命令、无 Node/npm；Wails 依赖固定 `v3.1.0`。
+- **变更（实验性）**：**只保留一种 UI —— Wails v3 桌面窗口**。`copywhere`（双击/无参数）
+  或 `copywhere wails` 打开独立 WebView2 窗口；历史浏览器面板与终端 TUI 一并移除。
+  - **新增**：`internal/wailsui`（Wails 应用装配、Go 绑定服务、托盘、关闭到托盘、
+    文件拖放真实路径、二次启动唤回窗口、尺寸记忆）与内嵌静态前端
+    （工作台时间线 / 设备坞 / 屏幕布局 / 设置 / 日志抽屉 / 深浅主题）。
+  - **移除**：`copywhere gui`、`internal/webui`（本地 HTTP + SSE 面板、浏览器打开、
+    `fyne.io/systray` 托盘、内嵌 `index.html`、访问令牌/`panel_url.txt`）、
+    `internal/ui`（bubbletea 三页 TUI）与 `run -plain`；`run` 退化为无窗口日志服务。
+  - **依赖收敛**：直接依赖只剩 `github.com/wailsapp/wails/v3` 与 `golang.org/x/sys`
+    （移除 `fyne.io/systray`、`bubbletea`、`lipgloss` 等）。
+  - **共享层**：新增 `internal/panel`（事件总线、`ApplyConfig`、图标、资源管理器定位）
+    与 `internal/record`（收发记录视图）；`app.Options.LogFile` 让日志同时进窗口与
+    `~/.copywhere/wails.log`。
+  - **配置**：删除只服务于浏览器面板的 `web_port` 字段（旧配置里的该字段会被忽略）。
   - 设计、目录结构、验证记录与已知限制见 `docs/wails-ui.md`。
 
 ## v0.4.0 (2026-09-17)

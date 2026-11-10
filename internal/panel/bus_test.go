@@ -1,11 +1,11 @@
-package webui
+package panel
 
 import (
 	"testing"
 	"time"
 
 	"copywhere/internal/app"
-	"copywhere/internal/ui"
+	"copywhere/internal/record"
 )
 
 func TestBusLogBuffering(t *testing.T) {
@@ -21,7 +21,7 @@ func TestBusLogBuffering(t *testing.T) {
 func TestBusFileBuffering(t *testing.T) {
 	b := NewBus()
 	for i := 0; i < maxFileRecs+10; i++ {
-		b.AddFile(ui.FileRecord{Time: time.Now(), Name: "f", Size: 1})
+		b.AddFile(record.File{Time: time.Now(), Name: "f", Size: 1})
 	}
 	if got := len(b.Files()); got != maxFileRecs {
 		t.Fatalf("记录缓存应裁剪到 %d 条，实际 %d", maxFileRecs, got)
@@ -34,7 +34,7 @@ func TestBusSubscribeReceivesLiveEvents(t *testing.T) {
 	defer cancel()
 
 	b.Log("hello")
-	b.AddFile(ui.FileRecord{Time: time.Now(), Name: "a.txt", Size: 3, In: true})
+	b.AddFile(record.File{Time: time.Now(), Name: "a.txt", Size: 3, In: true})
 	b.Progress(app.Progress{Peer: "p", Name: "a.txt", Sent: 1, Total: 3})
 
 	want := []string{EvLog, EvFile, EvProgress}

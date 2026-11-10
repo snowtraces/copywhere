@@ -30,25 +30,22 @@ import (
 	"copywhere/internal/input"
 	"copywhere/internal/kvm"
 	"copywhere/internal/monitor"
+	"copywhere/internal/record"
 	"copywhere/internal/transport"
 	"copywhere/internal/trust"
-	"copywhere/internal/ui"
 )
 
 const pendingTTL = 60 * time.Second
 
 // Options 控制 Run 的运行形态。
 type Options struct {
-	// Interactive 为 true 时启用 TUI（日志/在线节点/文件记录三个标签页）；
-	// 为 false 时纯日志输出到标准输出。
-	Interactive bool
-	// GUI 为 true 时服务在后台运行，由调用方（gui 命令）提供托盘与 Web 面板；
-	// 此时日志与事件写入 Sink，不占用标准输出。
+	// GUI 为 true 时服务在后台运行，由调用方（Wails 桌面窗口）提供窗口与托盘；
+	// 此时日志与事件写入 Sink（并可按 LogFile 落盘），不占用标准输出。
 	GUI bool
-	// Sink 非 nil 时接收结构化事件（webui.Bus 实现），供 GUI 面板实时展示。
+	// Sink 非 nil 时接收结构化事件（internal/panel.Bus 实现），供桌面窗口实时展示。
 	Sink EventSink
 	// LogFile 非 nil 时日志额外落盘（GUI 无控制台时的排障依据）。
-	// 与面板事件流同时写入，二者互不影响。
+	// 与事件流同时写入，二者互不影响。
 	LogFile io.Writer
 }
 
@@ -62,10 +59,10 @@ type Progress struct {
 }
 
 // EventSink 接收运行事件（日志行、文件记录、发送进度、配对请求）。
-// TUI 模式下为 nil；GUI 模式下由 webui.Bus 实现。
+// 纯日志模式下为 nil；桌面窗口下由 internal/panel.Bus 实现。
 type EventSink interface {
 	Log(line string)
-	AddFile(r ui.FileRecord)
+	AddFile(r record.File)
 	Progress(p Progress)
 	PairRequest(id, name string)
 }
@@ -115,7 +112,6 @@ type App struct {
 	cfg      *config.Config
 	store    *discovery.Store
 	selfID   string
-	ui       *ui.Controller
 	sink     EventSink
 	trust    *trust.Store
 	ownSeq   atomic.Uint32
@@ -125,7 +121,7 @@ type App struct {
 	opts   Options
 	ctx    context.Context
 	cancel context.CancelFunc
-	kvmSvc *kvm.Service // 当前 KVM 服务（面板可热启停，未启用时为 nil）
+	kvmSvc *kvm.Service // 当前 KVM 服务（窗口可热启停，未启用时为 nil）
 
 	kvmMu     sync.Mutex         // 保护 kvmSvc / kvmCancel 的热启停
 	kvmCancel context.CancelFunc // KVM 服务子 context（停用时取消以关闭监听）
@@ -186,9 +182,9 @@ func (a *App) markRejected(p discovery.Peer) {
 	}
 	a.rejected[p.ID] = true
 	if a.trust.Has(p.ID) {
-		log.Printf("节点 %q 拒绝传输（配对可能已被对端解除），已暂停向其发送；可在面板重新配对", p.Name)
+		log.Printf("节点 %q 拒绝传输（配对可能已被对端解除），已暂停向其发送；可在窗口重新配对", p.Name)
 	} else {
-		log.Printf("节点 %q 拒绝传输（未配对且 token 不一致），已暂停向其发送；可在面板配对", p.Name)
+		log.Printf("节点 %q 拒绝传输（未配对且 token 不一致），已暂停向其发送；可在窗口配对", p.Name)
 	}
 }
 
@@ -262,7 +258,7 @@ func precheckPorts(cfg *config.Config) error {
 	return nil
 }
 
-// Run 启动完整服务：发现 + 传输 + 剪贴板监控（+ 可选 TUI），阻塞直到退出。
+// Run 启动完整服务：发现 + 传输 + 剪贴板监控，阻塞直到退出。
 func Run(ctx context.Context, cfg *config.Config, opts Options) error {
 	a, err := Start(ctx, cfg, opts)
 	if err != nil {
@@ -272,7 +268,7 @@ func Run(ctx context.Context, cfg *config.Config, opts Options) error {
 }
 
 // Start 启动完整服务并立即返回运行中的 App；调用方随后用 Wait 阻塞等待退出，
-// 或直接通过返回的 App 操作（GUI 模式下由 webui 面板调用其导出方法）。
+// 或直接通过返回的 App 操作（桌面窗口下由 wailsui 调用其导出方法）。
 func Start(ctx context.Context, cfg *config.Config, opts Options) (*App, error) {
 	if err := precheckPorts(cfg); err != nil {
 		return nil, err
@@ -283,27 +279,22 @@ func Start(ctx context.Context, cfg *config.Config, opts Options) (*App, error) 
 	}
 	a.opts = opts
 	// 注意：cancel 不能 defer 在 Start 里——Start 会立即返回，
-	// 提前取消会让传输/发现/TUI 全部秒退（表现为无法握手、TUI 无法启动）。
+	// 提前取消会让传输/发现全部秒退（表现为无法握手）。
 	// 生命周期移交给 App，由 Wait 结束时释放。
 	runCtx, cancel := context.WithCancel(ctx)
 	a.cancel = cancel
 	a.ctx = runCtx
 
-	switch {
-	case opts.Interactive:
-		a.ui = ui.NewController(func() []discovery.Peer { return a.store.Alive(a.ttl()) },
-			a.ttl(), cfg.NodeName, selfIP())
-		log.SetOutput(a.ui.Hub) // 日志进入 TUI 的日志页
-	case opts.Sink != nil:
+	if opts.Sink != nil {
 		a.sink = opts.Sink
 		var w io.Writer = &sinkWriter{sink: a.sink}
 		if opts.LogFile != nil {
-			// 事件流在前（不会失败），文件在后：日志同时进面板与磁盘。
+			// 事件流在前（不会失败），文件在后：日志同时进窗口与磁盘。
 			w = io.MultiWriter(w, opts.LogFile)
 		}
-		log.SetOutput(w) // 日志进入 GUI 面板事件流（并落盘）
-	default:
-		log.SetOutput(ui.NewHub(os.Stdout)) // 纯日志模式，镜像到标准输出
+		log.SetOutput(w) // 日志进入桌面窗口事件流（并落盘）
+	} else {
+		log.SetOutput(os.Stdout) // 纯日志模式
 	}
 
 	go func() {
@@ -311,7 +302,7 @@ func Start(ctx context.Context, cfg *config.Config, opts Options) (*App, error) 
 			OnFile: a.onFileReceived,
 			OnText: a.onTextReceived,
 			OnRich: a.onRichReceived,
-			// 接收方向进度推给面板（发送方向的进度由 progressWriter 上报）
+			// 接收方向进度推给窗口（发送方向的进度由 progressWriter 上报）
 			OnProgress: func(sender, name string, sent, total int64) {
 				if a.sink != nil {
 					a.sink.Progress(Progress{Peer: sender, Name: name, Sent: sent, Total: total, In: true})
@@ -326,7 +317,7 @@ func Start(ctx context.Context, cfg *config.Config, opts Options) (*App, error) 
 	}()
 	go func() {
 		interval := time.Duration(cfg.AnnounceSec) * time.Second
-		// 节点名经 nameFn 每次广播时取当前值：面板改名下一次广播即生效。
+		// 节点名经 nameFn 每次广播时取当前值：窗口改名下一次广播即生效。
 		// caps 公告本机能力：对端据此决定是否发送 rich 富文本。
 		if err := discovery.RunDynamic(runCtx, cfg.DiscoveryPort, cfg.TransferPort, interval,
 			func() string { return a.cfg.NodeName }, a.selfID, a.store, discovery.CapRich); err != nil {
@@ -335,7 +326,7 @@ func Start(ctx context.Context, cfg *config.Config, opts Options) (*App, error) 
 	}()
 	go a.flushLoop(runCtx)
 	// 运行时看门狗（借鉴 MWB 的诊断思路）：关键循环周期性心跳，
-	// 超期未更新即转储全部 goroutine 堆栈到诊断环，经面板 /api/debug 可见。
+	// 超期未更新即转储全部 goroutine 堆栈到诊断环（窗口可通过 diag.Snap 读取）。
 	// 预算给得宽：monitor/flush 触发的是多节点同步 IO，正常也可能耗时数分钟。
 	diag.StartWatchdog(runCtx, 10*time.Second, func(name string) time.Duration {
 		switch name {
@@ -393,23 +384,19 @@ func Start(ctx context.Context, cfg *config.Config, opts Options) (*App, error) 
 	if cfg.KVMOn() {
 		a.startKVM()
 	}
-	if opts.Interactive || opts.GUI {
+	if opts.GUI {
 		go monitor.Run(runCtx, monitor.Guard{OwnSeq: &a.ownSeq, LastReceivedAt: &a.lastRecv, Paused: &a.paused},
 			func() int64 { return cfg.Threshold() }, func() bool { return cfg.TextSync }, a)
 	}
 	return a, nil
 }
 
-// Wait 阻塞直到服务退出（TUI 退出 / ctx 结束 / 纯日志模式下监控循环结束）。
+// Wait 阻塞直到服务退出（ctx 结束 / 桌面窗口关闭到托盘后的退出）。
 // 无论从哪条路径返回，都会释放 Start 建立的子 context。
 func (a *App) Wait() error {
 	defer a.cancel()
-	if a.ui != nil {
-		// TUI 退出（q/Esc/Ctrl+C）即整体退出
-		return a.ui.Run(a.ctx)
-	}
 	if a.opts.GUI {
-		// GUI 模式：监控已在后台运行，等待 ctx（托盘退出 / Ctrl+C）
+		// 桌面窗口模式：监控已在后台运行，等待 ctx（托盘退出 / Ctrl+C）
 		<-a.ctx.Done()
 		return nil
 	}
@@ -418,7 +405,7 @@ func (a *App) Wait() error {
 	return nil
 }
 
-// ---------- GUI 面板接口 ----------
+// ---------- 桌面窗口接口 ----------
 
 // Peers 返回当前在线节点快照。
 func (a *App) Peers() []discovery.Peer { return a.store.Alive(a.ttl()) }
@@ -426,7 +413,7 @@ func (a *App) Peers() []discovery.Peer { return a.store.Alive(a.ttl()) }
 // SelfName 返回本机节点显示名。
 func (a *App) SelfName() string { return a.cfg.NodeName }
 
-// WatchMode 返回剪贴板监听方式（"listener"/"viewer"/"none"），供面板诊断展示。
+// WatchMode 返回剪贴板监听方式（"listener"/"viewer"/"none"），供窗口诊断展示。
 func (a *App) WatchMode() string { return clip.WatchMode() }
 
 // SelfIP 返回本机展示用的首选地址。
@@ -466,7 +453,7 @@ func (a *App) parentOrBackground() context.Context {
 }
 
 // SetKVMEnabled 热启用/停用跨屏：监听与活动会话即时启停，无需重启。
-// 配置落盘由面板的 apiConfig 负责，这里只管运行态。
+// 配置落盘由 panel.ApplyConfig 负责，这里只管运行态。
 func (a *App) SetKVMEnabled(on bool) {
 	if on {
 		a.startKVM()
@@ -646,8 +633,8 @@ func (a *App) PairWith(id string) error {
 	return fmt.Errorf("与节点 %q 配对失败: %w", peer.Name, lastErr)
 }
 
-// onPairRequest 是传输层的配对回调：登记待裁决请求并通知面板，
-// 然后阻塞等待本机用户在面板中接受/拒绝（或超时自动拒绝）。
+// onPairRequest 是传输层的配对回调：登记待裁决请求并通知窗口，
+// 然后阻塞等待本机用户在窗口中接受/拒绝（或超时自动拒绝）。
 func (a *App) onPairRequest(offer transport.PairOffer) transport.PairDecision {
 	if offer.ID == "" || offer.ID == a.selfID || offer.Token == "" {
 		return transport.PairDecision{Accepted: false}
@@ -712,7 +699,7 @@ func (a *App) RespondPair(accept bool) error {
 	return nil
 }
 
-// PendingPair 返回当前待裁决的配对请求（面板刷新/重开时恢复弹窗用）。
+// PendingPair 返回当前待裁决的配对请求（窗口刷新/重开时恢复弹窗用）。
 func (a *App) PendingPair() (id, name string, ok bool) {
 	a.pairMu.Lock()
 	defer a.pairMu.Unlock()
@@ -727,7 +714,7 @@ func (a *App) PendingPair() (id, name string, ok bool) {
 // SyncKVM 把当前布局落地并推送：本机 KVM 服务热更新邻居；
 // 同时告知每个在线且已配对的邻居"把我放到你的另一侧"，实现多机自动同步。
 // （A 是 B 的左邻 ⟺ B 是 A 的右邻，两端只需在一端配置。）
-// 无旧布局可对照（仅推送当前设置）；面板保存布局请用 SyncKVMFrom，
+// 无旧布局可对照（仅推送当前设置）；窗口保存布局请用 SyncKVMFrom，
 // 以便邻居被取消或换人时同步通知旧邻居解除。
 func (a *App) SyncKVM() {
 	a.SyncKVMFrom(a.cfg.KVMLeft, a.cfg.KVMRight)
@@ -794,7 +781,7 @@ func (a *App) pushKVM(neighbor, remoteSide string, clear bool) {
 		}()
 		return
 	}
-	log.Printf("KVM 布局同步跳过 %q：当前不在线（对端上线后在面板重新保存布局即可同步）", neighbor)
+	log.Printf("KVM 布局同步跳过 %q：当前不在线（对端上线后在窗口重新保存布局即可同步）", neighbor)
 }
 
 // onKVMSync 处理邻居推来的布局同步：把对方登记为指定侧邻居（或按 Clear
@@ -848,11 +835,9 @@ func (a *App) cfgPath() string {
 	return config.DefaultPath()
 }
 
-// addFile 把文件记录投递到当前前端（TUI 或 GUI 事件流）。
-func (a *App) addFile(r ui.FileRecord) {
-	if a.ui != nil {
-		a.ui.AddFile(r)
-	} else if a.sink != nil {
+// addFile 把文件记录投递到桌面窗口事件流。
+func (a *App) addFile(r record.File) {
+	if a.sink != nil {
 		a.sink.AddFile(r)
 	}
 }
@@ -895,7 +880,7 @@ func (a *App) onFileReceived(sender, path string, dup bool, bundle bool) {
 		note = "（已存在相同内容）"
 	}
 	log.Printf("已接收文件 %s（来自 %s）%s，可直接 Ctrl+V", path, sender, note)
-	if a.ui != nil || a.sink != nil {
+	if a.sink != nil {
 		size := int64(0)
 		if fi, err := os.Stat(path); err == nil {
 			size = fi.Size()
@@ -910,7 +895,7 @@ func (a *App) onFileReceived(sender, path string, dup bool, bundle bool) {
 		if unpacked && len(targets) > 1 {
 			recordName += fmt.Sprintf("（%d 项）", len(targets))
 		}
-		a.addFile(ui.FileRecord{
+		a.addFile(record.File{
 			Time: time.Now(), In: true, Peer: sender,
 			Name: recordName, Size: size, Status: status, Detail: path,
 		})
@@ -962,12 +947,12 @@ func (a *App) applyReceivedText(sender, text string, rich clip.Rich) {
 	} else {
 		log.Printf("已接收文本（来自 %s）：%q，可直接 Ctrl+V", sender, preview)
 	}
-	if a.ui != nil || a.sink != nil {
+	if a.sink != nil {
 		// 文本同步也计入传输动态，与文件记录同栏展示；
-		// Detail 携带限长的完整内容供面板做消息预览/一键复制。
+		// Detail 携带限长的完整内容供窗口做消息预览/一键复制。
 		// Size 用剪贴板内容字节数（rich.Size 纯文本时即 len(text)，
 		// 富文本时含 HTML/RTF），与发送端记录口径一致。
-		a.addFile(ui.FileRecord{
+		a.addFile(record.File{
 			Time: time.Now(), In: true, Peer: sender,
 			Name: preview, Size: rich.Size(), Status: "已接收",
 			Detail: textDetail(text), Text: true,
@@ -989,7 +974,7 @@ func textPreview(text string) string {
 }
 
 // textDetail 限制文本消息预览体的长度（按字符截断），避免超大文本
-// 撑爆面板记录与内存；面板展示与一键复制均够用。
+// 撑爆窗口记录与内存；窗口展示与一键复制均够用。
 func textDetail(text string) string {
 	r := []rune(text)
 	if len(r) > 4096 {
@@ -1108,7 +1093,7 @@ func (a *App) sendFilePayload(paths []string) []SendResult {
 	peers := a.sendablePeers()
 	if len(peers) == 0 {
 		if n := len(a.store.Alive(a.ttl())); n > 0 {
-			log.Printf("跳过发送 %s：%d 个在线节点均未配对或鉴权被拒（可在面板中配对）", sendName, n)
+			log.Printf("跳过发送 %s：%d 个在线节点均未配对或鉴权被拒（可在窗口中配对）", sendName, n)
 		}
 		return nil
 	}
@@ -1161,14 +1146,14 @@ func (a *App) sendFilePayload(paths []string) []SendResult {
 		}
 		res = append(res, r)
 		if a.sink != nil {
-			// 发送结束：无论成败都发一次终态进度（失败时面板据此收起进度条）
+			// 发送结束：无论成败都发一次终态进度（失败时窗口据此收起进度条）
 			done := size
 			if !r.OK {
 				done = -1
 			}
 			a.sink.Progress(Progress{Peer: p.Name, Name: sendName, Sent: done, Total: size})
 		}
-		a.addFile(ui.FileRecord{
+		a.addFile(record.File{
 			Time: time.Now(), In: false, Peer: r.Peer,
 			Name: sendName, Size: size,
 			Status: map[bool]string{true: "已发送", false: "失败"}[r.OK],
@@ -1226,8 +1211,8 @@ func (a *App) sendTextPayload(text string) []SendResult {
 		if r.OK {
 			log.Printf("文本（%d 字符）已发送到 %s", len(text), r.Peer)
 		}
-		// 文本同步也计入传输动态，与文件记录同栏展示；Detail 供面板预览
-		a.addFile(ui.FileRecord{
+		// 文本同步也计入传输动态，与文件记录同栏展示；Detail 供窗口预览
+		a.addFile(record.File{
 			Time: time.Now(), In: false, Peer: r.Peer,
 			Name: preview, Size: int64(len(data)),
 			Status: map[bool]string{true: "已发送", false: "失败"}[r.OK],
@@ -1287,9 +1272,9 @@ func (a *App) sendRichPayload(r clip.Rich) []SendResult {
 				log.Printf("文本（%d 字符）已发送到 %s", len(r.Text), sr.Peer)
 			}
 		}
-		// 文本同步也计入传输动态，与文件记录同栏展示；Detail 供面板预览。
+		// 文本同步也计入传输动态，与文件记录同栏展示；Detail 供窗口预览。
 		// Size 用剪贴板内容字节数（与接收端记录口径一致），而非 JSON 上线量。
-		a.addFile(ui.FileRecord{
+		a.addFile(record.File{
 			Time: time.Now(), In: false, Peer: sr.Peer,
 			Name: preview, Size: r.Size(),
 			Status: map[bool]string{true: "已发送", false: "失败"}[sr.OK],
@@ -1326,7 +1311,7 @@ func (a *App) sendToPeer(p discovery.Peer, hdr transport.Header,
 	}
 	e, ok := a.trust.Get(p.ID)
 	if !ok || e.PeerToken == "" {
-		return resp, fmt.Errorf("与节点 %s 未配对，请先在面板中配对", p.Name)
+		return resp, fmt.Errorf("与节点 %s 未配对，请先在窗口中配对", p.Name)
 	}
 	hdr.Token = e.PeerToken
 	hdr.SenderID = a.selfID

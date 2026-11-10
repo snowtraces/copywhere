@@ -8,7 +8,7 @@
 //     自动转储全部 goroutine 堆栈到环形日志——这是排查"程序还活着
 //     但不干活"这类问题最有效的手段；
 //   - 快照：Snapshot() 汇总计数器、心跳年龄、活动会话，供面板
-//     /api/debug 与命令行展示。
+//     窗口诊断视图与命令行展示。
 //
 // 设计约束：本包不得成为任何功能路径的依赖——所有入口函数在
 // 未初始化（零值可用）状态下也必须安全，调用方无需判空。
@@ -249,7 +249,7 @@ func SetSession(key string, v any) { sessionInfo.set(key, v) }
 
 // ---------- 快照 ----------
 
-// Snapshot 是诊断快照（供 /api/debug 序列化输出）。
+// Snapshot 是诊断快照（供窗口与命令行展示）。
 type Snapshot struct {
 	Counters   map[string]int64  `json:"counters"`
 	Heartbeats map[string]string `json:"heartbeats"` // 距上次更新的时长

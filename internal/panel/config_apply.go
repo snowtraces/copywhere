@@ -1,42 +1,21 @@
-package webui
+package panel
 
 import (
+	"errors"
+	"fmt"
 	"log"
 	"strings"
 
 	"copywhere/internal/config"
 )
 
-// ApplyError 是一次配置应用失败的结构化原因。
-// Status 与面板 HTTP 接口的状态码对齐（400=用户输入有误，500=本机副作用失败），
-// 桌面端（Wails）可据此区分提示方式。
-type ApplyError struct {
-	Status  int
-	Message string
-}
-
-func (e *ApplyError) Error() string { return e.Message }
-
-// ApplyResult 汇总一次配置应用触发的副作用。
-// 调用方据此决定是否需要刷新 UI 或提示用户（例如节点名要等下一次广播才生效）。
-type ApplyResult struct {
-	NodeNameChanged  bool
-	KVMEnableChanged bool
-	TouchpadChanged  bool
-	KVMChanged       bool
-}
-
-// ApplyConfig 应用配置修改，是面板 /api/config 与 Wails 桌面窗口共用的唯一入口。
+// ApplyConfig 应用配置修改，是桌面窗口设置页的唯一入口。
 //
 // 顺序：校验并写入内存 → 落盘 → 热更新（KVM 开关 / 触控板手势 / 邻居同步）。
-//
-// 校验失败时返回 *ApplyError{Status: 400}，且与旧实现一致：已通过校验的字段
-// 会留在内存里（不落盘）。保存失败返回 *ApplyError{Status: 500}。
-func ApplyConfig(core Core, cfg *config.Config, cfgPath string, in map[string]any) (ApplyResult, error) {
-	var (
-		res  ApplyResult
-		errs []string
-	)
+// 校验失败时返回可读错误，已通过校验的字段会留在内存里（不落盘）；
+// 该行为与旧网页窗口一致，避免用户在修一个字段时丢掉其它已填内容。
+func ApplyConfig(core Core, cfg *config.Config, cfgPath string, in map[string]any) error {
+	var errs []string
 
 	applyStr := func(key string, dst *string) {
 		if v, ok := in[key]; ok {
@@ -50,10 +29,11 @@ func ApplyConfig(core Core, cfg *config.Config, cfgPath string, in map[string]an
 	}
 	applyStr("receive_dir", &cfg.ReceiveDir)
 
+	nodeNameChanged := false
 	if v, ok := in["node_name"]; ok {
 		if sv, ok := v.(string); ok && strings.TrimSpace(sv) != "" {
 			if cfg.NodeName != sv {
-				res.NodeNameChanged = true
+				nodeNameChanged = true
 			}
 			cfg.NodeName = sv
 		}
@@ -157,18 +137,15 @@ func ApplyConfig(core Core, cfg *config.Config, cfgPath string, in map[string]an
 		}
 	}
 	if len(errs) > 0 {
-		return res, &ApplyError{Status: 400, Message: strings.Join(errs, "；")}
+		return errors.New(strings.Join(errs, "；"))
 	}
 
 	if err := cfg.Save(cfgPath); err != nil {
-		return res, &ApplyError{Status: 500, Message: "保存配置失败: " + err.Error()}
+		return fmt.Errorf("保存配置失败: %w", err)
 	}
 	log.Printf("配置已更新并保存")
 
-	res.KVMEnableChanged = kvmEnableChanged
-	res.TouchpadChanged = touchpadChanged
-	res.KVMChanged = kvmChanged
-	if res.NodeNameChanged {
+	if nodeNameChanged {
 		// 广播名每次公告时取当前值：下一次广播（约 announce_interval 秒）即生效
 		log.Printf("节点名已更新为 %q，将在下一次广播生效", cfg.NodeName)
 	}
@@ -186,5 +163,5 @@ func ApplyConfig(core Core, cfg *config.Config, cfgPath string, in map[string]an
 		// 取消/换人时同步通知旧邻居解除）
 		go core.SyncKVMFrom(oldKVMLeft, oldKVMRight)
 	}
-	return res, nil
+	return nil
 }

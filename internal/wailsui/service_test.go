@@ -14,8 +14,8 @@ import (
 
 	"copywhere/internal/config"
 	"copywhere/internal/discovery"
+	"copywhere/internal/panel"
 	"copywhere/internal/trust"
-	"copywhere/internal/webui"
 )
 
 // fakeCore 是 Service 依赖的最小核心实现，用于在不启动真实服务
@@ -182,7 +182,7 @@ func newTestService(t *testing.T) (*Service, *fakeCore, *config.Config) {
 		t.Fatalf("创建接收目录: %v", err)
 	}
 	core := newFakeCore()
-	return NewService(core, cfg, cfg.Path, webui.NewBus()), core, cfg
+	return NewService(core, cfg, cfg.Path, panel.NewBus()), core, cfg
 }
 
 func TestStateAndPeersView(t *testing.T) {
@@ -423,11 +423,11 @@ func TestStartBridgeForwardsBusEvents(t *testing.T) {
 	s, _, _ := newTestService(t)
 	type got struct {
 		name string
-		ev   webui.Event
+		ev   panel.Event
 	}
 	ch := make(chan got, 8)
 	s.setEmitter(func(name string, data any) {
-		ev, ok := data.(webui.Event)
+		ev, ok := data.(panel.Event)
 		if !ok {
 			return
 		}
@@ -450,7 +450,7 @@ func TestStartBridgeForwardsBusEvents(t *testing.T) {
 			if g.name != "cw:event" {
 				t.Fatalf("事件名 = %q, want cw:event", g.name)
 			}
-			if g.ev.Type == webui.EvLog {
+			if g.ev.Type == panel.EvLog {
 				if line, _ := g.ev.Data.(map[string]string)["line"]; line != "hello world" {
 					t.Fatalf("日志事件内容不符: %+v", g.ev.Data)
 				}

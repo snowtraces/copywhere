@@ -3,12 +3,12 @@
 # 设计: 折纸光翼 (Origami Dart / 投送飞梭)
 #       深空冷光渐变底板 + 陶瓷纯白与电光青折纸光翼，朝向东北 45° 破空飞驰。
 #       极简几何线条，极高辨识度与穿透力，在 16x16 / 24x24 / 32x32 托盘下锐利醒目。
-# 注意: 主体应用图标保持本折纸设计不变（Web favicon 与此同主题）。
+# 注意: 主体应用图标保持本折纸设计不变（窗口 favicon 与此同主题）。
 #       托盘菜单小图标另见 gen_menu_icons.ps1（浅色线框风格）。
 param(
-    [string]$OutIco = "$PSScriptRoot\..\..\internal\webui\icon.ico",
-    [string]$OutSvg = "$PSScriptRoot\..\..\internal\webui\favicon.svg",
-    [string]$OutPng = "$PSScriptRoot\..\..\internal\webui\favicon.png",
+    [string]$OutIco = "$PSScriptRoot\..\..\internal\panel\icon.ico",
+    [string]$OutSvg = "$PSScriptRoot\..\..\internal\wailsui\frontend\favicon.svg",
+    [string]$OutPng = "$PSScriptRoot\..\..\internal\wailsui\frontend\favicon.png",
     [string]$OutPreview = "$PSScriptRoot\preview.png"
 )
 Set-StrictMode -Version Latest
