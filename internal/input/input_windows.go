@@ -90,6 +90,7 @@ var (
 	procGetSystemParametersInfoW      = user32.NewProc("SystemParametersInfoW")
 	procSetCursorPos                  = user32.NewProc("SetCursorPos")
 	procGetCursorPos                  = user32.NewProc("GetCursorPos")
+	procClipCursor                    = user32.NewProc("ClipCursor")
 	procMapVirtualKeyW                = user32.NewProc("MapVirtualKeyW")
 	procSetProcessDPIAware            = user32.NewProc("SetProcessDPIAware")
 	procSetProcessDpiAwarenessContext = user32.NewProc("SetProcessDpiAwarenessContext")
@@ -263,6 +264,20 @@ func CursorPos() (int, int) {
 }
 
 func SetCursorPos(x, y int) { procSetCursorPos.Call(uintptr(x), uintptr(y)) }
+
+// ClipCursorTo 把光标限制在 (x, y) 这一个像素（1×1 矩形）。
+// 光标的屏幕位置被钉死；Raw Input 仍如实上报硬件原始位移，不受影响。
+// 效果：系统精确触控板手势（WM_POINTERWHEEL 等）的投递目标被固定在
+// 该像素所在窗口，只要该窗口不可滚动，A 机就不会滚动（MWB 方案）。
+func ClipCursorTo(x, y int) {
+	r := rect{left: int32(x), top: int32(y), right: int32(x + 1), bottom: int32(y + 1)}
+	procClipCursor.Call(uintptr(unsafe.Pointer(&r)))
+}
+
+// ClipCursorRelease 解除光标限制（传 NULL 给 ClipCursor）。
+func ClipCursorRelease() {
+	procClipCursor.Call(0)
+}
 
 // InjectMoveAbs 在虚拟桌面绝对坐标处放置光标。
 // 用 SetCursorPos 而非 SendInput 绝对坐标：后者需把像素折算成 0..65535，

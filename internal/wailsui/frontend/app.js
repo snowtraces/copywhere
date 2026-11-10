@@ -738,12 +738,14 @@ function fillSettings(s) {
   $("cfgThreshold").value = s.maxAutoCopyMB ?? 0;
   $("cfgAutoPaste").checked = !!s.autoPaste;
   $("cfgTextSync").checked = !!s.textSync;
+  $("cfgShellMenu").checked = !!s.shellMenu;
   $("cfgKvmEnabled").checked = !!s.kvmEnabled;
   $("cfgKvmTouchpad").checked = !!s.kvmTouchpad;
   $("cfgTouchSpeed").value = s.kvmTouchSpeed ?? 100;
   $("cfgSpeedPct").value = s.kvmSpeedPct ?? 100;
   $("cfgMoveMs").value = s.kvmMoveMs ?? 0;
   $("cfgReflowMs").value = s.kvmReflowMs ?? 0;
+  $("cfgEdgeDZ").value = (s.kvmEdgeDZ ?? -1) < 0 ? 48 : s.kvmEdgeDZ;
   $("settingsHint").textContent = "修改后立即保存并生效，无需重启";
 }
 
@@ -814,12 +816,14 @@ async function saveSettings() {
   setIf("max_auto_copy_mb", num("cfgThreshold"), s.maxAutoCopyMB);
   setIf("auto_paste", $("cfgAutoPaste").checked, !!s.autoPaste);
   setIf("text_sync", $("cfgTextSync").checked, !!s.textSync);
+  setIf("shell_menu", $("cfgShellMenu").checked, !!s.shellMenu);
   setIf("kvm_enabled", $("cfgKvmEnabled").checked, !!s.kvmEnabled);
   setIf("kvm_touchpad_gestures", $("cfgKvmTouchpad").checked, !!s.kvmTouchpad);
   setIf("kvm_touchpad_speed", num("cfgTouchSpeed"), s.kvmTouchSpeed);
   setIf("kvm_speed_percent", num("cfgSpeedPct"), s.kvmSpeedPct);
   setIf("kvm_move_interval_ms", num("cfgMoveMs"), s.kvmMoveMs);
   setIf("kvm_reflow_step_ms", num("cfgReflowMs"), s.kvmReflowMs);
+  setIf("kvm_edge_dead_zone", num("cfgEdgeDZ"), (s.kvmEdgeDZ ?? -1) < 0 ? 48 : s.kvmEdgeDZ);
 
   if (!Object.keys(payload).length) {
     toast("没有需要保存的修改");

@@ -6,8 +6,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -21,6 +23,8 @@ import (
 	"copywhere/internal/app"
 	"copywhere/internal/clip"
 	"copywhere/internal/config"
+	"copywhere/internal/ipc"
+	"copywhere/internal/shellmenu"
 )
 
 func usage() {
@@ -28,13 +32,17 @@ func usage() {
 
 用法:
   copywhere init                            生成默认配置
-  copywhere run [-config 路径]              启动无窗口服务（节点发现 + 传输，日志到标准输出）
+  copywhere run [-config 路径]              启动无窗口服务（日志到标准输出，适合服务器 / SSH）
   copywhere wails [-config 路径]            启动服务 + 系统托盘 + Wails v3 桌面窗口
                                             （WebView2；无参数双击 exe 即进入该模式）
   copywhere nodes [-config 路径] [-wait 4s] 扫描并列出局域网在线节点
   copywhere send [-config 路径] [-text 内容] [-wait 4s] 文件/目录...
                                             立即发送到所有在线节点（不受大小阈值限制）
+  copywhere shell [-install|-uninstall|-status]
+                                            管理资源管理器右键菜单「用 copywhere 发送」
+  copywhere shell-send 文件/目录...         右键菜单调用：交给正在运行的实例发送
   copywhere clip-test                       本机剪贴板读写自检
+  copywhere doctor                          环境自检（权限/配置/端口/WebView2/菜单/日志）
   copywhere version                         显示版本号
 
 工作方式:
@@ -46,6 +54,8 @@ func usage() {
     未配对的节点无法传输（共享 token 认证已废弃）
   - run 运行期间，复制（Ctrl+C）小于阈值的文件或文本，会自动推送到所有在线节点
   - 对端收到文件后保存到接收目录并自动写回其剪贴板，直接 Ctrl+V 即可
+  - 在资源管理器里右键文件/文件夹 →「用 copywhere 发送」= 立即发送，
+    不受阈值限制；该项由桌面窗口启动时注册（可在窗口「设置 → 通用」关闭）
 
 配置文件: ~/.copywhere/config.json（接收目录: ~/.copywhere/files）
 `)
@@ -61,6 +71,18 @@ func main() {
 		}
 		return
 	}
+	// shell-send 由资源管理器右键菜单拉起：通常没有可读的控制台，结果用消息框呈现；
+	// 从终端手动调用时仍打印到该终端（便于排查）。必须先隐藏自建控制台，
+	// 开发构建（控制台子系统）直接启动才不会闪一个黑框。
+	if os.Args[1] == "shell-send" {
+		hideOwnConsole()
+		haveConsole := !consoleHidden
+		if consoleHidden {
+			// windowsgui 构建从命令行调用时，挂回调用方终端以便输出
+			haveConsole = attachParentConsole()
+		}
+		os.Exit(cmdShellSend(os.Args[2:], haveConsole))
+	}
 	attachParentConsole()
 	var err error
 	switch os.Args[1] {
@@ -74,8 +96,15 @@ func main() {
 		err = cmdNodes(os.Args[2:])
 	case "send":
 		err = cmdSend(os.Args[2:])
+	case "shell":
+		err = cmdShell(os.Args[2:])
+	case "shell-send":
+		// 正常路径在 main 开头就分流了；保留分支只为让 switch 覆盖全部子命令
+		os.Exit(cmdShellSend(os.Args[2:], true))
 	case "clip-test":
 		err = cmdClipTest(os.Args[2:])
+	case "doctor":
+		err = cmdDoctor(os.Args[2:])
 	case "version", "-v", "--version":
 		fmt.Printf("copywhere %s (%s/%s)\n", app.Version, runtime.GOOS, runtime.GOARCH)
 		return
@@ -104,6 +133,7 @@ func cmdInit(args []string) error {
 	if path == "" {
 		path = config.DefaultPath()
 	}
+	log.Printf("配置: %s（节点 %q）", path, cfg.NodeName)
 	fmt.Println("配置已就绪:")
 	fmt.Printf("  文件       : %s\n", path)
 	fmt.Printf("  节点名     : %s\n", cfg.NodeName)
@@ -159,24 +189,27 @@ func releaseSingleton() {
 var consoleHidden bool
 
 // attachParentConsole 当以命令行子命令（如 init/run/nodes）启动时，尝试附加到调用方的终端控制台。
-func attachParentConsole() {
+// 返回是否成功附加（调用方据此决定输出到终端还是弹消息框）。
+func attachParentConsole() bool {
 	k32 := windows.NewLazySystemDLL("kernel32.dll")
 	attachConsole := k32.NewProc("AttachConsole")
 	r, _, _ := attachConsole.Call(^uintptr(0)) // ATTACH_PARENT_PROCESS = (DWORD)-1
-	if r != 0 {
-		hOut, _ := windows.GetStdHandle(windows.STD_OUTPUT_HANDLE)
-		hErr, _ := windows.GetStdHandle(windows.STD_ERROR_HANDLE)
-		hIn, _ := windows.GetStdHandle(windows.STD_INPUT_HANDLE)
-		if hOut != 0 && hOut != windows.InvalidHandle {
-			os.Stdout = os.NewFile(uintptr(hOut), "/dev/stdout")
-		}
-		if hErr != 0 && hErr != windows.InvalidHandle {
-			os.Stderr = os.NewFile(uintptr(hErr), "/dev/stderr")
-		}
-		if hIn != 0 && hIn != windows.InvalidHandle {
-			os.Stdin = os.NewFile(uintptr(hIn), "/dev/stdin")
-		}
+	if r == 0 {
+		return false
 	}
+	hOut, _ := windows.GetStdHandle(windows.STD_OUTPUT_HANDLE)
+	hErr, _ := windows.GetStdHandle(windows.STD_ERROR_HANDLE)
+	hIn, _ := windows.GetStdHandle(windows.STD_INPUT_HANDLE)
+	if hOut != 0 && hOut != windows.InvalidHandle {
+		os.Stdout = os.NewFile(uintptr(hOut), "/dev/stdout")
+	}
+	if hErr != 0 && hErr != windows.InvalidHandle {
+		os.Stderr = os.NewFile(uintptr(hErr), "/dev/stderr")
+	}
+	if hIn != 0 && hIn != windows.InvalidHandle {
+		os.Stdin = os.NewFile(uintptr(hIn), "/dev/stdin")
+	}
+	return true
 }
 
 // hideOwnConsole 隐藏双击启动时系统为本进程自动创建的控制台窗口（或在 windowsgui 模式下标记无控制台）。
@@ -208,15 +241,7 @@ func hideOwnConsole() {
 func uiFatal(err error) {
 	log.Printf("错误: %v", err)
 	if consoleHidden {
-		text, terr := windows.UTF16PtrFromString("copywhere 启动失败：\n\n" + err.Error())
-		title, _ := windows.UTF16PtrFromString("copywhere")
-		if terr == nil {
-			user32 := windows.NewLazySystemDLL("user32.dll")
-			// MB_ICONERROR | MB_SETFOREGROUND
-			user32.NewProc("MessageBoxW").Call(0,
-				uintptr(unsafe.Pointer(text)), uintptr(unsafe.Pointer(title)),
-				0x10|0x10000)
-		}
+		messageBox("copywhere", "copywhere 启动失败：\n\n"+err.Error())
 	}
 	os.Exit(1)
 }
@@ -271,6 +296,122 @@ func cmdSend(args []string) error {
 	}
 	log.Printf("发现 %d 个在线节点，开始发送", len(peers))
 	return app.SendToPeers(cfg, peers, paths, *text)
+}
+
+// cmdShell 管理资源管理器右键菜单（默认由桌面窗口启动时自动注册）。
+func cmdShell(args []string) error {
+	fs := flag.NewFlagSet("shell", flag.ExitOnError)
+	install := fs.Bool("install", false, "注册资源管理器右键菜单")
+	uninstall := fs.Bool("uninstall", false, "移除资源管理器右键菜单")
+	// -status 与无参数同义：只为让它出现在 help 里，取值无需区分
+	fs.Bool("status", false, "查看当前注册状态（无参数时的默认行为）")
+	fs.Parse(args)
+
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("定位当前程序路径失败: %w", err)
+	}
+	switch {
+	case *install && *uninstall:
+		return fmt.Errorf("-install 与 -uninstall 只能选一个")
+	case *install:
+		if err := shellmenu.Install(exe); err != nil {
+			return err
+		}
+		fmt.Printf("已注册右键菜单「%s」→ %s\n", shellmenu.MenuText, exe)
+		fmt.Println("在资源管理器中选中文件/文件夹右键即可看到（已打开的窗口可能需重开）")
+		return nil
+	case *uninstall:
+		if err := shellmenu.Uninstall(); err != nil {
+			return err
+		}
+		fmt.Printf("已移除右键菜单「%s」\n", shellmenu.MenuText)
+		return nil
+	}
+	// 到这里只剩"-status 或未指定动作"：统一查询并展示当前注册状态
+	installed := shellmenu.Installed("")
+	if !installed {
+		fmt.Printf("右键菜单「%s」：未注册（桌面窗口启动时会自动注册）\n", shellmenu.MenuText)
+		return nil
+	}
+	fmt.Printf("右键菜单「%s」：已注册\n", shellmenu.MenuText)
+	if !shellmenu.Installed(exe) {
+		fmt.Println("注意：菜单指向的不是当前 exe（程序被移动或升级过），运行 copywhere shell -install 可纠正")
+	}
+	fmt.Printf("当前命令行: %s\n", shellmenu.Command(exe))
+	return nil
+}
+
+// cmdShellSend 是资源管理器右键菜单的落地动作：把选中路径交给正在运行的实例发送。
+// 返回进程退出码；失败原因走消息框（右键拉起没有控制台）或终端（从命令行手动调用）。
+func cmdShellSend(args []string, haveConsole bool) int {
+	report := func(title, text string) {
+		if haveConsole {
+			fmt.Fprintf(os.Stderr, "%s: %s\n", title, text)
+			return
+		}
+		messageBox(title, text)
+	}
+	fs := flag.NewFlagSet("shell-send", flag.ContinueOnError)
+	_ = fs.String("config", "", "配置文件路径（兼容旧菜单命令；IPC 为登录会话级）")
+	fs.SetOutput(io.Discard) // 无控制台可写，解析错误也不该往 stderr 刷
+	if err := fs.Parse(args); err != nil && !errors.Is(err, flag.ErrHelp) {
+		report("copywhere 右键发送", "参数无法解析："+err.Error())
+		return 2
+	}
+	paths := fs.Args()
+	if len(paths) == 0 {
+		report("copywhere 右键发送",
+			"没有收到要发送的文件。\n\n请用资源管理器右键菜单的「"+shellmenu.MenuText+"」，或先选中文件再右键。")
+		return 2
+	}
+	if err := ipc.SendPaths(paths); err != nil {
+		report("copywhere 右键发送失败", shellSendHint(err))
+		return 1
+	}
+	return 0
+}
+
+// shellSendHint 把 helper 的失败原因补成用户能照做的提示。
+func shellSendHint(err error) string {
+	if !errors.Is(err, ipc.ErrNotRunning) {
+		return err.Error()
+	}
+	if singletonHeld() {
+		// 有实例占着单实例锁、但管道连不上：可能是终端 run 模式（不提供
+		// 桌面窗口与 IPC 服务），或实例仍在启动中。
+		return "已有一个 copywhere 实例在运行，但它没有提供桌面窗口 IPC。\n\n" +
+			"右键发送需要桌面窗口实例：请退出该实例，改为双击 copywhere.exe 启动。\n" +
+			"若刚启动，请稍等一秒再试。"
+	}
+	return "copywhere 没有在运行，无法发送文件。\n\n" +
+		"请先双击 copywhere.exe（托盘常驻）后再右键发送。\n\n（" + err.Error() + "）"
+}
+
+// singletonHeld 报告本机是否已有 copywhere 实例（桌面窗口或 run）在运行。
+func singletonHeld() bool {
+	name, err := windows.UTF16PtrFromString(`Local\copywhere-singleton`)
+	if err != nil {
+		return false
+	}
+	h, err := windows.CreateMutex(nil, false, name)
+	if h != 0 {
+		defer windows.CloseHandle(h)
+	}
+	return err != nil
+}
+
+// messageBox 弹出系统消息框：桌面窗口 / 右键菜单这类没有终端的入口用它呈现错误。
+func messageBox(title, text string) {
+	t, terr := windows.UTF16PtrFromString(text)
+	cap, _ := windows.UTF16PtrFromString(title)
+	if terr != nil {
+		return
+	}
+	user32 := windows.NewLazySystemDLL("user32.dll")
+	// MB_ICONERROR | MB_SETFOREGROUND
+	user32.NewProc("MessageBoxW").Call(0,
+		uintptr(unsafe.Pointer(t)), uintptr(unsafe.Pointer(cap)), 0x10|0x10000)
 }
 
 func cmdClipTest(args []string) error {

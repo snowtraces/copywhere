@@ -1,6 +1,6 @@
 # 版本发布流程
 
-本文描述 copywhere 的标准发版步骤。前置条件：Go 1.26.4+、git 推送权限、
+本文描述 copywhere 的标准发版步骤。前置条件：Go 1.26.4+、goversioninfo、git 推送权限、
 gh CLI（仅创建 GitHub Release 需要；也可用 `GH_TOKEN` 环境变量替代登录态）。
 
 ## 1. 整理版本内容
@@ -23,6 +23,16 @@ gofmt -l .                     # 格式检查，输出应为空
 
 ## 3. 构建产物
 
+先把 `cmd/copywhere/versioninfo.json` 中的 FileVersion 和 ProductVersion 同步到发布版本，
+再从仓库根目录重新生成 Windows 版本资源：
+
+```powershell
+goversioninfo -o cmd/copywhere/rsrc_windows_amd64.syso cmd/copywhere/versioninfo.json
+```
+
+这一步确保 exe 属性页中的文件版本与产品版本匹配发布版本；只设置 Go 的 `-ldflags` 版本
+不会更新 Windows 资源属性。
+
 ```powershell
 $v = "vX.Y.Z"   # 与 CHANGELOG / git tag 保持一致
 go build -trimpath -ldflags "-s -w -H windowsgui -X copywhere/internal/app.Version=$v" `
@@ -32,6 +42,8 @@ go build -trimpath -ldflags "-s -w -H windowsgui -X copywhere/internal/app.Versi
 
 `-H windowsgui` 使双击启动时不弹控制台黑框（桌面窗口依赖）；exe 图标与版本
 信息由 `cmd/copywhere/rsrc_windows_amd64.syso` 自动嵌入，无需额外步骤。
+
+产物运行需要系统 WebView2 运行时（Win10 1803+ / Win11 一般自带）；发布说明中应保留该前提。
 
 产物命名规范：`copywhere-$v-windows-amd64.exe`（未来如有跨平台再加后缀）。
 产物只进 GitHub Release 附件，**不要提交进 git 仓库**。

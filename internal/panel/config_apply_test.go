@@ -66,6 +66,8 @@ func (f *fakeCore) SetTouchpadSpeed(pct int) {
 }
 func (f *fakeCore) WatchMode() string { return "listener" }
 
+func (f *fakeCore) SetShellMenu(bool) error { return nil }
+
 func (f *fakeCore) syncSnapshot() (string, string, int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

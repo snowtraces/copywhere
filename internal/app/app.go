@@ -129,6 +129,8 @@ type App struct {
 	pendingMu sync.Mutex
 	pending   []pendingEntry
 
+	shellBatcher *pathBatcher // 右键菜单发送的合并器（见 shellsend.go）
+
 	rejectedMu sync.Mutex
 	rejected   map[string]bool // 因 token 不一致被暂停发送的节点（按指纹）
 
@@ -144,9 +146,16 @@ type pairRequest struct {
 }
 
 func newApp(cfg *config.Config) (*App, error) {
-	store := discovery.NewStore(nodeID())
+	return newAppWithID(cfg, nodeID())
+}
+
+// newAppWithID 以指定节点指纹构造 App；生产路径恒用 newApp（指纹取 MachineGuid），
+// 传入自定义指纹只为让同进程内的多节点测试能区分彼此。
+func newAppWithID(cfg *config.Config, id string) (*App, error) {
+	store := discovery.NewStore(id)
 	store.SetLocalSubnets(localSubnets())
-	a := &App{cfg: cfg, store: store, selfID: nodeID(), rejected: map[string]bool{}}
+	a := &App{cfg: cfg, store: store, selfID: id, rejected: map[string]bool{}}
+	a.shellBatcher = newPathBatcher(shellBatchWindow, shellBatchMaxWait, a.shellSendFiles)
 	store.SetRestartCallback(a.onPeerRestart)
 	// 信任库与配置同目录（peers.json）；读取失败不阻断启动，仅退化为空库
 	cfgPath := cfg.Path
@@ -244,18 +253,33 @@ func shortHash(s string) string {
 // 避免“传输/发现静默失效、只剩剪贴板监控”的半残状态。
 func precheckPorts(cfg *config.Config) error {
 	if ln, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", cfg.TransferPort)); err != nil {
-		return fmt.Errorf("传输端口 %d/tcp 被占用: %w（是否已有另一个 copywhere 实例在运行？）",
-			cfg.TransferPort, err)
+		return portListenError("传输", "tcp", cfg.TransferPort, err)
 	} else {
 		ln.Close()
 	}
 	if c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: cfg.DiscoveryPort}); err != nil {
-		return fmt.Errorf("发现端口 %d/udp 被占用: %w（是否已有另一个 copywhere 实例在运行？）",
-			cfg.DiscoveryPort, err)
+		return portListenError("发现", "udp", cfg.DiscoveryPort, err)
 	} else {
 		c.Close()
 	}
 	return nil
+}
+
+// portListenError 把监听失败翻译成用户能照着排查的报错。
+//
+// 只有"地址已被占用"才归因到"已有实例在运行"（并点名占用者）；其余原因原样
+// 带出系统错误——把它们都说成"另一个 copywhere 在跑"会让用户白找一圈实例。
+func portListenError(role, network string, port int, err error) error {
+	if !isAddrInUse(err) {
+		return fmt.Errorf("%s端口 %d/%s 监听失败: %w", role, port, network, err)
+	}
+	return &PortInUseError{
+		Role:    role,
+		Network: network,
+		Port:    port,
+		Owner:   portOwner(port, network == "udp"),
+		Err:     err,
+	}
 }
 
 // Run 启动完整服务：发现 + 传输 + 剪贴板监控，阻塞直到退出。
@@ -326,7 +350,7 @@ func Start(ctx context.Context, cfg *config.Config, opts Options) (*App, error) 
 	}()
 	go a.flushLoop(runCtx)
 	// 运行时看门狗（借鉴 MWB 的诊断思路）：关键循环周期性心跳，
-	// 超期未更新即转储全部 goroutine 堆栈到诊断环（窗口可通过 diag.Snap 读取）。
+	// 超期未更新即转储全部 goroutine 堆栈到诊断环，窗口可通过 diag.Snap 读取。
 	// 预算给得宽：monitor/flush 触发的是多节点同步 IO，正常也可能耗时数分钟。
 	diag.StartWatchdog(runCtx, 10*time.Second, func(name string) time.Duration {
 		switch name {
@@ -405,7 +429,7 @@ func (a *App) Wait() error {
 	return nil
 }
 
-// ---------- 桌面窗口接口 ----------
+// ---------- GUI 窗口接口 ----------
 
 // Peers 返回当前在线节点快照。
 func (a *App) Peers() []discovery.Peer { return a.store.Alive(a.ttl()) }
@@ -498,6 +522,7 @@ func (a *App) startKVM() {
 			MoveInterval: cfg.KVMMoveInterval(),
 			ReflowStep:   cfg.KVMReflowStep(),
 			SpeedPercent: cfg.KVMSpeedFactor(),
+			EdgeDeadZone: cfg.KVMEdgeDeadZone(),
 			TokenForPeer: func(id string) (string, bool) {
 				e, ok := a.trust.Get(id)
 				return e.PeerToken, ok && e.PeerToken != ""
@@ -511,7 +536,12 @@ func (a *App) startKVM() {
 	ctx, cancel := context.WithCancel(a.parentOrBackground())
 	if err := svc.Start(ctx); err != nil {
 		cancel()
-		log.Printf("KVM 服务启动失败: %v", err)
+		// 端口被占是"鼠标移不进来"最常见的原因，顺手把占用者写进日志。
+		if owner := portOwner(cfg.KVMPort, false); owner != "" {
+			log.Printf("KVM 服务启动失败: %v（端口 %d 被 %s 占用，别的机器鼠标将无法移入）", err, cfg.KVMPort, owner)
+		} else {
+			log.Printf("KVM 服务启动失败: %v（别的机器鼠标将无法移入）", err)
+		}
 		return
 	}
 	a.kvmSvc = svc
@@ -727,6 +757,7 @@ func (a *App) SyncKVMFrom(oldLeft, oldRight string) {
 	if svc := a.currentKVM(); svc != nil {
 		svc.UpdateNeighbors(a.cfg.KVMLeft, a.cfg.KVMRight)
 		svc.UpdateTunables(a.cfg.KVMMoveInterval(), a.cfg.KVMReflowStep(), a.cfg.KVMSpeedFactor())
+		svc.SetEdgeDeadZone(a.cfg.KVMEdgeDeadZone())
 	}
 	// 旧左邻不再是我的左邻 → 我不再是它的右邻；右邻同理
 	if oldLeft != "" && oldLeft != a.cfg.KVMLeft {

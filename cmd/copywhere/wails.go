@@ -2,32 +2,32 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"time"
 
 	"copywhere/internal/app"
 	"copywhere/internal/config"
+	"copywhere/internal/ipc"
 	"copywhere/internal/panel"
 	"copywhere/internal/wailsui"
 )
 
 // cmdWails 是 copywhere 唯一的图形入口：同一进程内运行完整服务（发现/传输/
-// 剪贴板/KVM）+ Wails v3 桌面窗口（WebView2）+ 系统托盘。
+// 剪贴板/KVM）+ Wails v3 桌面窗口（WebView2）+ 系统托盘 + 本地 IPC。
 //
-// 与 run（终端）共用命名互斥锁，避免两个实例抢剪贴板监听与端口。
+// 与 run（无窗口服务）共用命名互斥锁，避免两个实例抢剪贴板监听与端口。
 func cmdWails(args []string) (err error) {
 	fs := flag.NewFlagSet("wails", flag.ExitOnError)
 	configPath := fs.String("config", "", "配置文件路径")
 	smoke := fs.Duration("smoke", 0, "冒烟测试：窗口启动后等待该时长自动退出（如 5s）")
 	fs.Parse(args)
 
-	logWriter, closeLog := setupWailsLogging()
+	closeLog := setupGUILogging()
 	defer closeLog()
 
 	defer func() {
@@ -36,10 +36,20 @@ func cmdWails(args []string) (err error) {
 		}
 	}()
 
+	// 低完整性进程写不了用户目录、托盘图标会被系统丢弃、输入注入也会被拒：
+	// 此时"看着在跑、其实全废"，明确拒绝启动并说清原因。
+	if app.LowIntegrity() {
+		return fmt.Errorf("%s", app.SandboxedHint())
+	}
+
 	if *smoke == 0 {
 		if !acquireSingleton() {
-			// 已有实例：把它的窗口找出来置前；找不到就明确报错，不再有
-			// 浏览器窗口作为回退（旧 gui 方案已移除）。
+			// 已有实例：先通过命名管道请它把窗口拿到前台；管道不可用
+			// （例如终端 run 模式）再退回窗口枚举。
+			if aerr := ipc.Activate(); aerr == nil {
+				log.Printf("已有 copywhere 实例在运行，已通过 IPC 唤回它的桌面窗口")
+				return nil
+			}
 			if wailsui.ActivateExistingWindow() {
 				log.Printf("已有 copywhere 实例在运行，已激活它的桌面窗口")
 				return nil
@@ -65,10 +75,47 @@ func cmdWails(args []string) (err error) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
+	var logFile io.Writer
+	if guiLogFile != nil {
+		logFile = guiLogFile
+	}
+
 	bus := panel.NewBus()
-	a, err := app.Start(ctx, cfg, app.Options{GUI: true, Sink: bus, LogFile: logWriter})
+	a, err := app.Start(ctx, cfg, app.Options{GUI: true, Sink: bus, LogFile: logFile})
 	if err != nil {
 		return err
+	}
+
+	// 本机 IPC：右键菜单 shell-send 与二次启动都靠它，不再需要 HTTP 面板。
+	ipcSrv, ierr := ipc.Serve(func(cmd ipc.Command) error {
+		switch cmd.Cmd {
+		case ipc.CmdPing:
+			return nil
+		case ipc.CmdActivate:
+			if wailsui.ActivateExistingWindow() {
+				return nil
+			}
+			return errors.New("窗口尚未就绪，请稍后再试")
+		case ipc.CmdSend:
+			return a.ShellSendChecked(cmd.Paths)
+		default:
+			return fmt.Errorf("未知命令: %q", cmd.Cmd)
+		}
+	})
+	if ierr != nil {
+		log.Printf("本机 IPC 启动失败（右键发送/二次唤起将不可用）: %v", ierr)
+	} else {
+		defer ipcSrv.Close()
+	}
+
+	if *smoke == 0 {
+		// 资源管理器右键菜单：启动时确保注册项指向当前 exe（程序移动/升级后自动纠正）。
+		// 注册表写入可能被安全软件拦截甚至长时间挂起，异步执行避免拖住托盘。
+		go func() {
+			if err := a.SetShellMenu(cfg.ShellMenuOn()); err != nil {
+				log.Printf("同步资源管理器右键菜单失败: %v", err)
+			}
+		}()
 	}
 
 	log.Printf("启动 Wails 桌面窗口（WebView2）")
@@ -78,7 +125,7 @@ func cmdWails(args []string) (err error) {
 		CfgPath:   path,
 		Bus:       bus,
 		Smoke:     *smoke,
-		LogWriter: logWriter,
+		LogWriter: logFile,
 	})
 
 	// 窗口退出后停止核心服务，并等它清理完（剪贴板监听、端口、KVM 注入线程）。
@@ -89,39 +136,14 @@ func cmdWails(args []string) (err error) {
 	if *smoke > 0 {
 		// 冒烟模式下 log 已被核心服务重定向到事件总线，这里把总线内容原样
 		// 落到控制台/日志文件，方便 CI 判断"前端到底加载成功没有"。
-		for _, line := range bus.Logs() {
-			fmt.Fprintf(logWriter, "[smoke] %s\n", line)
+		out := io.Writer(os.Stderr)
+		if guiLogFile != nil {
+			out = guiLogFile
 		}
-		fmt.Fprintf(logWriter, "[smoke] wails 退出: err=%v\n", werr)
+		for _, line := range bus.Logs() {
+			fmt.Fprintf(out, "[smoke] %s\n", line)
+		}
+		fmt.Fprintf(out, "[smoke] wails 退出: err=%v\n", werr)
 	}
 	return werr
-}
-
-// setupWailsLogging 把日志同时写进 ~/.copywhere/wails.log 与终端（有终端时）。
-// windowsgui 构建没有控制台，日志文件是"双击没反应"时唯一能查的痕迹。
-// 超过 4MB 时滚动一份 wails.log.1，避免长期运行无限增长。
-func setupWailsLogging() (io.Writer, func()) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return os.Stderr, func() {}
-	}
-	dir := filepath.Join(home, ".copywhere")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return os.Stderr, func() {}
-	}
-	logPath := filepath.Join(dir, "wails.log")
-	if fi, err := os.Stat(logPath); err == nil && fi.Size() > 4<<20 {
-		_ = os.Remove(logPath + ".1")
-		_ = os.Rename(logPath, logPath+".1")
-	}
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return os.Stderr, func() {}
-	}
-	// 文件在前、终端在后：MultiWriter 在终端句柄不可用时会返回错误，
-	// 但文件已经写入，不会丢日志。
-	w := io.MultiWriter(f, os.Stderr)
-	log.SetOutput(w)
-	log.Printf("---- wails 模式启动 %s ----", time.Now().Format("2006-01-02 15:04:05"))
-	return w, func() { f.Close() }
 }

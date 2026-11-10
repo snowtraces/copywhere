@@ -48,6 +48,8 @@ type State struct {
 	KVMTouchpad bool   `json:"kvmTouchpad"`
 	KVMLeft     string `json:"kvmLeft"`
 	KVMRight    string `json:"kvmRight"`
+	KVMEdgeDZ   int    `json:"kvmEdgeDZ"`
+	ShellMenu   bool   `json:"shellMenu"`
 	WatchMode   string `json:"watchMode"`
 	ConfigPath  string `json:"configPath"`
 	StartedAt   string `json:"startedAt"`
@@ -93,6 +95,8 @@ type Settings struct {
 	KVMSpeedPct   int    `json:"kvmSpeedPct"`
 	KVMLeft       string `json:"kvmLeft"`
 	KVMRight      string `json:"kvmRight"`
+	KVMEdgeDZ     int    `json:"kvmEdgeDZ"`
+	ShellMenu     bool   `json:"shellMenu"`
 	DiscoveryPort int    `json:"discoveryPort"`
 	TransferPort  int    `json:"transferPort"`
 	KVMPort       int    `json:"kvmPort"`
@@ -237,6 +241,8 @@ func (s *Service) State() State {
 		KVMTouchpad: s.cfg.KVMTouchpadOn(),
 		KVMLeft:     s.cfg.KVMLeft,
 		KVMRight:    s.cfg.KVMRight,
+		KVMEdgeDZ:   s.cfg.KVMEdgeDeadZone(),
+		ShellMenu:   s.cfg.ShellMenuOn(),
 		WatchMode:   s.core.WatchMode(),
 		ConfigPath:  s.cfgPath,
 		StartedAt:   s.started.Format(time.RFC3339),
@@ -304,11 +310,14 @@ func (s *Service) Settings() Settings {
 		KVMSpeedPct:   s.cfg.KVMSpeedPct,
 		KVMLeft:       s.cfg.KVMLeft,
 		KVMRight:      s.cfg.KVMRight,
+		KVMEdgeDZ:     s.cfg.KVMEdgeDeadZone(),
+		ShellMenu:     s.cfg.ShellMenuOn(),
 		DiscoveryPort: s.cfg.DiscoveryPort,
 		TransferPort:  s.cfg.TransferPort,
-		KVMPort:       s.cfg.KVMPort, AnnounceSec: s.cfg.AnnounceSec,
-		PeerTTLSec: s.cfg.PeerTTLSec,
-		ConfigPath: s.cfgPath,
+		KVMPort:       s.cfg.KVMPort,
+		AnnounceSec:   s.cfg.AnnounceSec,
+		PeerTTLSec:    s.cfg.PeerTTLSec,
+		ConfigPath:    s.cfgPath,
 	}
 }
 

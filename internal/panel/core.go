@@ -37,6 +37,8 @@ type Core interface {
 	SetTouchpadGestures(on bool)
 	// 触控板滚动输出倍率热更新（实验性，100=基准），无需重启
 	SetTouchpadSpeed(pct int)
+	// SetShellMenu 注册/注销资源管理器右键菜单（「用 copywhere 发送」）
+	SetShellMenu(on bool) error
 	// WatchMode 返回剪贴板监听方式："listener" | "viewer" | "none"（诊断展示）
 	WatchMode() string
 }

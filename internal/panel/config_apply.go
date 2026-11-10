@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"copywhere/internal/config"
 )
@@ -57,6 +58,19 @@ func ApplyConfig(core Core, cfg *config.Config, cfgPath string, in map[string]an
 			cfg.TextSync = bv
 		} else {
 			errs = append(errs, "text_sync 需要布尔值")
+		}
+	}
+	// 资源管理器右键菜单：开关即注册/注销（HKCU 项），失败则整体不落盘
+	oldShellMenu := cfg.ShellMenu
+	shellMenuChanged := false
+	if v, ok := in["shell_menu"]; ok {
+		if bv, ok := v.(bool); ok {
+			if cfg.ShellMenuOn() != bv {
+				shellMenuChanged = true
+			}
+			cfg.ShellMenu = &bv
+		} else {
+			errs = append(errs, "shell_menu 需要布尔值")
 		}
 	}
 	// KVM 布局：允许空串（清除某一侧）；邻居名本机即时热更新，并推送到对端。
@@ -136,10 +150,31 @@ func ApplyConfig(core Core, cfg *config.Config, cfgPath string, in map[string]an
 			errs = append(errs, "kvm_speed_percent 需要 0~500 的整数（100=基准 1.0x）")
 		}
 	}
+	// 边缘死区（逻辑像素）：屏幕上下两端的系统 UI 热区（关闭按钮/显示桌面/
+	// 任务栏）不触发跨屏或切回。0 = 关闭死区。热更新到 kvm 层，无需重启。
+	if v, ok := in["kvm_edge_dead_zone"]; ok {
+		if fv, ok := v.(float64); ok && fv >= 0 && fv <= 400 {
+			dz := int(fv)
+			cfg.KVMEdgeDZ = &dz
+			kvmChanged = true
+		} else {
+			errs = append(errs, "kvm_edge_dead_zone 需要 0~400 的整数（0=关闭死区）")
+		}
+	}
 	if len(errs) > 0 {
 		return errors.New(strings.Join(errs, "；"))
 	}
 
+	// 注册表操作可能失败（权限/杀软拦截）：先做，失败则回滚开关且不落盘，
+	// 避免"配置说开着、菜单其实没注册"的静默不一致。注册表写入还可能被
+	// 安全软件长时间挂起，这里加超时，免得整个保存请求跟着卡死。
+	if shellMenuChanged {
+		on := cfg.ShellMenuOn()
+		if err := runWithTimeout(func() error { return core.SetShellMenu(on) }, shellMenuTimeout); err != nil {
+			cfg.ShellMenu = oldShellMenu
+			return fmt.Errorf("更新资源管理器右键菜单失败: %w", err)
+		}
+	}
 	if err := cfg.Save(cfgPath); err != nil {
 		return fmt.Errorf("保存配置失败: %w", err)
 	}
@@ -164,4 +199,21 @@ func ApplyConfig(core Core, cfg *config.Config, cfgPath string, in map[string]an
 		go core.SyncKVMFrom(oldKVMLeft, oldKVMRight)
 	}
 	return nil
+}
+
+// shellMenuTimeout 是注册表菜单操作的上限：安全软件拦截时写入可能长时间挂起，
+// 设置页的"保存"不能跟着一起卡死。
+const shellMenuTimeout = 5 * time.Second
+
+// runWithTimeout 在 goroutine 里执行 fn 并限制等待时间。
+// 超时后 fn 仍可能在后台跑完（无法强杀系统调用），这里只保证调用方不被拖住。
+func runWithTimeout(fn func() error, d time.Duration) error {
+	done := make(chan error, 1)
+	go func() { done <- fn() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(d):
+		return errors.New("注册表操作超时（可能被安全软件拦截，请把 copywhere 加入信任列表）")
+	}
 }

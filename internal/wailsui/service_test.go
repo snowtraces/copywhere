@@ -146,6 +146,8 @@ func (f *fakeCore) SetTouchpadSpeed(pct int) {
 	f.mu.Unlock()
 }
 func (f *fakeCore) WatchMode() string { return "listener" }
+
+func (f *fakeCore) SetShellMenu(bool) error { return nil }
 func (f *fakeCore) CopyText(text string) error {
 	f.mu.Lock()
 	f.copied = append(f.copied, text)

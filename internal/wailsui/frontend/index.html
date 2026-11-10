@@ -224,6 +224,7 @@
         <div class="field-row">
           <label class="switch"><input type="checkbox" id="cfgAutoPaste"><span class="knob"></span><span>收到文件自动写回剪贴板</span></label>
           <label class="switch"><input type="checkbox" id="cfgTextSync"><span class="knob"></span><span>同步剪贴板文本</span></label>
+          <label class="switch"><input type="checkbox" id="cfgShellMenu"><span class="knob"></span><span>资源管理器右键菜单「用 copywhere 发送」</span></label>
         </div>
       </section>
 
@@ -251,6 +252,11 @@
             <span class="field-label">被控重排节拍（ms）</span>
             <input type="number" id="cfgReflowMs" min="-1" step="1">
             <span class="field-hint">0 = 默认（4ms），-1 = 关闭</span>
+          </label>
+          <label class="field">
+            <span class="field-label">边缘死区（逻辑像素）</span>
+            <input type="number" id="cfgEdgeDZ" min="0" max="400" step="1">
+            <span class="field-hint">屏幕上下两端的系统 UI 热区；缺省 48，0 = 关闭</span>
           </label>
         </div>
       </section>

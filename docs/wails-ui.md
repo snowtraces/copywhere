@@ -1,6 +1,7 @@
 # Wails v3 桌面窗口
 
-> 基线：`78a5626`（v0.4.0）。本分支（`feat/wails-ui`）用 Wails v3 桌面窗口替代了
+> 基线：`78a5626`（v0.4.0），并已合并 `main` 的 v0.5.0（右键发送、KVM 边缘死区、
+> doctor、低完整性保护等）。本分支（`feat/wails-ui`）用 Wails v3 桌面窗口替代了
 > 历史上的浏览器面板（`gui` + `internal/webui` + `fyne.io/systray`）和终端三页
 > TUI（`internal/ui`），**只保留一种 UI**：双击 exe 打开的桌面窗口。
 > 状态：可运行、可构建、有单测；尚未并入发布流水线。
@@ -33,13 +34,15 @@ internal/wailsui/
   app.go               # Wails 应用装配：窗口、托盘、事件桥、拖放、尺寸记忆、退出
   service.go           # 绑定给前端的 Service（视图 + 操作），Core 接口便于测试
   util.go              # 图片预览白名单 / base64
-  activate_windows.go  # 二次启动：枚举窗口 + 校验同 exe 名后唤回
+  activate_windows.go  # 二次启动兜底：枚举窗口 + 校验同 exe 名后唤回
   frontend/            # index.html + app.css + app.js（go:embed）
 internal/panel/
   bus.go               # 事件总线（日志/记录/进度/配对请求）
   config_apply.go      # ApplyConfig：设置页唯一入口（校验 + 落盘 + 热更新）
   core.go              # 配置应用依赖的核心能力接口
   icons.go / reveal.go # 应用图标、资源管理器定位
+internal/ipc/            # 命名管道：右键发送 / 二次唤起（替代 HTTP 面板地址）
+internal/shellmenu/      # 资源管理器右键菜单注册（HKCU 静态动词）
 internal/record/
   record.go            # 收发记录视图（核心与桌面窗口共用）
 ```
@@ -102,9 +105,8 @@ internal/record/
 
 要求：Go 1.26.4+（与 go.mod 一致）、Windows 10 1803+ / Windows 11、系统 WebView2
 运行时。Wails 依赖固定为 `github.com/wailsapp/wails/v3 v3.1.0`，Windows 构建不需要 CGO。
-发布构建实测 13,173,760 B（v0.4.0 基线 9,192,448 B，+3.8 MiB：Wails 运行时与
-WebView2 宿主代码，不含系统 WebView2 本身；移除旧面板/TUI 后比初版 Wails 分支
-又小了约 1.9 MB）。
+发布构建实测 13,272,576 B（v0.4.0 基线 9,192,448 B，+3.9 MiB：Wails 运行时、
+WebView2 宿主与 v0.5.0 新增的 IPC/右键菜单代码，不含系统 WebView2 本身）。
 
 ```powershell
 # 开发构建（控制台可见，便于看日志）
@@ -128,7 +130,7 @@ copywhere.exe wails -config .\smoke-config.json -smoke 8s
 （`http://127.0.0.1:9222/json/list`）截图或排查前端；`CW_WAILS_DEVTOOLS=1` 启动即打开
 开发者工具。
 
-运行时日志写入 `~/.copywhere/wails.log`（超过 4MB 滚动为 `.1`）：服务启动后
+运行时日志写入 `~/.copywhere/gui.log`（超过 4MB 清空重来）：服务启动后
 `app.Options.LogFile` 让日志同时进入事件总线与磁盘，窗口崩溃/闪退也有据可查。
 
 ## 8. 验证记录（本机实测）
@@ -144,6 +146,9 @@ copywhere.exe wails -config .\smoke-config.json -smoke 8s
   `SetKVMNeighbor` 后 `State().kvmLeft` 生效；无节点发送文本返回可读错误。
 - 端口实测：冒烟运行期间只监听传输端口（47851/tcp），**没有**旧的 47890 面板端口；
   `run` 无窗口模式下日志正常输出、剪贴板监控启动。
+- IPC 实测：`copywhere shell-send <文件>` 经命名管道把路径交给运行中的窗口实例，
+  无节点时返回可读错误（而不是「未运行」）；`copywhere doctor` 能识别 IPC 可用、
+  端口监听与 WebView2 版本。
 - Win32 实测：`WM_CLOSE` 后窗口隐藏、进程存活；二次启动约 200ms 内恢复原窗口并退出 0。
 
 ## 9. 已知限制与后续
@@ -155,7 +160,9 @@ copywhere.exe wails -config .\smoke-config.json -smoke 8s
 4. **无前端工程化**：没有 Node 构建、HMR、打包压缩；换来的是 `go build` 单命令。
 5. **只保留一种 UI**：`run` 退化为无窗口日志服务，不再提供 TUI；需要界面时必须
    在交互式桌面会话中运行 `copywhere`/`copywhere wails`。
-6. **未接入发布**：`.github/workflows/build.yml`、`docs/release.md` 未包含 Wails 产物；
+6. **右键发送/二次唤起依赖窗口实例**：都走本机命名管道；终端 `run` 模式没有窗口
+   IPC，右键会提示先以窗口模式启动。
+7. **未接入发布**：`.github/workflows/build.yml`、`docs/release.md` 未包含 Wails 产物；
    `wails3` CLI 的 manifest/图标/绑定生成流程也未接入。
-7. **单实例唤回按 exe 名匹配**：若把 exe 改名为与运行中实例不同的名字，第二次启动
-   只会提示「已有实例」而不会唤回窗口（同一 exe 名正常）。
+8. **二次唤回的主路径是 IPC**（按登录会话的命名管道）；管道不可用时退回「同 exe 名
+   + 窗口类 + 标题」枚举。若 exe 改名且 IPC 又不可用，第二次启动只会提示已有实例。
