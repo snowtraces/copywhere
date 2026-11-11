@@ -21,6 +21,11 @@ const errText = (e) => {
   const m = /returned an error: (.+)$/i.exec(msg);
   return m ? m[1] : msg;
 };
+// Wails v3 把文件选择器的「用户取消」也当作错误返回
+// （Invalid dialog call: Dialog.OpenFile failed: ... cancelled by user）。
+// 取消属于正常操作：识别出来后静默返回，不弹错误提示。
+// 只匹配取消文案本身，避免把「context canceled」一类的真实故障一起吞掉。
+const isDialogCancelled = (e) => /cancel+ed by user/i.test(errText(e));
 
 const WATCH_LABEL = { listener: "事件驱动", viewer: "轮询", none: "未启用" };
 const IMG_EXT = /\.(png|jpe?g|gif|bmp|webp)$/i;
@@ -180,7 +185,7 @@ function renderSub() {
   const hint = $("composerHint");
   if (hint) {
     hint.textContent = app.peers.length
-      ? `在线 ${app.peers.length} 个节点 · 拖入文件即投送`
+      ? `在线 ${app.peers.length} 个节点 · 拖入或复制后 Ctrl+V 即投送`
       : "暂无在线节点，拖入文件会提示原因";
   }
 }
@@ -673,6 +678,7 @@ async function pickFiles() {
       AllowsMultipleSelection: true,
     });
   } catch (e) {
+    if (isDialogCancelled(e)) return; // 正常取消：静默处理
     toast("打开文件选择器失败: " + errText(e), true);
     return;
   }
@@ -683,6 +689,23 @@ async function pickFiles() {
     toast(`已开始投送 ${paths.length} 项内容`);
   } catch (e) {
     toast("投送失败: " + errText(e), true);
+  }
+}
+
+// pasteFilesFromClipboard 读取剪贴板里的文件并立即投送（输入框 focus 时 Ctrl+V）。
+// 网页拿不到文件的真实路径，路径由 Go 端读 CF_HDROP 取得，与拖放同一条链路。
+// in-flight 保护：连按 Ctrl+V 只投送一次，避免同一批文件被重复传输。
+let pasteInFlight = false;
+async function pasteFilesFromClipboard() {
+  if (pasteInFlight) return;
+  pasteInFlight = true;
+  try {
+    const n = await call("PasteFiles");
+    if (n > 0) toast(`已开始投送 ${n} 项内容`);
+  } catch (e) {
+    toast("粘贴投送失败: " + errText(e), true);
+  } finally {
+    pasteInFlight = false;
   }
 }
 
@@ -1044,6 +1067,20 @@ function bindStaticUI() {
       e.preventDefault();
       sendText();
     }
+  });
+  // 复制文件后在输入框直接 Ctrl+V 即投送：粘贴事件只当触发器，真实路径由 Go 端
+  // 读剪贴板取得。只要剪贴板里带文本（含 Excel/Word 复制时附带的位图预览组合），
+  // 就一律放行给浏览器默认粘贴，绝不因为看到 Files 就吞掉文本。
+  input.addEventListener("paste", (e) => {
+    const dt = e.clipboardData;
+    if (!dt) return;
+    const types = Array.from(dt.types || []);
+    const hasText = types.includes("text/plain") || types.includes("text/html") || !!dt.getData("text/plain");
+    if (hasText) return; // 文本/富文本：交给浏览器（保留光标位置与撤销栈）
+    const hasFiles = types.includes("Files") || (dt.files && dt.files.length > 0);
+    if (!hasFiles && types.length > 0) return; // 其它格式（如纯图片）：浏览器默认也不会插入内容
+    e.preventDefault();
+    void pasteFilesFromClipboard();
   });
 
   $("btnOpenDir").onclick = async () => {

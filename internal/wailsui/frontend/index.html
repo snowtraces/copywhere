@@ -106,7 +106,7 @@
         </div>
         <p class="fe-title">还没有传输记录</p>
         <p class="fe-hint">复制文本 / 截图 / 文件（Ctrl+C）会自动同步到所有在线节点；<br>
-        也可以把文件拖进本窗口，或在下方输入框直接发送文本。</p>
+        超过阈值或已暂停时，可在下方输入框 Ctrl+V 手动投送，也可以把文件拖进本窗口。</p>
         <p class="fe-keys"><kbd>Ctrl</kbd>+<kbd>K</kbd> 聚焦输入 <span class="sep"></span> <kbd>Ctrl</kbd>+<kbd>L</kbd> 运行日志</p>
       </div>
     </div>
@@ -119,7 +119,7 @@
           <svg class="ic" viewBox="0 0 24 24"><path d="M21 12l-8 8a5 5 0 0 1-7-7l8-8a4 4 0 0 1 6 6l-8 8a2 2 0 0 1-3-3l7-7"/></svg>
         </button>
         <textarea class="cinput" id="composerInput" rows="1"
-          placeholder="输入文本，回车发送 / Shift+回车换行；或把文件拖进窗口"
+          placeholder="输入文本，回车发送 / Shift+回车换行；复制文件后在此 Ctrl+V 或拖入窗口即投送"
           aria-label="要发送的文本"></textarea>
         <button class="btn primary btn-send" id="btnSend" title="发送文本（Enter）">
           <svg class="ic" viewBox="0 0 24 24"><path d="M4 12l16-8-6 16-2-6zM12 14l4-4"/></svg>
@@ -129,7 +129,7 @@
       <div class="composer-hint">
         <span><kbd>Enter</kbd> 发送 <span class="sep"></span> <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行</span>
         <span class="grow"></span>
-        <span id="composerHint">拖入文件即投送到在线节点</span>
+        <span id="composerHint">拖入文件 / 复制后 Ctrl+V 即投送到在线节点</span>
       </div>
     </div>
 

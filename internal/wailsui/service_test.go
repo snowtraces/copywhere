@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"copywhere/internal/clip"
 	"copywhere/internal/config"
 	"copywhere/internal/discovery"
 	"copywhere/internal/panel"
@@ -291,6 +293,71 @@ func TestSendFilesValidation(t *testing.T) {
 	}
 }
 
+func TestPasteFiles(t *testing.T) {
+	s, core, cfg := newTestService(t)
+
+	orig := readClipboardFiles
+	defer func() { readClipboardFiles = orig }()
+
+	// 剪贴板里没有文件（文本/图片/空）：静默返回 0，让前端走常规文本粘贴
+	readClipboardFiles = func() ([]string, error) { return nil, clip.ErrNoFiles }
+	if n, err := s.PasteFiles(); n != 0 || err != nil {
+		t.Fatalf("无文件时应静默返回 0，实际 n=%d err=%v", n, err)
+	}
+	readClipboardFiles = func() ([]string, error) { return nil, nil }
+	if n, err := s.PasteFiles(); n != 0 || err != nil {
+		t.Fatalf("空列表应静默返回 0，实际 n=%d err=%v", n, err)
+	}
+
+	file := filepath.Join(cfg.ReceiveDir, "p.txt")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	readClipboardFiles = func() ([]string, error) { return []string{file}, nil }
+
+	// 在线但未配对：与手动选择文件一致，明确报错
+	core.peers = []discovery.Peer{{ID: "p1", Name: "PEER"}}
+	if _, err := s.PasteFiles(); err == nil || !strings.Contains(err.Error(), "未配对") {
+		t.Fatalf("未配对节点应拒绝粘贴投送，实际: %v", err)
+	}
+
+	core.paired["p1"] = true
+	n, err := s.PasteFiles()
+	if err != nil || n != 1 {
+		t.Fatalf("已配对时应投送 1 项，实际 n=%d err=%v", n, err)
+	}
+	select {
+	case paths := <-core.sendFilesCh:
+		if len(paths) != 1 || paths[0] != file {
+			t.Fatalf("投送路径不符: %v", paths)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("文件未交到核心")
+	}
+
+	// 剪贴板里混有已删除的路径：按实际可发送的条目数回报（不要报多）
+	missing := filepath.Join(cfg.ReceiveDir, "gone.txt")
+	readClipboardFiles = func() ([]string, error) { return []string{file, missing}, nil }
+	n, err = s.PasteFiles()
+	if err != nil || n != 1 {
+		t.Fatalf("混合路径应按可发送数回报 1，实际 n=%d err=%v", n, err)
+	}
+	select {
+	case paths := <-core.sendFilesCh:
+		if len(paths) != 1 || paths[0] != file {
+			t.Fatalf("混合路径只应投送存在的文件: %v", paths)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("文件未交到核心")
+	}
+
+	// 剪贴板读取异常（剪贴板被其他进程占用等）要往上抛，前端提示原因
+	readClipboardFiles = func() ([]string, error) { return nil, errors.New("OpenClipboard 失败") }
+	if _, err := s.PasteFiles(); err == nil || !strings.Contains(err.Error(), "读取剪贴板文件失败") {
+		t.Fatalf("读取失败应报错，实际: %v", err)
+	}
+}
+
 func TestSaveSettings(t *testing.T) {
 	s, core, cfg := newTestService(t)
 
@@ -474,7 +541,7 @@ func TestBindingFQNIsStable(t *testing.T) {
 	if fqn != "copywhere/internal/wailsui.Service" {
 		t.Fatalf("绑定服务 FQN = %q，前端常量需要同步修改", fqn)
 	}
-	for _, m := range []string{"State", "Peers", "Records", "SendText", "SendFiles", "SaveSettings", "SetKVMNeighbor", "CopyText"} {
+	for _, m := range []string{"State", "Peers", "Records", "SendText", "SendFiles", "PasteFiles", "SaveSettings", "SetKVMNeighbor", "CopyText"} {
 		if _, ok := ptr.MethodByName(m); !ok {
 			t.Fatalf("绑定方法 %s 缺失", m)
 		}

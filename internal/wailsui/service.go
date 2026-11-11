@@ -24,6 +24,7 @@ import (
 	"time"
 
 	appcore "copywhere/internal/app"
+	"copywhere/internal/clip"
 	"copywhere/internal/config"
 	"copywhere/internal/panel"
 )
@@ -367,7 +368,7 @@ func (s *Service) SendText(text string) error {
 	return nil
 }
 
-// SendFiles 把本机路径直接投送到所有在线节点（拖放/选择文件都走这里，
+// SendFiles 把本机路径直接投送到所有在线节点（拖放/选择文件/输入框粘贴都走这里，
 // 拿到的就是真实路径，无需先上传到临时目录）。
 func (s *Service) SendFiles(paths []string) error {
 	clean := make([]string, 0, len(paths))
@@ -390,6 +391,46 @@ func (s *Service) SendFiles(paths []string) error {
 	}
 	go s.core.SendFiles(clean, 0)
 	return nil
+}
+
+// readClipboardFiles 读取系统剪贴板里的文件列表（CF_HDROP）。
+// 抽成变量便于测试替换：真实实现要占用 Windows 剪贴板，单测里不该依赖桌面状态。
+var readClipboardFiles = clip.ReadFiles
+
+// PasteFiles 处理「复制文件后在输入框直接 Ctrl+V」这一交互。
+//
+// 网页侧拿不到剪贴板文件的真实路径（安全限制），因此粘贴事件只作为触发器，
+// 真正的路径由本方法在 Go 端读系统剪贴板取得——与拖放走同一条发送链路，
+// 不需要先上传临时文件。发送语义与「选择文件」一致：忽略自动同步阈值与暂停状态
+// （因此这批文件若刚被自动同步发过，对端会再收到一份，属于显式补发）。
+//
+// 返回值：投送的条目数。返回 0 表示剪贴板里没有可发送的文件
+// （前端已接管本次粘贴且剪贴板无文本可插入，静默即可）；有文件但发送失败才返回
+// error，由前端提示具体原因。
+func (s *Service) PasteFiles() (int, error) {
+	paths, err := readClipboardFiles()
+	if err != nil {
+		if errors.Is(err, clip.ErrNoFiles) {
+			return 0, nil // 剪贴板里是文本/图片：不是粘贴投送的目标，静默交回前端
+		}
+		return 0, fmt.Errorf("读取剪贴板文件失败: %w", err)
+	}
+	if len(paths) == 0 {
+		return 0, nil
+	}
+	// SendFiles 会跳过不存在/空的路径：按实际可发送的条目数回报，
+	// 避免剪贴板里混有已删除文件时 toast 的条数与实际投送数不一致。
+	sendable := 0
+	for _, p := range paths {
+		if _, err := os.Stat(strings.TrimSpace(p)); err == nil {
+			sendable++
+		}
+	}
+	if err := s.SendFiles(paths); err != nil {
+		return 0, err
+	}
+	log.Printf("输入框粘贴投送 %d 项内容", sendable)
+	return sendable, nil
 }
 
 // sendablePeers 统计可直接投递的在线节点（已配对且未被鉴权拒绝）。
