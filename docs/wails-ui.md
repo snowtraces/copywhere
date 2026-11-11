@@ -1,10 +1,10 @@
 # Wails v3 桌面窗口
 
 > 基线：`78a5626`（v0.4.0），并已合并 `main` 的 v0.5.0（右键发送、KVM 边缘死区、
-> doctor、低完整性保护等）。本分支（`feat/wails-ui`）用 Wails v3 桌面窗口替代了
+> doctor、低完整性保护等）；自 **v0.6.0** 起随 `main` 发布。用 Wails v3 桌面窗口替代了
 > 历史上的浏览器面板（`gui` + `internal/webui` + `fyne.io/systray`）和终端三页
 > TUI（`internal/ui`），**只保留一种 UI**：双击 exe 打开的桌面窗口。
-> 状态：可运行、可构建、有单测；尚未并入发布流水线。
+> 状态：已发布（v0.6.0），可运行、可构建、有单测。
 
 ## 1. 为什么做、做了什么
 
@@ -119,7 +119,7 @@ internal/record/
 
 要求：Go 1.26.4+（与 go.mod 一致）、Windows 10 1803+ / Windows 11、系统 WebView2
 运行时。Wails 依赖固定为 `github.com/wailsapp/wails/v3 v3.1.0`，Windows 构建不需要 CGO。
-发布构建实测 13,272,576 B（v0.4.0 基线 9,192,448 B，+3.9 MiB：Wails 运行时、
+v0.6.0 发布构建实测 13,292,544 B（v0.4.0 基线 9,192,448 B，+3.9 MiB：Wails 运行时、
 WebView2 宿主与 v0.5.0 新增的 IPC/右键菜单代码，不含系统 WebView2 本身）。
 
 ```powershell
@@ -128,9 +128,9 @@ go build -o copywhere.exe ./cmd/copywhere
 copywhere.exe                 # 双击/无参数 → 桌面窗口
 copywhere.exe wails           # 显式子命令（等价）
 
-# 发布构建
-go build -trimpath -ldflags "-s -w -H windowsgui -X copywhere/internal/app.Version=v0.4.0-wails" `
-  -o copywhere.exe ./cmd/copywhere
+# 发布构建（标准流程见 docs/release.md：先更新 versioninfo.json 并重生成 rsrc）
+go build -trimpath -ldflags "-s -w -H windowsgui -X copywhere/internal/app.Version=v0.6.0" `
+  -o copywhere-v0.6.0-windows-amd64.exe ./cmd/copywhere
 ```
 
 冒烟测试（自动退出，隔离端口，可与本机正在运行的实例并存）：
@@ -164,6 +164,8 @@ copywhere.exe wails -config .\smoke-config.json -smoke 8s
   无节点时返回可读错误（而不是「未运行」）；`copywhere doctor` 能识别 IPC 可用、
   端口监听与 WebView2 版本。
 - Win32 实测：`WM_CLOSE` 后窗口隐藏、进程存活；二次启动约 200ms 内恢复原窗口并退出 0。
+- v0.6.0 新增交互：输入框「复制文件后 `Ctrl+V` 直接投送」与附件选择器「取消静默」
+  由需求方在正常权限下实机验证通过（本仓库无自动化 UI 测试）。
 
 ## 9. 已知限制与后续
 
@@ -176,7 +178,7 @@ copywhere.exe wails -config .\smoke-config.json -smoke 8s
    在交互式桌面会话中运行 `copywhere`/`copywhere wails`。
 6. **右键发送/二次唤起依赖窗口实例**：都走本机命名管道；终端 `run` 模式没有窗口
    IPC，右键会提示先以窗口模式启动。
-7. **未接入发布**：`.github/workflows/build.yml`、`docs/release.md` 未包含 Wails 产物；
-   `wails3` CLI 的 manifest/图标/绑定生成流程也未接入。
+7. **无 CI，发版手工执行**：仓库没有 `.github/workflows`，Wails 产物按 `docs/release.md`
+   手工构建并上传 Release 附件；`wails3` CLI 的 manifest/图标/绑定生成流程也未接入。
 8. **二次唤回的主路径是 IPC**（按登录会话的命名管道）；管道不可用时退回「同 exe 名
    + 窗口类 + 标题」枚举。若 exe 改名且 IPC 又不可用，第二次启动只会提示已有实例。

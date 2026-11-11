@@ -67,7 +67,7 @@ cd copywhere
 go build -ldflags "-H windowsgui" -o copywhere.exe ./cmd/copywhere
 
 # 发布构建（注入版本号，与 CHANGELOG / git tag 保持一致）
-$v = "v0.4.0"
+$v = "v0.6.0"
 go build -trimpath -ldflags "-s -w -H windowsgui -X copywhere/internal/app.Version=$v" `
   -o copywhere.exe ./cmd/copywhere
 
