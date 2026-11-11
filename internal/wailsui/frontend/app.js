@@ -201,45 +201,6 @@ function clearPersistedFeed() {
   }
 }
 
-// importFeed 导入旧版浏览器面板导出的 cw-feed JSON（DevTools 里复制的那段数组）。
-// 两个 origin 的 localStorage 互不相通，旧记录只能这样手工搬一次。
-async function importFeed() {
-  let picked;
-  try {
-    picked = await wails.Dialogs.OpenFile({
-      Title: "选择旧版面板导出的 cw-feed JSON",
-      CanChooseFiles: true,
-      AllowsMultipleSelection: false,
-      Filters: [{ DisplayName: "JSON", Pattern: "*.json" }],
-    });
-  } catch (e) {
-    if (isDialogCancelled(e)) return; // 正常取消：静默
-    toast("打开文件失败: " + errText(e), true);
-    return;
-  }
-  const path = Array.isArray(picked) ? picked[0] : picked;
-  if (!path) return;
-  try {
-    const list = await call("ImportFeed", path);
-    let added = 0;
-    for (const r of list) {
-      const before = app.feed.length;
-      addRecord(r, true);
-      if (app.feed.length > before) added++;
-    }
-    toast(added > 0 ? `已导入 ${added} 条历史记录` : "没有新增记录（可能已存在）");
-  } catch (e) {
-    toast("导入历史失败: " + errText(e), true);
-  }
-}
-
-async function loadLogs() {
-  const lines = await call("Logs");
-  app.logs = (Array.isArray(lines) ? lines : []).slice(-1000);
-  if (app.logOpen) renderLogs();
-  updateLogBadge();
-}
-
 // ---------------------------------------------------------------- 状态
 
 function applyState(st) {
@@ -1191,7 +1152,6 @@ function bindStaticUI() {
     }
   };
 
-  $("btnImportFeed").onclick = importFeed;
   $("btnClearFeed").onclick = () =>
     confirmAction("清空显示", "清空本窗口的时间线显示与历史记录（不影响对端与已传输的文件）。", "清空", () => {
       const timeline = $("timeline");

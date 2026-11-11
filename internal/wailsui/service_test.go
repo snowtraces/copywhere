@@ -488,45 +488,6 @@ func TestImagePreview(t *testing.T) {
 	}
 }
 
-func TestImportFeed(t *testing.T) {
-	s, _, cfg := newTestService(t)
-
-	path := filepath.Join(cfg.ReceiveDir, "cw-feed.json")
-	raw := `[{"time":"10:00:00","date":"2026-11-01","in":true,"peer":"PC-A","name":"a.txt","size":3,"status":"已接收","detail":""}]`
-	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	list, err := s.ImportFeed(path)
-	if err != nil {
-		t.Fatalf("导入合法记录失败: %v", err)
-	}
-	if len(list) != 1 || list[0].Peer != "PC-A" || list[0].Date != "2026-11-01" {
-		t.Fatalf("导入结果不符: %+v", list)
-	}
-
-	bad := filepath.Join(cfg.ReceiveDir, "bad.json")
-	if err := os.WriteFile(bad, []byte("not a json array"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.ImportFeed(bad); err == nil {
-		t.Fatal("非 JSON 应报错")
-	}
-
-	empty := filepath.Join(cfg.ReceiveDir, "empty.json")
-	if err := os.WriteFile(empty, []byte("[]"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.ImportFeed(empty); err == nil {
-		t.Fatal("空数组应报错")
-	}
-
-	if _, err := s.ImportFeed(filepath.Join(cfg.ReceiveDir, "missing.json")); err == nil {
-		t.Fatal("不存在的文件应报错")
-	}
-	if _, err := s.ImportFeed("   "); err == nil {
-		t.Fatal("空路径应报错")
-	}
-}
 func TestStartBridgeForwardsBusEvents(t *testing.T) {
 	s, _, _ := newTestService(t)
 	type got struct {
@@ -580,7 +541,7 @@ func TestBindingFQNIsStable(t *testing.T) {
 	if fqn != "copywhere/internal/wailsui.Service" {
 		t.Fatalf("绑定服务 FQN = %q，前端常量需要同步修改", fqn)
 	}
-	for _, m := range []string{"State", "Peers", "Records", "SendText", "SendFiles", "PasteFiles", "SaveSettings", "SetKVMNeighbor", "CopyText", "ImportFeed", "PasteFiles"} {
+	for _, m := range []string{"State", "Peers", "Records", "SendText", "SendFiles", "PasteFiles", "SaveSettings", "SetKVMNeighbor", "CopyText", "PasteFiles"} {
 		if _, ok := ptr.MethodByName(m); !ok {
 			t.Fatalf("绑定方法 %s 缺失", m)
 		}
