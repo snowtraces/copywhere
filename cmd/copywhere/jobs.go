@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -99,24 +100,58 @@ func (r *jobRegistry) start(kind string, run func() []app.SendResult) string {
 	r.order = append(r.order, id)
 	r.mu.Unlock()
 
+	started := time.Now()
 	go func() {
-		res := run()
+		// 任务体里任何 panic 都不能带走整个窗口进程：兜住并落成失败结果。
+		var (
+			res      []app.SendResult
+			panicMsg string
+		)
+		func() {
+			defer func() {
+				if p := recover(); p != nil {
+					panicMsg = fmt.Sprint(p)
+					log.Printf("命令行任务 %s 执行 panic: %v", id, p)
+				}
+			}()
+			res = run()
+		}()
+
 		results := make([]jobPeerResult, 0, len(res))
+		okN, retryN, failN := 0, 0, 0
 		for _, one := range res {
+			retry := !one.OK && !r.send.RejectedWith(one.ID)
+			switch {
+			case one.OK:
+				okN++
+			case retry:
+				retryN++
+			default:
+				failN++
+			}
 			results = append(results, jobPeerResult{
 				Peer:  one.Peer,
 				OK:    one.OK,
-				Retry: !one.OK && !r.send.RejectedWith(one.ID),
+				Retry: retry,
 				Msg:   one.Msg,
 			})
 		}
+
 		r.mu.Lock()
 		view.Results = results
 		view.State = jobDone
 		view.finished = time.Now()
 		view.FinishedAt = view.finished.Format("15:04:05")
+		if panicMsg != "" {
+			view.Error = "任务执行异常: " + panicMsg
+		}
 		r.mu.Unlock()
+
+		// 落日志：命令行若卡在等待，gui.log 里能直接看到任务到底有没有结束。
+		log.Printf("命令行任务 %s（%s）完成：成功 %d、重试 %d、失败 %d，耗时 %s",
+			id, kind, okN, retryN, failN, time.Since(started).Round(time.Millisecond))
 	}()
+	log.Printf("命令行任务 %s（%s）已受理，等待窗口实例投送结果", id, kind)
 	return id
 }
 

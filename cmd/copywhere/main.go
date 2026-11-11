@@ -56,7 +56,8 @@ func usage() {
   copywhere nodes [-config 路径] [-wait 4s] 列出在线节点（有实例运行时直接查询该实例）
   copywhere send [-config 路径] [-text 内容] [-wait 4s] [-no-wait] 文件/目录...
                                             立即发送到所有在线节点（不受大小阈值限制；
-                                            有实例运行时交给该实例发送并等待结果汇总）
+                                            有实例运行时交给该实例发送并等待结果汇总，
+                                            -timeout 限制等待时长、-no-wait 立即返回）
   copywhere status <任务id>                 查询 send 委派给窗口实例的任务结果
   copywhere shell [-install|-uninstall|-status]
                                             管理资源管理器右键菜单「用 copywhere 发送」
@@ -338,6 +339,7 @@ func cmdSend(args []string) error {
 	text := fs.String("text", "", "发送文本而不是文件")
 	wait := fs.Duration("wait", 4*time.Second, "发现节点等待时长（仅在无运行中实例时生效）")
 	noWait := fs.Bool("no-wait", false, "委派给运行中实例时立即返回，不等待投送结果")
+	timeout := fs.Duration("timeout", 0, "等待投送结果的最长时间（0=一直等，Ctrl+C 可脱离等待）")
 	fs.Parse(args)
 	paths := fs.Args()
 	if *text == "" && len(paths) == 0 {
@@ -357,7 +359,7 @@ func cmdSend(args []string) error {
 	// 本进程自己扫描会因发现端口被占用而失败（历史上 send 因此"没反应"）。
 	// 默认等待任务完成并按每个对端的结果汇总；-no-wait 只建任务不等待。
 	if ipc.Ping() == nil {
-		return sendViaInstance(paths, *text, *noWait)
+		return sendViaInstance(paths, *text, *noWait, *timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), *wait)
@@ -413,40 +415,60 @@ type jobStatusReply struct {
 // 轮询而不是让管道阻塞等待：管理道是单实例串行的，一次大文件传输若占着连接，
 // 右键发送/二次启动/其它命令都会被堵住。任务在 GUI 侧异步执行，
 // 这里只发毫秒级的"查状态"请求。
-func sendViaInstance(paths []string, text string, noWait bool) error {
+func sendViaInstance(paths []string, text string, noWait bool, timeout time.Duration) error {
 	req := ipc.Command{Cmd: ipc.CmdSendJob, Paths: paths}
 	if text != "" {
 		req = ipc.Command{Cmd: ipc.CmdSendText, Text: text}
 	}
-	var started jobStartReply
-	if err := ipc.SendInto(req, &started); err != nil {
+	var job jobStartReply
+	if err := ipc.SendInto(req, &job); err != nil {
 		return fmt.Errorf("交给运行中的实例发送失败: %w", err)
 	}
-	if started.ID == "" {
+	if job.ID == "" {
 		return fmt.Errorf("运行中的实例没有返回任务 id")
 	}
 	if noWait {
-		fmt.Printf("已受理，任务 %s（用 copywhere status %s 查看）\n", started.ID, started.ID)
+		fmt.Printf("已受理，任务 %s（用 copywhere status %s 查看）\n", job.ID, job.ID)
 		return nil
 	}
 
+	// 等待期间给明确反馈：否则对端离线/大文件时命令看起来像"卡死"。
+	fmt.Fprintf(os.Stderr, "等待窗口实例完成投送…（任务 %s，Ctrl+C 可脱离等待）\n", job.ID)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	ticker := time.NewTicker(150 * time.Millisecond)
 	defer ticker.Stop()
+
+	waitStart := time.Now()
+	nextNotice := 10 * time.Second
+	var deadline <-chan time.Time
+	if timeout > 0 {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		deadline = timer.C
+	}
+
 	for {
 		var st jobStatusReply
-		if err := ipc.SendInto(ipc.Command{Cmd: ipc.CmdJob, ID: started.ID}, &st); err != nil {
-			return fmt.Errorf("查询任务 %s 失败: %w", started.ID, err)
+		if err := ipc.SendInto(ipc.Command{Cmd: ipc.CmdJob, ID: job.ID}, &st); err != nil {
+			return fmt.Errorf("查询任务 %s 失败: %w", job.ID, err)
 		}
 		if st.State != "running" {
 			return printJobResult(st)
 		}
 		select {
 		case <-ctx.Done():
-			fmt.Printf("已脱离等待，投送在窗口实例中继续（任务 %s）\n", started.ID)
+			fmt.Printf("已脱离等待，投送在窗口实例中继续（任务 %s）\n", job.ID)
+			return nil
+		case <-deadline:
+			fmt.Fprintf(os.Stderr, "等待超时（%s），投送在窗口实例后台继续（任务 %s，可用 status 查看）\n",
+				timeout, job.ID)
 			return nil
 		case <-ticker.C:
+			if waited := time.Since(waitStart); waited >= nextNotice {
+				nextNotice += 10 * time.Second
+				fmt.Fprintf(os.Stderr, "仍在等待…已 %s（任务 %s）\n", waited.Round(time.Second), job.ID)
+			}
 		}
 	}
 }

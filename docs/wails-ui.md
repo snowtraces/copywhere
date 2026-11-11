@@ -126,7 +126,7 @@ internal/record/
 
 要求：Go 1.26.4+（与 go.mod 一致）、Windows 10 1803+ / Windows 11、系统 WebView2
 运行时。Wails 依赖固定为 `github.com/wailsapp/wails/v3 v3.1.0`，Windows 构建不需要 CGO。
-v0.6.0 发布构建实测 13,316,608 B（v0.4.0 基线 9,192,448 B，+3.9 MiB：Wails 运行时、
+v0.6.0 发布构建实测 13,321,216 B（v0.4.0 基线 9,192,448 B，+3.9 MiB：Wails 运行时、
 WebView2 宿主与 v0.5.0 新增的 IPC/右键菜单代码，不含系统 WebView2 本身）。
 
 发布产物是**一个** GUI 子系统 exe（双击不弹控制台），命令行也用同一个 exe：
