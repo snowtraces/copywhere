@@ -31,6 +31,13 @@ const WATCH_LABEL = { listener: "事件驱动", viewer: "轮询", none: "未启�
 const IMG_EXT = /\.(png|jpe?g|gif|bmp|webp)$/i;
 const THEMES = ["auto", "light", "dark"];
 
+// 传输记录持久化：与旧浏览器面板同名（cw-feed），但 WebView2 与浏览器是两个
+// 独立的 origin/存储，旧面板的记录不会自动出现在这里（详见 README 已知限制）。
+const FEED_KEY = "cw-feed";
+const FEED_MAX = 400; // 最多保留的条数
+const FEED_TEXT_MAX = 2000; // 单条文本内容预览的最大字符数
+const FEED_WRITE_DELAY = 400; // 写盘去抖（ms）
+
 const app = {
   state: null,
   peers: [],
@@ -47,6 +54,7 @@ const app = {
   confirmFn: null,
   dragName: "",
   lastDate: "",
+  feedTimer: 0,
 };
 
 // ---------------------------------------------------------------- 启动
@@ -130,8 +138,99 @@ async function loadRecords() {
   app.feed = [];
   app.recordsSeen.clear();
   app.lastDate = "";
+  // 先铺上一次运行留下的历史（localStorage），再合并本进程事件总线里的记录：
+  // 两边可能重叠（窗口重载），addRecord 的 key 去重会处理。
+  for (const r of loadPersistedFeed()) addRecord(r, true);
   for (const r of list) addRecord(r, true);
   renderSub();
+}
+
+// ---------- 传输记录持久化 ----------
+
+// slimFeed 生成可写进 localStorage 的精简记录：去掉渲染用字段，
+// 文本内容截断，条数取最近 FEED_MAX 条（旧面板同样只做截断）。
+function slimFeed() {
+  return app.feed.slice(-FEED_MAX).map((r) => ({
+    date: r.date || "",
+    time: r.time || "",
+    in: !!r.in,
+    peer: r.peer || "",
+    name: r.name || "",
+    size: r.size || 0,
+    status: r.status || "",
+    detail: String(r.detail || "").slice(0, FEED_TEXT_MAX),
+  }));
+}
+
+// loadPersistedFeed 读取上一次运行留下的记录；损坏/不可用时静默忽略。
+function loadPersistedFeed() {
+  try {
+    const raw = localStorage.getItem(FEED_KEY);
+    if (!raw) return [];
+    const list = JSON.parse(raw);
+    return Array.isArray(list) ? list : [];
+  } catch (e) {
+    console.warn("读取历史传输记录失败", e);
+    return [];
+  }
+}
+
+// schedulePersistFeed 去抖写入：新纪录密集到达时合并成一次写。
+function schedulePersistFeed() {
+  if (app.feedTimer) clearTimeout(app.feedTimer);
+  app.feedTimer = setTimeout(() => {
+    app.feedTimer = 0;
+    try {
+      localStorage.setItem(FEED_KEY, JSON.stringify(slimFeed()));
+    } catch (e) {
+      console.warn("保存传输记录失败（可能超出存储配额）", e);
+    }
+  }, FEED_WRITE_DELAY);
+}
+
+// clearPersistedFeed 清空 localStorage 里的历史（「清空显示」时调用）。
+function clearPersistedFeed() {
+  if (app.feedTimer) {
+    clearTimeout(app.feedTimer);
+    app.feedTimer = 0;
+  }
+  try {
+    localStorage.removeItem(FEED_KEY);
+  } catch (e) {
+    console.warn("清空历史传输记录失败", e);
+  }
+}
+
+// importFeed 导入旧版浏览器面板导出的 cw-feed JSON（DevTools 里复制的那段数组）。
+// 两个 origin 的 localStorage 互不相通，旧记录只能这样手工搬一次。
+async function importFeed() {
+  let picked;
+  try {
+    picked = await wails.Dialogs.OpenFile({
+      Title: "选择旧版面板导出的 cw-feed JSON",
+      CanChooseFiles: true,
+      AllowsMultipleSelection: false,
+      Filters: [{ DisplayName: "JSON", Pattern: "*.json" }],
+    });
+  } catch (e) {
+    if (isDialogCancelled(e)) return; // 正常取消：静默
+    toast("打开文件失败: " + errText(e), true);
+    return;
+  }
+  const path = Array.isArray(picked) ? picked[0] : picked;
+  if (!path) return;
+  try {
+    const list = await call("ImportFeed", path);
+    let added = 0;
+    for (const r of list) {
+      const before = app.feed.length;
+      addRecord(r, true);
+      if (app.feed.length > before) added++;
+    }
+    toast(added > 0 ? `已导入 ${added} 条历史记录` : "没有新增记录（可能已存在）");
+  } catch (e) {
+    toast("导入历史失败: " + errText(e), true);
+  }
 }
 
 async function loadLogs() {
@@ -316,6 +415,7 @@ function addRecord(r, silent) {
   }
   timeline.appendChild(recordRow(r));
   renderSub();
+  schedulePersistFeed();
   if (near || silent) scrollToBottom();
 }
 
@@ -1091,8 +1191,9 @@ function bindStaticUI() {
     }
   };
 
+  $("btnImportFeed").onclick = importFeed;
   $("btnClearFeed").onclick = () =>
-    confirmAction("清空显示", "只清空本窗口的时间线显示，不影响对端与已传输的文件。", "清空", () => {
+    confirmAction("清空显示", "清空本窗口的时间线显示与历史记录（不影响对端与已传输的文件）。", "清空", () => {
       const timeline = $("timeline");
       const empty = $("feedEmpty");
       timeline.innerHTML = "";
@@ -1103,6 +1204,7 @@ function bindStaticUI() {
       app.feed = [];
       app.recordsSeen.clear();
       app.lastDate = "";
+      clearPersistedFeed();
       renderSub();
     });
 

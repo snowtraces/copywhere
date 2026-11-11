@@ -44,7 +44,6 @@ func usage() {
                                     委派给它执行，并等待每个对端的结果）
   copywhere.exe                     双击 = 桌面窗口（GUI 子系统，不弹控制台）
 
-
 提示：PowerShell 里脚本请用管道，例如
       copywhere.exe nodes | Out-File n.txt
       裸调用与 > 重定向对 GUI 子系统进程不可靠（原因见 README / docs）。

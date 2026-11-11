@@ -14,6 +14,7 @@ package wailsui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -279,6 +280,43 @@ func (s *Service) Peers() []Peer {
 
 // Records 返回时间线记录（旧 → 新，来自事件总线缓存）。
 func (s *Service) Records() []panel.FileView { return s.bus.Files() }
+
+// maxFeedImport 是一次导入的记录上限，避免把超大 JSON 塞进前端。
+const maxFeedImport = 2000
+
+// ImportFeed 读取旧版浏览器面板导出的 cw-feed JSON（[]FileView）并返回记录，
+// 由前端合并进时间线与本地历史。
+//
+// 背景：v0.5.0 及更早的面板把记录存在浏览器 localStorage（origin 是
+// http://127.0.0.1:端口），与 WebView2 的存储互不相通，只能手工导入一次。
+func (s *Service) ImportFeed(path string) ([]panel.FileView, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, errors.New("路径为空")
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("读取文件失败: %w", err)
+	}
+	if fi.Size() > 8<<20 {
+		return nil, errors.New("文件过大（上限 8 MB）")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("读取文件失败: %w", err)
+	}
+	var list []panel.FileView
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, fmt.Errorf("不是 cw-feed 记录 JSON: %w", err)
+	}
+	if len(list) == 0 {
+		return nil, errors.New("文件里没有记录")
+	}
+	if len(list) > maxFeedImport {
+		list = list[len(list)-maxFeedImport:]
+	}
+	return list, nil
+}
 
 // Logs 返回缓存的运行日志。
 func (s *Service) Logs() []string { return s.bus.Logs() }
