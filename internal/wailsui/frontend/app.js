@@ -1,7 +1,7 @@
 // copywhere · Wails v3 桌面窗口前端
 //
 // 通过 Wails 绑定直接调用进程内的 Go 服务（不经过 HTTP/SSE），
-// 事件由 Go 端以 "cw:event"（与网页面板事件总线同构的 type/data）推送。
+// 事件由 Go 端以 "cw:event"（与共享事件总线同构的 type/data）推送。
 import * as wails from "/wails/runtime.js";
 
 const SVC = "copywhere/internal/wailsui.Service";
@@ -151,10 +151,10 @@ function applyState(st) {
   $("layoutSelfName").textContent = st.nodeName || "—";
   $("layoutSelfIP").textContent = st.selfIP || "—";
   $("dockSelfMeta").innerHTML = [
-    `阈值 ${st.thresholdMB} MB`,
-    `已配对 ${st.pairedCount}`,
-    `监听 ${WATCH_LABEL[st.watchMode] || st.watchMode || "—"}`,
-  ].map((t) => `<span>${esc(t)}</span>`).join('<span class="sep"></span>');
+    ["阈值", `${st.thresholdMB} MB`],
+    ["已配对", String(st.pairedCount ?? 0)],
+    ["监听", WATCH_LABEL[st.watchMode] || st.watchMode || "—"],
+  ].map(([k, v]) => `<div class="kv"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("");
 
   const paused = !!st.paused;
   $("syncDot").classList.toggle("on", !paused);
@@ -177,6 +177,12 @@ function renderSub() {
   const today = localDateStr(new Date());
   const todayCount = app.feed.filter((r) => r.date === today).length;
   $("stageSub").textContent = `在线 ${app.peers.length} · 已配对 ${st.pairedCount || 0} · 今日 ${todayCount} 条`;
+  const hint = $("composerHint");
+  if (hint) {
+    hint.textContent = app.peers.length
+      ? `在线 ${app.peers.length} 个节点 · 拖入文件即投送`
+      : "暂无在线节点，拖入文件会提示原因";
+  }
 }
 
 function initialOf(name) {
@@ -213,11 +219,14 @@ function peerCard(p) {
     <div class="head">
       <div class="avatar">${esc(initialOf(p.name))}</div>
       <div class="who">
-        <div class="nm"><span class="nm-txt" title="${esc(p.name)}">${esc(p.name)}</span>${tags.join("")}</div>
+        <div class="nm"><span class="nm-txt" title="${esc(p.name)}">${esc(p.name)}</span></div>
         <div class="sub" title="${esc((p.ips || []).join(", "))}">${esc((p.ips || [])[0] || "—")} · :${p.tcpPort || "—"}</div>
       </div>
+      <span class="peer-dot${p.blocked ? " err" : " on"}" title="${p.blocked ? "鉴权被拒" : "在线"}"></span>
     </div>
     <div class="meta">
+      ${tags.join("")}
+      <span class="sep"></span>
       <span>活跃 ${esc(p.idle || "—")}</span>
       <span class="sep"></span>
       <span>${(p.ips || []).length} 个地址</span>
@@ -246,7 +255,7 @@ function peerCard(p) {
   } else {
     const un = document.createElement("button");
     un.className = "chipbtn";
-    un.textContent = "解除配对";
+    un.textContent = "解除";
     un.onclick = () =>
       confirmAction("解除配对", `确定解除与「${p.name}」的配对吗？解除后双方将无法再互相传输。`, "解除", async () => {
         try {
@@ -261,12 +270,12 @@ function peerCard(p) {
 
   const left = document.createElement("button");
   left.className = "chipbtn";
-  left.textContent = "设为左邻";
+  left.textContent = "← 左邻";
   left.title = "把该节点配置为本机左邻（光标推向左边缘时控制它）";
   left.onclick = () => setNeighbor("left", p.name);
   const right = document.createElement("button");
   right.className = "chipbtn";
-  right.textContent = "设为右邻";
+  right.textContent = "右邻 →";
   right.title = "把该节点配置为本机右邻（光标推向右边缘时控制它）";
   right.onclick = () => setNeighbor("right", p.name);
   acts.appendChild(left);
@@ -308,7 +317,7 @@ function addRecord(r, silent) {
 function dateSeparator(date) {
   const d = document.createElement("div");
   d.className = "fdate";
-  d.textContent = dateLabel(date);
+  d.innerHTML = `<span>${esc(dateLabel(date))}</span>`;
   return d;
 }
 
@@ -360,9 +369,9 @@ function recordRow(r) {
   const meta = document.createElement("div");
   meta.className = "b-meta";
   const parts = [];
-  // 文件卡片本身已显示大小，元信息行不再重复；文本记录显示字节数。
+  // 文件卡片本身已显示大小/状态，元信息行不再重复；文本记录显示字节数。
   if (r.text) parts.push(`<span>${fmtBytes(r.size)}</span>`, '<span class="sep"></span><span>文本</span>');
-  if (failed && r.status) parts.push(`<span class="pill fail">${esc(r.status)}</span>`);
+  if (failed && r.text && r.status) parts.push(`<span class="pill fail">${esc(r.status)}</span>`);
   meta.innerHTML = parts.join("");
 
   if (r.text) {
@@ -430,13 +439,17 @@ function renderRecordBody(r) {
 
 function fileCard(r) {
   const { cls, label } = fileBadge(r.name);
+  const failed = String(r.status || "").includes("失败");
   const card = document.createElement("div");
   card.className = "fcard";
   card.innerHTML = `
     <div class="fico ${cls}">${esc(label)}</div>
     <div class="finfo">
       <div class="fcard-name" title="${esc(r.name)}">${esc(r.name || "（无名称）")}</div>
-      <div class="fcard-size">${fmtBytes(r.size)}</div>
+      <div class="fcard-line">
+        <span>${fmtBytes(r.size)}</span>
+        ${failed && r.status ? `<span class="fcard-status">${esc(r.status)}</span>` : ""}
+      </div>
     </div>`;
   return card;
 }
@@ -585,7 +598,8 @@ function renderLayoutPeers() {
     chip.className = "dev-chip";
     chip.draggable = true;
     chip.dataset.name = p.name;
-    chip.innerHTML = `<span class="nm" title="${esc(p.name)}">${esc(p.name)}</span>
+    const sideTag = p.side === "left" ? '<span class="chip-side">左邻</span>' : p.side === "right" ? '<span class="chip-side">右邻</span>' : "";
+    chip.innerHTML = `<span class="nm" title="${esc(p.name)}">${esc(p.name)}</span>${sideTag}
       <button class="mini" data-side="left" title="设为左邻">左</button>
       <button class="mini" data-side="right" title="设为右邻">右</button>`;
     chip.addEventListener("dragstart", (e) => {
@@ -1042,12 +1056,16 @@ function bindStaticUI() {
 
   $("btnClearFeed").onclick = () =>
     confirmAction("清空显示", "只清空本窗口的时间线显示，不影响对端与已传输的文件。", "清空", () => {
+      const timeline = $("timeline");
+      const empty = $("feedEmpty");
+      timeline.innerHTML = "";
+      if (empty) {
+        timeline.appendChild(empty);
+        empty.hidden = false;
+      }
       app.feed = [];
       app.recordsSeen.clear();
       app.lastDate = "";
-      $("timeline").innerHTML = "";
-      $("timeline").appendChild($("feedEmpty"));
-      $("feedEmpty").hidden = false;
       renderSub();
     });
 

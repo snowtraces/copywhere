@@ -22,10 +22,12 @@
 
   <nav class="tabs" role="tablist" aria-label="主视图">
     <button role="tab" id="tab-workspace" data-view="workspace" class="active" aria-selected="true">
+      <span class="tab-idx">01</span>
       <svg class="ic" viewBox="0 0 24 24"><path d="M4 5h16v11H4zM9 20h6M12 16v4"/></svg>
       工作台
     </button>
     <button role="tab" id="tab-layout" data-view="layout" aria-selected="false">
+      <span class="tab-idx">02</span>
       <svg class="ic" viewBox="0 0 24 24"><path d="M3 5h8v14H3zM13 5h8v14h-8z"/></svg>
       屏幕布局
     </button>
@@ -34,7 +36,9 @@
   <div class="grow"></div>
 
   <div class="chips">
-    <span class="chip" title="本机节点名与地址"><b id="selfName">—</b><span class="dim" id="selfIP">—</span></span>
+    <span class="chip chip-node" title="本机节点名与地址">
+      <span class="chip-k">本机</span><b id="selfName">—</b><span class="dim" id="selfIP">—</span>
+    </span>
     <span class="chip" id="syncChip" title="自动同步开关状态">
       <span class="dot" id="syncDot"></span><span id="syncText">同步中</span>
     </span>
@@ -59,23 +63,26 @@
 
 <div class="main-row">
   <aside class="dock" aria-label="设备坞">
-    <div class="dock-cap">本机</div>
-    <div class="dev-card self">
-      <div class="head">
-        <div class="avatar" id="selfAvatar">?</div>
-        <div class="who">
-          <div class="nm"><span class="nm-txt" id="dockSelfName">—</span><span class="tag ok" id="dockSelfTag">本机</span></div>
-          <div class="sub" id="dockSelfIP">—</div>
+    <div class="dock-scroll">
+      <div class="dock-cap"><span class="cap-idx">01</span>本机</div>
+      <div class="dev-card self">
+        <div class="head">
+          <div class="avatar" id="selfAvatar">?</div>
+          <div class="who">
+            <div class="nm"><span class="nm-txt" id="dockSelfName">—</span><span class="tag ok" id="dockSelfTag">本机</span></div>
+            <div class="sub" id="dockSelfIP">—</div>
+          </div>
         </div>
+        <div class="self-meta" id="dockSelfMeta"></div>
       </div>
-      <div class="meta" id="dockSelfMeta"></div>
-    </div>
 
-    <div class="dock-cap">在线节点</div>
-    <div id="peerList" class="peer-list"></div>
-    <div class="dock-empty" id="peerEmpty" hidden>
-      暂无在线节点<br>
-      对端运行 copywhere 后经 UDP 广播自动出现在这里
+      <div class="dock-cap"><span class="cap-idx">02</span>在线节点</div>
+      <div id="peerList" class="peer-list"></div>
+      <div class="dock-empty" id="peerEmpty" hidden>
+        <span class="empty-bracket">[ ]</span>
+        暂无在线节点<br>
+        对端运行 copywhere 后经 UDP 广播自动出现在这里
+      </div>
     </div>
 
     <div class="dock-foot">
@@ -100,24 +107,39 @@
         <p class="fe-title">还没有传输记录</p>
         <p class="fe-hint">复制文本 / 截图 / 文件（Ctrl+C）会自动同步到所有在线节点；<br>
         也可以把文件拖进本窗口，或在下方输入框直接发送文本。</p>
+        <p class="fe-keys"><kbd>Ctrl</kbd>+<kbd>K</kbd> 聚焦输入 <span class="sep"></span> <kbd>Ctrl</kbd>+<kbd>L</kbd> 运行日志</p>
       </div>
     </div>
 
     <div class="xfer-strip" id="xferStrip" aria-live="polite"></div>
 
-    <div class="composer" data-file-drop-target>
-      <button class="iconbtn" id="btnAttach" title="选择文件或文件夹" aria-label="选择文件或文件夹">
-        <svg class="ic" viewBox="0 0 24 24"><path d="M21 12l-8 8a5 5 0 0 1-7-7l8-8a4 4 0 0 1 6 6l-8 8a2 2 0 0 1-3-3l7-7"/></svg>
-      </button>
-      <textarea class="cinput" id="composerInput" rows="1"
-        placeholder="输入文本，回车发送 / Shift+回车换行；或把文件拖进窗口"
-        aria-label="要发送的文本"></textarea>
-      <button class="btn primary" id="btnSend" title="发送文本（Enter）">
-        <svg class="ic" viewBox="0 0 24 24"><path d="M4 12l16-8-6 16-2-6zM12 14l4-4"/></svg>
-        发送
-      </button>
+    <div class="composer">
+      <div class="composer-box" data-file-drop-target>
+        <button class="iconbtn" id="btnAttach" title="选择文件或文件夹" aria-label="选择文件或文件夹">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M21 12l-8 8a5 5 0 0 1-7-7l8-8a4 4 0 0 1 6 6l-8 8a2 2 0 0 1-3-3l7-7"/></svg>
+        </button>
+        <textarea class="cinput" id="composerInput" rows="1"
+          placeholder="输入文本，回车发送 / Shift+回车换行；或把文件拖进窗口"
+          aria-label="要发送的文本"></textarea>
+        <button class="btn primary btn-send" id="btnSend" title="发送文本（Enter）">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M4 12l16-8-6 16-2-6zM12 14l4-4"/></svg>
+          发送
+        </button>
+      </div>
+      <div class="composer-hint">
+        <span><kbd>Enter</kbd> 发送 <span class="sep"></span> <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行</span>
+        <span class="grow"></span>
+        <span id="composerHint">拖入文件即投送到在线节点</span>
+      </div>
     </div>
-    <div class="drop-hint" id="dropHint" aria-hidden="true">松开即投送到所有在线节点</div>
+
+    <div class="drop-overlay" id="dropOverlay" aria-hidden="true">
+      <div class="drop-card">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 17v3h16v-3"/></svg>
+        <b>松开即投送</b>
+        <span>文件将以真实路径直接发送到所有在线节点</span>
+      </div>
+    </div>
   </section>
 
   <section class="space layout-space" id="view-layout" role="tabpanel" aria-labelledby="tab-layout">
@@ -301,7 +323,7 @@
   <section class="modal" role="dialog" aria-modal="true" aria-labelledby="pairTitle">
     <h2 id="pairTitle">配对请求</h2>
     <p class="modal-text" id="pairText">—</p>
-    <p class="modal-hint">同意后双方交换独立配对令牌，之后可在面板中随时解除。</p>
+    <p class="modal-hint">同意后双方交换独立配对令牌，之后可在窗口中随时解除。</p>
     <div class="modal-acts">
       <button class="btn" id="btnPairDecline">拒绝</button>
       <button class="btn primary" id="btnPairAccept">接受配对</button>
