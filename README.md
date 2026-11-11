@@ -157,7 +157,7 @@ copywhere run [-config 路径]
 | `copywhere run [-config 路径]` | 启动无窗口服务（日志到标准输出，适合服务器 / SSH） |
 | `copywhere wails [-config 路径]` | 启动服务 + 系统托盘 + 桌面窗口（与 `run` 互斥） |
 | `copywhere nodes [-config 路径] [-wait 4s]` | 列出在线节点；**已有实例在运行**时直接查询该实例（发现端口被它占用，子进程不再重复监听） |
-| `copywhere send [-config 路径] [-text 内容] [-wait 4s] [-no-wait] [-timeout 0] 文件/目录...` | 立即发送到所有在线节点，不受阈值限制；有实例在运行时交给它发送（含 `-text`），**默认等待并汇总**每个对端的结果（`-no-wait` 只建任务即返回，`-timeout` 限制等待时长，Ctrl+C 可脱离等待） |
+| `copywhere send [-config 路径] [-text 内容] [-wait 4s] [-wait-result] [-timeout 0] 文件/目录...` | 立即受理并投送到所有在线节点（不受阈值限制）；有实例在运行时打印任务 id，加 `-wait-result` 才等到结束并汇总（`-timeout` 限制等待时长，Ctrl+C 可脱离） |
 | `copywhere status <任务id>` | 查询委派给窗口实例的投送任务结果（id 由 `send` 输出） |
 | `copywhere shell [-install\|-uninstall\|-status]` | 管理资源管理器右键菜单「用 copywhere 发送」（窗口启动时自动注册） |
 | `copywhere shell-send 文件/目录...` | 右键菜单内部调用：经命名管道把路径交给运行中的窗口实例 |
@@ -185,10 +185,9 @@ copywhere — 局域网剪贴板/文件自动同步工具
   copywhere wails [-config 路径]            启动服务 + 系统托盘 + Wails v3 桌面窗口
                                             （WebView2；无参数双击 exe 即进入该模式）
   copywhere nodes [-config 路径] [-wait 4s] 列出在线节点（有实例运行时直接查询该实例）
-  copywhere send [-config 路径] [-text 内容] [-wait 4s] [-no-wait] 文件/目录...
-                                            立即发送到所有在线节点（不受大小阈值限制；
-                                            有实例运行时交给该实例发送并等待结果汇总，
-                                            -timeout 限制等待时长、-no-wait 立即返回）
+  copywhere send [-config 路径] [-text 内容] [-wait 4s] [-wait-result] 文件/目录...
+                                            立即受理并投送到所有在线节点（不受阈值限制；
+                                            有实例运行时打印任务 id，-wait-result 才等待汇总）
   copywhere status <任务id>                 查询 send 委派给窗口实例的任务结果
   copywhere shell [-install|-uninstall|-status]
                                             管理资源管理器右键菜单「用 copywhere 发送」

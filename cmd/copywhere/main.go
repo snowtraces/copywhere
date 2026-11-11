@@ -54,10 +54,9 @@ func usage() {
   copywhere wails [-config 路径]            启动服务 + 系统托盘 + Wails v3 桌面窗口
                                             （WebView2；无参数双击 exe 即进入该模式）
   copywhere nodes [-config 路径] [-wait 4s] 列出在线节点（有实例运行时直接查询该实例）
-  copywhere send [-config 路径] [-text 内容] [-wait 4s] [-no-wait] 文件/目录...
-                                            立即发送到所有在线节点（不受大小阈值限制；
-                                            有实例运行时交给该实例发送并等待结果汇总，
-                                            -timeout 限制等待时长、-no-wait 立即返回）
+  copywhere send [-config 路径] [-text 内容] [-wait 4s] [-wait-result] 文件/目录...
+                                            立即受理并投送到所有在线节点（不受阈值限制；
+                                            有实例运行时打印任务 id，-wait-result 才等待汇总）
   copywhere status <任务id>                 查询 send 委派给窗口实例的任务结果
   copywhere shell [-install|-uninstall|-status]
                                             管理资源管理器右键菜单「用 copywhere 发送」
@@ -338,8 +337,8 @@ func cmdSend(args []string) error {
 	configPath := fs.String("config", "", "配置文件路径")
 	text := fs.String("text", "", "发送文本而不是文件")
 	wait := fs.Duration("wait", 4*time.Second, "发现节点等待时长（仅在无运行中实例时生效）")
-	noWait := fs.Bool("no-wait", false, "委派给运行中实例时立即返回，不等待投送结果")
-	timeout := fs.Duration("timeout", 0, "等待投送结果的最长时间（0=一直等，Ctrl+C 可脱离等待）")
+	waitResult := fs.Bool("wait-result", false, "等到投送结束再返回并汇总（默认立即返回任务 id）")
+	timeout := fs.Duration("timeout", 0, "配合 -wait-result：限制等待时长（0=一直等，Ctrl+C 可脱离）")
 	fs.Parse(args)
 	paths := fs.Args()
 	if *text == "" && len(paths) == 0 {
@@ -359,7 +358,7 @@ func cmdSend(args []string) error {
 	// 本进程自己扫描会因发现端口被占用而失败（历史上 send 因此"没反应"）。
 	// 默认等待任务完成并按每个对端的结果汇总；-no-wait 只建任务不等待。
 	if ipc.Ping() == nil {
-		return sendViaInstance(paths, *text, *noWait, *timeout)
+		return sendViaInstance(paths, *text, *waitResult, *timeout)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), *wait)
@@ -415,7 +414,7 @@ type jobStatusReply struct {
 // 轮询而不是让管道阻塞等待：管理道是单实例串行的，一次大文件传输若占着连接，
 // 右键发送/二次启动/其它命令都会被堵住。任务在 GUI 侧异步执行，
 // 这里只发毫秒级的"查状态"请求。
-func sendViaInstance(paths []string, text string, noWait bool, timeout time.Duration) error {
+func sendViaInstance(paths []string, text string, waitResult bool, timeout time.Duration) error {
 	req := ipc.Command{Cmd: ipc.CmdSendJob, Paths: paths}
 	if text != "" {
 		req = ipc.Command{Cmd: ipc.CmdSendText, Text: text}
@@ -427,8 +426,10 @@ func sendViaInstance(paths []string, text string, noWait bool, timeout time.Dura
 	if job.ID == "" {
 		return fmt.Errorf("运行中的实例没有返回任务 id")
 	}
-	if noWait {
-		fmt.Printf("已受理，任务 %s（用 copywhere status %s 查看）\n", job.ID, job.ID)
+	// 默认只"受理"就返回：GUI 子系统进程不会被 PowerShell 等待，等待反而让输出
+	// 落在提示符之后；要汇总结果就显式 -wait-result（或用 status 稍后查询）。
+	if !waitResult {
+		fmt.Printf("已受理，任务 %s（用 copywhere status %s 查看结果）\n", job.ID, job.ID)
 		return nil
 	}
 

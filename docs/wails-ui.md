@@ -70,10 +70,11 @@ internal/record/
 - **命令行委派（v0.6.0）**：`send` 在检测到窗口实例时不再自己监听，而是通过管道
   `send-job` / `send-text` 建任务（校验路径与可投递节点后立即返回任务 id），
   窗口实例在独立 goroutine 里用 `App.SendFilesWithResult` 发送，并把每个对端的
-  `{peer, ok, retry, msg}` 写回任务快照；命令行默认每 150ms 轮询 `job` 直到完成，
-  打印逐对端结果与汇总（`成功/重试/失败`），有致命失败时退出码 1。
-  这样管道始终只承载毫秒级请求，大文件传输不会堵住右键发送或二次启动；
-  `-no-wait` 只建任务即返回，`copywhere status <id>` 可稍后取结果。
+  `{peer, ok, retry, msg}` 写回任务快照。命令行默认只打印「已受理，任务 <id>」，
+  用 `copywhere status <id>` 取逐对端结果与汇总；加 `-wait-result` 才每 150ms 轮询
+  `job` 直到完成（有致命失败退出码 1）。默认即返是为了避开 GUI 子系统进程在
+  PowerShell 里"输出落在提示符之后"的观感问题。这样管道始终只承载毫秒级请求，
+  大文件传输不会堵住右键发送或二次启动。
 - **文件选择器取消**：Wails v3 把"用户取消"也作为错误返回（`Invalid dialog call:
   Dialog.OpenFile failed: ... cancelled by user`），前端识别 `cancel` 后静默返回，
   不再弹"打开文件选择器失败"提示；只有真实故障才提示。
