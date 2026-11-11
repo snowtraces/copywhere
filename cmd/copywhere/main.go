@@ -12,11 +12,8 @@ import (
 	"io"
 	"log"
 	"os"
-	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"time"
 	"unsafe"
@@ -33,47 +30,11 @@ import (
 
 // buildFlavor 区分同一份代码的两个产物：
 //   - "gui"：GUI 子系统（`-H windowsgui`），双击不弹控制台，只负责桌面窗口；
-//     带子命令时转交 copywhere-cli.exe。
-//   - "cli"（默认）：控制台子系统，承载全部命令行子命令，PowerShell/管道/退出码正常。
+//     带子命令时按命令行客户端执行（单文件）。
+//   - "cli"（默认，仅开发调试用）：控制台子系统，便于看日志。
 //
 // 由 -ldflags "-X main.buildFlavor=gui" 注入。
 var buildFlavor = "cli"
-
-// delegateCLI 把子命令转交给同目录的命令行版可执行文件（控制台子系统），
-// 继承标准输入输出并原样返回其退出码。
-func runCLI(cli string, args []string) int {
-	cmd := exec.Command(cli, args...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			return ee.ExitCode()
-		}
-		log.Printf("命令行版执行失败: %v", err)
-		return 1
-	}
-	return 0
-}
-
-// findCLI 在桌面窗口 exe 所在目录查找命令行版：优先 copywhere-cli.exe，
-// 其次接受发布产物按版本命名的 copywhere-cli-vX.Y.Z-windows-amd64.exe。
-func findCLI() (string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Dir(exe)
-	candidate := filepath.Join(dir, "copywhere-cli.exe")
-	if _, err := os.Stat(candidate); err == nil {
-		return candidate, nil
-	}
-	matches, _ := filepath.Glob(filepath.Join(dir, "copywhere-cli-*.exe"))
-	if len(matches) > 0 {
-		sort.Strings(matches)
-		return matches[len(matches)-1], nil
-	}
-	return "", fmt.Errorf("目录 %s 下没有 copywhere-cli.exe", dir)
-}
 
 func usage() {
 	fmt.Print(`copywhere — 局域网剪贴板/文件自动同步工具
@@ -82,7 +43,7 @@ func usage() {
   copywhere.exe <子命令>            命令行（同一个 exe；窗口实例在跑时经本机管道
                                     委派给它执行，并等待每个对端的结果）
   copywhere.exe                     双击 = 桌面窗口（GUI 子系统，不弹控制台）
-  若同目录另有 copywhere-cli.exe   则命令行也可直接用它（控制台子系统）
+
 
 提示：PowerShell 里脚本请用管道，例如
       copywhere.exe nodes | Out-File n.txt
@@ -126,17 +87,9 @@ func usage() {
 
 func main() {
 	log.SetFlags(log.Ltime)
-	// 桌面窗口构建（GUI 子系统）只有一种职责：开窗口。带子命令时：
-	//   - 同目录有命令行版 copywhere-cli.exe：转交给它（PowerShell 下可直接用）；
-	//   - 没有：回落到本进程内的命令行实现（单文件分发时的默认路径）。
-	// 例外：shell-send 是资源管理器右键菜单的纯 IPC 动作，必须在本进程内完成
-	// （转交会为一个纯 IPC 动作额外拉起控制台子进程，反而闪黑框）。
-	if buildFlavor == "gui" && len(os.Args) > 1 &&
-		os.Args[1] != "wails" && os.Args[1] != "shell-send" {
-		if cli, ferr := findCLI(); ferr == nil {
-			os.Exit(runCLI(cli, os.Args[1:]))
-		}
-	}
+	// 单文件设计：同一个 exe 既是桌面窗口，也是命令行客户端。
+	// 带子命令时按普通 CLI 流程执行（窗口实例在跑时经命名管道委派给
+	// 该实例并等待结果，见 sendViaInstance）。
 
 	// 无参数（资源管理器双击 exe）→ 桌面前端（Wails 窗口）。
 	if len(os.Args) < 2 {

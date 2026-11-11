@@ -35,8 +35,7 @@
   （`-H windowsgui`），PowerShell 不等待这类进程，`version` / `nodes` / `send` / `doctor`
   表现为命令失效（裸调用与 `>` 重定向拿不到输出与退出码，控制台子系统又会让双击闪黑框）。
   现在保持 **单文件**：同一 exe 兼作命令行客户端，窗口实例在跑时经命名管道委派执行并
-  等待结果；脚本用管道取输出（`copywhere.exe nodes | Out-File n.txt`）。另提供可选的
-  `copywhere-cli.exe`（控制台子系统），供需要 `>` 或裸退出码的场景使用。
+  等待结果；脚本用管道取输出（`copywhere.exe nodes | Out-File n.txt`）。
 - **修复**：**再次双击唤回窗口时内容区空白**——被激活的窗口有时只恢复框架、WebView2
   内容不重绘；现在 `ActivateExistingWindow` 在 `ShowWindow` 后显式
   `InvalidateRect` + `UpdateWindow`，唤回即出完整界面。

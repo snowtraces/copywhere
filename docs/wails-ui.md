@@ -126,31 +126,25 @@ internal/record/
 
 要求：Go 1.26.4+（与 go.mod 一致）、Windows 10 1803+ / Windows 11、系统 WebView2
 运行时。Wails 依赖固定为 `github.com/wailsapp/wails/v3 v3.1.0`，Windows 构建不需要 CGO。
-v0.6.0 发布构建实测 13,325,312 B（v0.4.0 基线 9,192,448 B，+3.9 MiB：Wails 运行时、
+v0.6.0 发布构建实测 13,322,752 B（v0.4.0 基线 9,192,448 B，+3.9 MiB：Wails 运行时、
 WebView2 宿主与 v0.5.0 新增的 IPC/右键菜单代码，不含系统 WebView2 本身）。
 
-发布主产物是**一个** GUI 子系统 exe（双击不弹控制台）；命令行用同一个 exe：
+发布产物是**一个** GUI 子系统 exe（双击不弹控制台），命令行也用同一个 exe：
 
 ```powershell
-# 开发/调试构建（控制台子系统，便于看日志）
-go build -o copywhere-cli.exe ./cmd/copywhere
-copywhere-cli.exe version
-
-# 主产物：桌面窗口（GUI 子系统，双击不弹控制台，单文件即可用）
+# 主产物（唯一发布文件）
 go build -trimpath -ldflags "-s -w -H windowsgui -X copywhere/internal/app.Version=v0.6.0 -X main.buildFlavor=gui" `
   -o copywhere-v0.6.0-windows-amd64.exe ./cmd/copywhere
 
-# 可选：控制台子系统版本（需要 > 重定向 / 裸退出码时用）
-go build -trimpath -ldflags "-s -w -X copywhere/internal/app.Version=v0.6.0 -X main.buildFlavor=cli" `
-  -o copywhere-cli-v0.6.0-windows-amd64.exe ./cmd/copywhere
+# 开发调试构建（控制台子系统，便于看日志；不发布）
+go build -o copywhere-dev.exe ./cmd/copywhere
 ```
 
 **命令行为什么要用管道**：GUI 子系统（`-H windowsgui`）双击不弹控制台，但 PowerShell
 不等待这类进程——`copywhere.exe nodes > f.txt` 会立刻返回、文件为空、退出码也不可靠；
 控制台子系统能被等待，可双击必然闪一下黑框。因此单文件保持 GUI 子系统：
 窗口实例在跑时命令经命名管道委派给它执行并等待结果，脚本用
-`copywhere.exe nodes | Out-File f.txt` 取输出与退出码；确实需要 `>` 时用可选的
-`copywhere-cli.exe`。
+`copywhere.exe nodes | Out-File f.txt` 取输出与退出码。
 冒烟测试（自动退出，隔离端口，可与本机正在运行的实例并存）：
 
 ```powershell

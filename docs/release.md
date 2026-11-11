@@ -45,9 +45,7 @@ $v = "vX.Y.Z"   # 与 CHANGELOG / git tag 保持一致
 go build -trimpath -ldflags "-s -w -H windowsgui -X copywhere/internal/app.Version=$v -X main.buildFlavor=gui" `
   -o copywhere-$v-windows-amd64.exe ./cmd/copywhere
 
-# 可选：控制台子系统版本（需要 > 重定向 / 裸退出码时用）
-go build -trimpath -ldflags "-s -w -X copywhere/internal/app.Version=$v -X main.buildFlavor=cli" `
-  -o copywhere-cli-$v-windows-amd64.exe ./cmd/copywhere
+
 ```
 
 发布前在 PowerShell 里实测：
@@ -56,19 +54,18 @@ go build -trimpath -ldflags "-s -w -X copywhere/internal/app.Version=$v -X main.
 .\copywhere-$v-windows-amd64.exe version                 # 输出 vX.Y.Z（裸调用异步，仅供肉眼确认）
 .\copywhere-$v-windows-amd64.exe version | Out-File o.txt # 管道：等待 + 有内容
 .\copywhere-$v-windows-amd64.exe bogus 2>&1 | Out-File b.txt; $LASTEXITCODE  # 2
-.\copywhere-cli-$v-windows-amd64.exe version > out.txt   # 可选产物：> 也能落盘
+
 ```
 
 为什么主产物是 GUI 子系统：控制台子系统能被 PowerShell 正确等待，但双击时 Windows
 必然先创建控制台窗口（闪黑框）；GUI 子系统双击干净，代价是裸调用与 `>` 不可靠
 （PowerShell 不等待、不传句柄）。命令行因此既支持"委派给窗口实例并等待结果"，
-也建议脚本一律用管道；确实需要 `>` 时用可选的 `copywhere-cli.exe`。
+也建议脚本一律用管道（`>` 与裸调用对 GUI 子系统进程不可靠）。
 exe 图标与版本信息由 `cmd/copywhere/rsrc_windows_amd64.syso` 自动嵌入，无需额外步骤。
 
 产物运行需要系统 WebView2 运行时（Win10 1803+ / Win11 一般自带）；发布说明中应保留该前提。
 
-产物命名规范：`copywhere-$v-windows-amd64.exe`（主产物）；可选的
-`copywhere-cli-$v-windows-amd64.exe` 一起上传即可。产物只进 GitHub Release 附件，
+产物命名规范：`copywhere-$v-windows-amd64.exe`（唯一产物）。产物只进 GitHub Release 附件，
 **不要提交进 git 仓库**。
 ## 4. 提交与打标签
 
@@ -82,7 +79,7 @@ git push origin main --follow-tags
 ## 5. 创建 GitHub Release
 
 ```powershell
-gh release create vX.Y.Z .\copywhere-vX.Y.Z-windows-amd64.exe .\copywhere-cli-vX.Y.Z-windows-amd64.exe `
+gh release create vX.Y.Z .\copywhere-vX.Y.Z-windows-amd64.exe `
   --title "copywhere vX.Y.Z" --notes-file release-notes.md
 ```
 
@@ -97,7 +94,7 @@ gh release create vX.Y.Z .\copywhere-vX.Y.Z-windows-amd64.exe .\copywhere-cli-vX
 gh release view vX.Y.Z    # 确认 tag、说明、资产齐全
 ```
 
-下载两个附件后放在同一目录，运行 `copywhere-cli version`（应为 `vX.Y.Z`）与双击 `copywhere`（应无黑框、正常出窗口）。最后把新 exe 部署到
+下载附件后运行 `copywhere version`（应为 `vX.Y.Z`）并双击 `copywhere`（应无黑框、正常出窗口）。最后把新 exe 部署到
 各节点替换旧版（KVM/传输协议有变更时，**所有节点必须同步升级**）。
 
 ## 快速检查清单

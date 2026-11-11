@@ -1,24 +1,10 @@
-# copywhere
-
-<p align="left">
+# copywhere<p align="left">
   <img src="internal/wailsui/frontend/favicon.png" width="72" alt="copywhere 图标">
-</p>
-
-**局域网剪贴板 / 文件自动同步 + 鼠标键盘跨屏工具**（Windows，Go 实现，绿色免安装单文件；界面依赖系统 WebView2 运行时）。
-
-- **剪贴板同步**：在一台机器上 **Ctrl+C** 复制小于阈值的文件（默认 10MB）、文本或截图，
+</p>**局域网剪贴板 / 文件自动同步 + 鼠标键盘跨屏工具**（Windows，Go 实现，绿色免安装单文件；界面依赖系统 WebView2 运行时）。- **剪贴板同步**：在一台机器上 **Ctrl+C** 复制小于阈值的文件（默认 10MB）、文本或截图，
   局域网内所有在线 `copywhere` 节点会自动收到：文件落盘到接收目录并写回其剪贴板，
   对端直接 **Ctrl+V** 即可粘贴。
 - **鼠键跨屏（软 KVM）**：把光标推向屏幕边缘即可用本机鼠标键盘控制相邻机器，
-  键盘/滚轮同步转发，多机布局在桌面窗口的「屏幕布局」里配置、自动互相同步。
-
-无需配置 IP、无需账号、无需中转服务器——数据只在你的机器之间点对点直传。
-
-![Platform](https://img.shields.io/badge/platform-Windows-blue) ![Go](https://img.shields.io/badge/Go-1.26.4%2B-00ADD8) ![License](https://img.shields.io/badge/license-MIT-green)
-
-## 特性一览
-
-- **节点自动发现**：UDP 广播（各网段定向广播 + 回环），无需配置 IP，节点上下线自动感知
+  键盘/滚轮同步转发，多机布局在桌面窗口的「屏幕布局」里配置、自动互相同步。无需配置 IP、无需账号、无需中转服务器——数据只在你的机器之间点对点直传。![Platform](https://img.shields.io/badge/platform-Windows-blue) ![Go](https://img.shields.io/badge/Go-1.26.4%2B-00ADD8) ![License](https://img.shields.io/badge/license-MIT-green)## 特性一览- **节点自动发现**：UDP 广播（各网段定向广播 + 回环），无需配置 IP，节点上下线自动感知
 - **配对认证**：窗口点击「配对」→ 对端「接受配对」即完成；双方交换逐对独立的配对
   令牌（`~/.copywhere/peers.json`，可单独解除），未配对的节点无法传输
 - **Wails v3 桌面窗口（唯一图形界面）**：双击 exe 即开独立 WebView2 窗口——
@@ -44,79 +30,36 @@
   完成配对后自动恢复；剪贴板序号 + 冷却期双重防回环
 - **鼠标键盘跨屏（实验性）**：光标推向显示器"暴露边缘"并继续推动即可控制相邻机器，
   键盘/滚轮同步，布局在窗口「屏幕布局」配置并自动同步到对端；屏幕上下两端留死区
-  防误触（关闭按钮/显示桌面/任务栏不跨屏）；`Ctrl+Alt+Shift+X` 紧急退出
-
-## 安装
-
-### 下载预编译 exe
-
-从 [GitHub Releases](../../releases) 下载 `copywhere-vX.Y.Z-windows-amd64.exe`，一个文件即可：命令行直接用同一个 exe（窗口在跑时经本机管道委派执行并等待结果），脚本用管道取输出，例如 `copywhere.exe nodes | Out-File n.txt`。
+  防误触（关闭按钮/显示桌面/任务栏不跨屏）；`Ctrl+Alt+Shift+X` 紧急退出## 安装### 下载预编译 exe从 [GitHub Releases](../../releases) 下载 `copywhere-vX.Y.Z-windows-amd64.exe`，一个文件即可：命令行直接用同一个 exe（窗口在跑时经本机管道委派执行并等待结果），脚本用管道取输出，例如 `copywhere.exe nodes | Out-File n.txt`。
 双击即可运行——首次启动自动生成默认配置（节点名默认为主机名，可在窗口「设置」修改）。
 需要系统 WebView2 运行时（Windows 10 1803+ / Windows 11 一般已预装；缺失时请安装
-Microsoft Edge WebView2 Runtime）。
-
-### 从源码构建
-
-要求 Go 1.26.4+（Windows）。
-
-```powershell
+Microsoft Edge WebView2 Runtime）。### 从源码构建要求 Go 1.26.4+（Windows）。```powershell
 git clone <本仓库>
-cd copywhere
-
-# 一个文件就够：GUI 子系统，双击不弹控制台；命令行走同一 exe（委派给窗口实例）
+cd copywhere# 一个文件就够：GUI 子系统，双击不弹控制台；命令行走同一 exe（委派给窗口实例）
 go build -trimpath -ldflags "-s -w -H windowsgui -X main.buildFlavor=gui" `
   -o copywhere.exe ./cmd/copywhere
-
-# 可选：控制台子系统版本，想跳过 cmd 包装、直接跑 CLI 时用
-go build -trimpath -ldflags "-s -w -X main.buildFlavor=cli" `
-  -o copywhere-cli.exe ./cmd/copywhere
-
 # 发布构建（注入版本号，与 CHANGELOG / git tag 保持一致）
 $v = "v0.6.0"
 go build -trimpath -ldflags "-s -w -H windowsgui -X copywhere/internal/app.Version=$v -X main.buildFlavor=gui" `
-  -o copywhere-$v-windows-amd64.exe ./cmd/copywhere
-
-go test ./...            # 运行全部单元测试
+  -o copywhere-$v-windows-amd64.exe ./cmd/copywherego test ./...            # 运行全部单元测试
 .\copywhere.exe version  # 查看版本号（有窗口实例时经管道委派，默认等待结果）
-```
-
-> **命令行与管道**：GUI 子系统（`-H windowsgui`）双击不弹控制台，但 PowerShell 不等待
+```> **命令行与管道**：GUI 子系统（`-H windowsgui`）双击不弹控制台，但 PowerShell 不等待
 > 这类进程——`copywhere.exe nodes > f.txt` 会立刻返回、文件是空的、退出码也不可靠
 > （控制台子系统能被等待，但双击必然闪一下黑框）。所以命令行走"管道"或"委派"：
 > 单条命令直接跑（窗口在跑时经命名管道委派给它执行并等待结果），脚本用
 > `copywhere.exe nodes | Out-File f.txt` 拿到输出与退出码（管道会强制 PowerShell 等待）。
-> 确实需要 `>` 或裸退出码时，另用可选的 `copywhere-cli.exe`（控制台子系统）。
+> 确实需要 `>` 或裸退出码的脚本，只能在"控制台子系统"与"双击闪黑框"之间取舍（单文件无法同时满足）。
 exe 图标与版本信息由 `cmd/copywhere/rsrc_windows_amd64.syso` 提供（`go build` 自动嵌入）；
-重新生成方式见 [docs/release.md](docs/release.md)。
-
-- 依赖系统 WebView2 运行时（Windows 10 1803+ / Windows 11 一般已预装；
+重新生成方式见 [docs/release.md](docs/release.md)。- 依赖系统 WebView2 运行时（Windows 10 1803+ / Windows 11 一般已预装；
   缺失时请安装 Microsoft Edge WebView2 Runtime）。
 - 不使用 Node / npm：前端是内嵌的静态 HTML/CSS/JS，`go build` 一条命令完成。
 - 双击 exe（无参数）即进入桌面窗口；`copywhere wails` 等价。
-- 设计说明、验证记录与已知限制见 [docs/wails-ui.md](docs/wails-ui.md)。
-
-## 快速开始（两台机器 A、B）
-
-1. **启动**：两台机器上分别**双击 `copywhere.exe`**——托盘常驻并打开桌面窗口。
+- 设计说明、验证记录与已知限制见 [docs/wails-ui.md](docs/wails-ui.md)。## 快速开始（两台机器 A、B）1. **启动**：两台机器上分别**双击 `copywhere.exe`**——托盘常驻并打开桌面窗口。
    首次运行 Windows 会弹防火墙询问，选择「允许」（至少专用网络）——发现/传输/KVM
-   三个端口（默认 47830~47832）需要允许入站。
-
-2. **验证发现**：窗口左侧设备坞应出现对方的设备卡片（含全部地址与活跃时间）。
-
-3. **配对**：点击对方节点卡片上的「配对」，对端窗口弹出「接受配对」确认后即完成。
-   未配对的节点无法传输。
-
-4. **使用**：在 A 上复制一个小文件（或把文件直接拖进窗口）→ B 的窗口工作台出现
-   消息气泡，在 B 上直接 **Ctrl+V** 即可粘贴；复制文本、按 Win+Shift+S 截图同理。
-
-## 使用指南
-
-### 桌面窗口（推荐）
-
-双击 `copywhere.exe`（或执行 `copywhere wails`）启动完整服务 + 系统托盘 + WebView2
-桌面窗口，不再打开浏览器：
-
-- **顶栏**：本机名/地址、同步状态、暂停、运行日志、主题、设置；关闭窗口 = 收进托盘
+   三个端口（默认 47830~47832）需要允许入站。2. **验证发现**：窗口左侧设备坞应出现对方的设备卡片（含全部地址与活跃时间）。3. **配对**：点击对方节点卡片上的「配对」，对端窗口弹出「接受配对」确认后即完成。
+   未配对的节点无法传输。4. **使用**：在 A 上复制一个小文件（或把文件直接拖进窗口）→ B 的窗口工作台出现
+   消息气泡，在 B 上直接 **Ctrl+V** 即可粘贴；复制文本、按 Win+Shift+S 截图同理。## 使用指南### 桌面窗口（推荐）双击 `copywhere.exe`（或执行 `copywhere wails`）启动完整服务 + 系统托盘 + WebView2
+桌面窗口，不再打开浏览器：- **顶栏**：本机名/地址、同步状态、暂停、运行日志、主题、设置；关闭窗口 = 收进托盘
 - **设备坞**：本机与在线节点卡片（全部地址、活跃时间、配对状态），
   配对 / 解除配对 / 设为左邻右邻直接在卡片上完成
 - **传输工作台**：左收右发的对话式时间线，文本点击展开、一键复制回剪贴板；
@@ -132,31 +75,13 @@ exe 图标与版本信息由 `cmd/copywhere/rsrc_windows_amd64.syso` 提供（`g
 - **设置**：节点名 / 阈值 / 接收目录 / 自动回贴 / 文本同步 / 右键菜单 / 跨屏开关与调参
   （含边缘死区）/ 已配对设备管理；所有修改**立即保存并即时生效**，无需重启
 - **运行日志**：`Ctrl+L` 抽屉（错误行着色、未读角标）；`Ctrl+K` 聚焦输入、
-  `Ctrl+,` 设置、`Esc` 关闭弹层
-
-**系统托盘**菜单：打开窗口 · 自动同步（勾选）· 打开接收目录 · 退出。
-关闭窗口只是收进托盘；再次双击 exe 会**唤回已有窗口**而不是新开进程。
-
-**安全**：界面完全在进程内（Go 绑定 + WebView2 事件），不监听任何本地 HTTP 端口；
-传输鉴权仍只认配对令牌。`wails` 与 `run` 通过命名互斥锁互斥。
-
-### 无窗口服务（`run`）
-
-适合服务器 / SSH 等没有桌面的环境：
-
-```powershell
+  `Ctrl+,` 设置、`Esc` 关闭弹层**系统托盘**菜单：打开窗口 · 自动同步（勾选）· 打开接收目录 · 退出。
+关闭窗口只是收进托盘；再次双击 exe 会**唤回已有窗口**而不是新开进程。**安全**：界面完全在进程内（Go 绑定 + WebView2 事件），不监听任何本地 HTTP 端口；
+传输鉴权仍只认配对令牌。`wails` 与 `run` 通过命名互斥锁互斥。### 无窗口服务（`run`）适合服务器 / SSH 等没有桌面的环境：```powershell
 copywhere run [-config 路径]
-```
-
-启动发现 / 传输 / 剪贴板 / KVM 服务，日志输出到标准输出，`Ctrl+C` 退出；
-没有窗口与托盘，也不提供交互式界面。
-
-### 命令
-
-命令行直接用 `copywhere.exe`（例如 `copywhere.exe nodes`）；若同目录另放了 `copywhere-cli.exe`，也可直接用它，
-两者在 PowerShell 里的等待、输出、`>` 重定向与退出码都正常。
-
-| 命令 | 说明 |
+```启动发现 / 传输 / 剪贴板 / KVM 服务，日志输出到标准输出，`Ctrl+C` 退出；
+没有窗口与托盘，也不提供交互式界面。### 命令命令行直接用 `copywhere.exe`（例如 `copywhere.exe nodes`），
+两者在 PowerShell 里的等待、输出、`>` 重定向与退出码都正常。| 命令 | 说明 |
 | --- | --- |
 | `copywhere`（无参数，或**直接双击 exe**） | 进入桌面窗口模式；双击启动时自动隐藏控制台窗口，托盘常驻 |
 | `copywhere init` | 生成默认配置 |
@@ -169,18 +94,14 @@ copywhere run [-config 路径]
 | `copywhere shell-send 文件/目录...` | 右键菜单内部调用：经命名管道把路径交给运行中的窗口实例 |
 | `copywhere clip-test` | 本机剪贴板读写自检（覆盖并尝试恢复剪贴板） |
 | `copywhere doctor` | 环境自检：权限/配置/单实例/IPC/WebView2/端口/右键菜单/托盘/日志 |
-| `copywhere version` | 显示版本号 |
-
-`copywhere help` 原文：
-
-```text
+| `copywhere version` | 显示版本号 |`copywhere help` 原文：```text
 copywhere — 局域网剪贴板/文件自动同步工具
 
 用法（单文件即可）:
   copywhere.exe <子命令>            命令行（同一个 exe；窗口实例在跑时经本机管道
                                     委派给它执行，并等待每个对端的结果）
   copywhere.exe                     双击 = 桌面窗口（GUI 子系统，不弹控制台）
-  若同目录另有 copywhere-cli.exe   则命令行也可直接用它（控制台子系统）
+
 
 提示：PowerShell 里脚本请用管道，例如
       copywhere.exe nodes | Out-File n.txt
@@ -219,11 +140,7 @@ copywhere — 局域网剪贴板/文件自动同步工具
     每个对端的投递结果并汇总，脚本可用 | Out-File 取结果（不要用 >，见文档）
 
 配置文件: ~/.copywhere/config.json（接收目录: ~/.copywhere/files）
-```
-
-## 配置（`~/.copywhere/config.json`）
-
-| 字段 | 默认 | 说明 |
+```## 配置（`~/.copywhere/config.json`）| 字段 | 默认 | 说明 |
 | --- | --- | --- |
 | `node_name` | 主机名 | 节点显示名 |
 | `discovery_port` | 47830 | UDP 发现端口 |
@@ -244,17 +161,9 @@ copywhere — 局域网剪贴板/文件自动同步工具
 | `kvm_speed_percent` | 100 | 本机作主控时速度微调倍率百分比（100=自动计算的标准速度；可在 50~300% 个性化微调）；**窗口保存后立即生效** |
 | `kvm_edge_dead_zone` | 48 | 边缘死区高度（逻辑像素，按各屏缩放比换算）：屏幕上下两端这么大范围不触发跨屏/切回（关闭按钮、显示桌面、任务栏热区）；`0` 关闭死区；**窗口保存后立即生效** |
 | `kvm_touchpad_gestures` | 关（false） | **实验性**：触控板双指滚动跨屏识别（接管期间转发，本机窗口仍会滚动；详见 `docs/touchpad-gesture-rawinput-plan.md`） |
-| `kvm_touchpad_speed` | 100 | 触控板双指滚动的输出倍率百分比（100=基准；越大越快；**窗口保存后立即生效**） |
-
-另有一个非手工编辑文件：`~/.copywhere/peers.json` 保存配对令牌列表（窗口自动维护）。
-
-## 鼠标键盘跨屏（KVM，实验性）
-
-推荐直接在窗口「屏幕布局」里把设备卡片拖到本机左右两侧：布局即时生效，
+| `kvm_touchpad_speed` | 100 | 触控板双指滚动的输出倍率百分比（100=基准；越大越快；**窗口保存后立即生效**） |另有一个非手工编辑文件：`~/.copywhere/peers.json` 保存配对令牌列表（窗口自动维护）。## 鼠标键盘跨屏（KVM，实验性）推荐直接在窗口「屏幕布局」里把设备卡片拖到本机左右两侧：布局即时生效，
 并**自动同步到对端**（A 配置右邻为 B ⟺ B 自动配置左邻为 A）；取消某侧（✕）或
-换成其他设备时同样自动同步，旧邻居不会残留过期配置。
-
-- 在 A 上把光标推向**右边缘并继续推**（累计约 8px，轻推即过）→ 控制权切到 B，键盘/滚轮同步转发；
+换成其他设备时同样自动同步，旧邻居不会残留过期配置。- 在 A 上把光标推向**右边缘并继续推**（累计约 8px，轻推即过）→ 控制权切到 B，键盘/滚轮同步转发；
   在 B 上把光标推回**左边缘并继续推**（累计约 8px）→ 交还 A；200ms 防抖消除卡顿，往返穿梭流畅自如
 - **边缘死区（防误触）**：屏幕**上下两端**各 48 逻辑像素（按各屏缩放比换算）不触发跨屏/切回——
   那里是右上角窗口「关闭」按钮、右下角「显示桌面」和任务栏的地盘，把光标顶过去是日常操作，
@@ -265,29 +174,19 @@ copywhere — 局域网剪贴板/文件自动同步工具
   被控入口固定在主显示器（`kvm_entry_monitor` 可指定入口屏）
 - **跨分辨率与实际 DPI 缩放自适应**：系统自动读取两端真实物理分辨率与 Windows 实际设置缩放比（如 ThinkBook 2880×1800 @ 200%），按逻辑视口换算科学基准增益并结合亚像素余数结转，解决高分缩放屏变慢问题，绝不随手速漂移；被控多屏自由漫游；窗口支持速度微调（默认 100%）
 - 主控机失联 5 秒，副机自动释放控制；双向 ping/pong 保活
-- 紧急退出：`Ctrl+Alt+Shift+X`
-
-当前限制（MVP）：对 UAC/锁屏等安全桌面无法注入输入；按键按 VK 码转发，中文输入
+- 紧急退出：`Ctrl+Alt+Shift+X`当前限制（MVP）：对 UAC/锁屏等安全桌面无法注入输入；按键按 VK 码转发，中文输入
 依赖对端输入法（跨机传文字建议直接用剪贴板同步）；跨 ZeroTier 中继时延迟取决于
-链路质量。协议细节见 [docs/protocol.md](docs/protocol.md)。
-
-**已知问题：精确式触控板（PTP）双指滚动无法跨屏转发。**
+链路质量。协议细节见 [docs/protocol.md](docs/protocol.md)。**已知问题：精确式触控板（PTP）双指滚动无法跨屏转发。**
 主控端光标推向的边缘若恰好压在本机可滚动区域上（如列表/文档窗口），触控板双指
 滚动会留在本机、副机收不到；改用外接鼠标/指点杆滚轮则完全正常。原因是 Windows
 精确式触控板的双指滚动属于 `PT_GESTURE2` 指针手势，由系统直接投递给光标下窗口，
 **不经过低级鼠标钩子（WH_MOUSE_LL），也不以滚轮形式出现在鼠标 Raw Input 流中**，
 用户态全局钩子方案（本产品与 Synergy 等同类产品相同）原理上无法捕获。若触控板
 厂商驱动提供"双指滚动输出为传统滚轮"选项，开启后可跨屏；否则请在外接输入设备上
-滚动。边缘不可滚动的区域不受影响——那时手势会退回为滚轮消息，转发链路正常。
-
-窗口「设置 → 跨屏控制」提供**实验性**的绕行方案：直接旁路监听触控板 HID 原始
+滚动。边缘不可滚动的区域不受影响——那时手势会退回为滚轮消息，转发链路正常。窗口「设置 → 跨屏控制」提供**实验性**的绕行方案：直接旁路监听触控板 HID 原始
 触点、自研识别双指滚动并转发（默认关闭）。属于影子监听——接管期间本机窗口
 仍会跟着滚，且部分机型不适用；实现与限制详见
-[docs/touchpad-gesture-rawinput-plan.md](docs/touchpad-gesture-rawinput-plan.md)。
-
-## 工作原理（简述）
-
-- **节点身份**：节点 ID 由 Windows MachineGuid 派生的稳定指纹标识（重启不变）；
+[docs/touchpad-gesture-rawinput-plan.md](docs/touchpad-gesture-rawinput-plan.md)。## 工作原理（简述）- **节点身份**：节点 ID 由 Windows MachineGuid 派生的稳定指纹标识（重启不变）；
   进程每次启动生成随机会话号，对端据此识别节点重启并重置发送暂停状态。
 - **发现**：UDP 广播公告（JSON，默认 2s 间隔），接收方以 ID 为键维护节点表；
   同一节点多网络来源的地址全部保留并按评分优选（`192.168.*` 恒优先，其次与本机
@@ -307,14 +206,8 @@ copywhere — 局域网剪贴板/文件自动同步工具
   （PNG / CF_DIB 就地转 PNG），本进程写入跳过 + 接收后 3 秒冷却期双重防回环。
 - **运行时诊断**：主循环节点、传输/KVM 计数、会话状态与环形日志汇聚为
   `diag.Snap` 诊断快照；watchdog 按各循环预算判定卡死并自动转储协程栈，
-  便于定位"同步不动了"这类现场问题（详见 docs/protocol.md 第 5 节）。
-
-完整的报文格式、配对时序、KVM 消息协议与容错行为见
-[docs/protocol.md](docs/protocol.md)。
-
-## 目录结构
-
-```
+  便于定位"同步不动了"这类现场问题（详见 docs/protocol.md 第 5 节）。完整的报文格式、配对时序、KVM 消息协议与容错行为见
+[docs/protocol.md](docs/protocol.md)。## 目录结构```
 cmd/copywhere/        CLI 入口（子命令、单实例互斥、托盘启动）
 internal/app/         组装、发送/重试、zip 打包/自动解包、截图落盘
 internal/clip/        Windows 剪贴板读写与事件监听（CF_HDROP / CF_UNICODETEXT /
@@ -335,32 +228,16 @@ internal/wailsui/     Wails v3 桌面窗口（Go 绑定 + 托盘 + 内嵌前端�
 internal/bytesize/    字节数格式化
 tools/icon/           图标生成脚本（应用图标、窗口图标）
 docs/                 协议与设计说明、发布流程等
-```
-
-## 文档
-
-- [docs/protocol.md](docs/protocol.md) — 发现 / 传输 / 配对 / KVM 协议与设计细节
+```## 文档- [docs/protocol.md](docs/protocol.md) — 发现 / 传输 / 配对 / KVM 协议与设计细节
 - [docs/wails-ui.md](docs/wails-ui.md) — Wails 桌面窗口设计、验证与已知限制
 - [docs/release.md](docs/release.md) — 版本发布流程
-- [CHANGELOG.md](CHANGELOG.md) — 更新日志
-
-## 参与贡献
-
-欢迎 Issue 与 PR。提交前请通过本地质量门禁：
-
-```powershell
+- [CHANGELOG.md](CHANGELOG.md) — 更新日志## 参与贡献欢迎 Issue 与 PR。提交前请通过本地质量门禁：```powershell
 go build ./...
 go test ./...
 go vet -unsafeptr=false ./...
 gofmt -l .   # 输出应为空
-```
-
-新版本发布流程（CHANGELOG 定稿、构建、打 tag、GitHub Release）见
-[docs/release.md](docs/release.md)。
-
-## 已知限制
-
-- 仅支持 Windows（剪贴板与输入注入使用 Win32 API）；协议与发现层是跨平台的。
+```新版本发布流程（CHANGELOG 定稿、构建、打 tag、GitHub Release）见
+[docs/release.md](docs/release.md)。## 已知限制- 仅支持 Windows（剪贴板与输入注入使用 Win32 API）；协议与发现层是跨平台的。
 - **富文本同步风险**：开启文本同步时，对端的 HTML/RTF 会被写回本机剪贴板，
   Word/浏览器粘贴时会解析这些格式。copywhere 对写回内容做魔数轻校验（不符即
   丢弃该格式），但仍建议**只与可信设备配对**——配对令牌 + 人工确认是唯一准入
@@ -391,8 +268,4 @@ gofmt -l .   # 输出应为空
   或 WebView2 运行时缺失（窗口无法创建）。
 - **看不清现场就跑自检**：`copywhere doctor` 会列出权限、配置、单实例锁、IPC、
   WebView2 版本、KVM/传输端口、右键菜单指向、通知区域登记与 `gui.log` 尾部，
-  且全程只读。
-
-## 许可证
-
-[MIT](LICENSE)
+  且全程只读。## 许可证[MIT](LICENSE)
