@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 
 	"copywhere/internal/app"
 	"copywhere/internal/config"
@@ -86,20 +87,32 @@ func cmdWails(args []string) (err error) {
 		return err
 	}
 
-	// 本机 IPC：右键菜单 shell-send 与二次启动都靠它，不再需要 HTTP 面板。
-	ipcSrv, ierr := ipc.Serve(func(cmd ipc.Command) error {
+	// 本机 IPC：右键菜单 shell-send、二次启动、命令行 nodes/send 都靠它，
+	// 不再需要 HTTP 面板。窗口实例持有完整节点表与配对令牌，命令行走这里最省事。
+	ipcSrv, ierr := ipc.Serve(func(cmd ipc.Command) (any, error) {
 		switch cmd.Cmd {
 		case ipc.CmdPing:
-			return nil
+			return nil, nil
 		case ipc.CmdActivate:
 			if wailsui.ActivateExistingWindow() {
-				return nil
+				return nil, nil
 			}
-			return errors.New("窗口尚未就绪，请稍后再试")
+			return nil, errors.New("窗口尚未就绪，请稍后再试")
 		case ipc.CmdSend:
-			return a.ShellSendChecked(cmd.Paths)
+			return nil, a.ShellSendChecked(cmd.Paths)
+		case ipc.CmdSendText:
+			if strings.TrimSpace(cmd.Text) == "" {
+				return nil, errors.New("文本不能为空")
+			}
+			if len(a.Peers()) == 0 {
+				return nil, errors.New("未发现在线节点：请确认对端已运行 copywhere，且在同一网段")
+			}
+			a.SendText(cmd.Text)
+			return nil, nil
+		case ipc.CmdPeers:
+			return a.Peers(), nil
 		default:
-			return fmt.Errorf("未知命令: %q", cmd.Cmd)
+			return nil, fmt.Errorf("未知命令: %q", cmd.Cmd)
 		}
 	})
 	if ierr != nil {

@@ -23,6 +23,7 @@ import (
 	"copywhere/internal/app"
 	"copywhere/internal/clip"
 	"copywhere/internal/config"
+	"copywhere/internal/discovery"
 	"copywhere/internal/ipc"
 	"copywhere/internal/shellmenu"
 )
@@ -35,9 +36,10 @@ func usage() {
   copywhere run [-config 路径]              启动无窗口服务（日志到标准输出，适合服务器 / SSH）
   copywhere wails [-config 路径]            启动服务 + 系统托盘 + Wails v3 桌面窗口
                                             （WebView2；无参数双击 exe 即进入该模式）
-  copywhere nodes [-config 路径] [-wait 4s] 扫描并列出局域网在线节点
+  copywhere nodes [-config 路径] [-wait 4s] 列出在线节点（有实例运行时直接查询该实例）
   copywhere send [-config 路径] [-text 内容] [-wait 4s] 文件/目录...
-                                            立即发送到所有在线节点（不受大小阈值限制）
+                                            立即发送到所有在线节点（不受大小阈值限制；
+                                            有实例运行时交给该实例发送）
   copywhere shell [-install|-uninstall|-status]
                                             管理资源管理器右键菜单「用 copywhere 发送」
   copywhere shell-send 文件/目录...         右键菜单调用：交给正在运行的实例发送
@@ -56,6 +58,8 @@ func usage() {
   - 对端收到文件后保存到接收目录并自动写回其剪贴板，直接 Ctrl+V 即可
   - 在资源管理器里右键文件/文件夹 →「用 copywhere 发送」= 立即发送，
     不受阈值限制；该项由桌面窗口启动时注册（可在窗口「设置 → 通用」关闭）
+  - 桌面窗口运行时，nodes / send / shell-send 都通过本机命名管道交给它处理
+    （发现端口与配对状态都在该进程里，子进程不再重复监听）
 
 配置文件: ~/.copywhere/config.json（接收目录: ~/.copywhere/files）
 `)
@@ -189,8 +193,15 @@ func releaseSingleton() {
 var consoleHidden bool
 
 // attachParentConsole 当以命令行子命令（如 init/run/nodes）启动时，尝试附加到调用方的终端控制台。
-// 返回是否成功附加（调用方据此决定输出到终端还是弹消息框）。
+// 返回是否已有可用控制台（调用方据此决定输出到终端还是弹消息框）。
+//
+// 注意：cmd / PowerShell / 管道已经把标准句柄交给本进程时，**不要**再 AttachConsole——
+// 那会把 os.Stdout 换成 CONOUT$，`copywhere nodes > out.txt`、`... | Out-String`
+// 这类重定向/管道会拿不到任何输出，看起来就像"命令没有反应"。
 func attachParentConsole() bool {
+	if stdHandleUsable(windows.STD_OUTPUT_HANDLE) || stdHandleUsable(windows.STD_ERROR_HANDLE) {
+		return true
+	}
 	k32 := windows.NewLazySystemDLL("kernel32.dll")
 	attachConsole := k32.NewProc("AttachConsole")
 	r, _, _ := attachConsole.Call(^uintptr(0)) // ATTACH_PARENT_PROCESS = (DWORD)-1
@@ -210,6 +221,12 @@ func attachParentConsole() bool {
 		os.Stdin = os.NewFile(uintptr(hIn), "/dev/stdin")
 	}
 	return true
+}
+
+// stdHandleUsable 报告某个标准句柄是否已经可用（控制台/管道/文件重定向都算）。
+func stdHandleUsable(which uint32) bool {
+	h, err := windows.GetStdHandle(which)
+	return err == nil && h != 0 && h != windows.InvalidHandle
 }
 
 // hideOwnConsole 隐藏双击启动时系统为本进程自动创建的控制台窗口（或在 windowsgui 模式下标记无控制台）。
@@ -249,31 +266,52 @@ func uiFatal(err error) {
 func cmdNodes(args []string) error {
 	fs := flag.NewFlagSet("nodes", flag.ExitOnError)
 	configPath := fs.String("config", "", "配置文件路径")
-	wait := fs.Duration("wait", 4*time.Second, "扫描等待时长")
+	wait := fs.Duration("wait", 4*time.Second, "扫描等待时长（仅在无运行中实例时生效）")
 	fs.Parse(args)
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), *wait)
-	defer cancel()
-	peers := app.ScanPeers(ctx, cfg)
-	if len(peers) == 0 {
-		fmt.Println("未发现其他在线节点（确认对端已运行 copywhere，且已在窗口完成配对、防火墙放行）")
+
+	// 桌面窗口（或 run）在运行时会独占发现端口，本进程再扫描必然绑定失败——
+	// 早期版本把这个错误吞掉，只打印"未发现在线节点"，看起来就像命令失效。
+	// 现在直接向运行中的实例要节点表（它才是真正在收公告的那个进程）。
+	if ipc.Ping() == nil {
+		var peers []discovery.Peer
+		if err := ipc.SendInto(ipc.Command{Cmd: ipc.CmdPeers}, &peers); err != nil {
+			return fmt.Errorf("向运行中的实例查询在线节点失败: %w", err)
+		}
+		printPeers(peers, "（来自运行中的 copywhere 实例）")
 		return nil
 	}
-	fmt.Printf("发现 %d 个在线节点:\n", len(peers))
+
+	ctx, cancel := context.WithTimeout(context.Background(), *wait)
+	defer cancel()
+	peers, err := app.ScanPeers(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("%w\n提示：发现端口 %d/udp 被其它程序占用时无法扫描，请关闭占用者后重试", err, cfg.DiscoveryPort)
+	}
+	printPeers(peers, "")
+	return nil
+}
+
+// printPeers 打印节点表；note 用于说明数据来源。
+func printPeers(peers []discovery.Peer, note string) {
+	if len(peers) == 0 {
+		fmt.Println("未发现其他在线节点（确认对端已运行 copywhere、在同一网段、防火墙放行）" + note)
+		return
+	}
+	fmt.Printf("发现 %d 个在线节点%s:\n", len(peers), note)
 	for _, p := range peers {
 		fmt.Printf("  [远程]%s(%s)\n", p.Name, strings.Join(p.IPs, ", "))
 	}
-	return nil
 }
 
 func cmdSend(args []string) error {
 	fs := flag.NewFlagSet("send", flag.ExitOnError)
 	configPath := fs.String("config", "", "配置文件路径")
 	text := fs.String("text", "", "发送文本而不是文件")
-	wait := fs.Duration("wait", 4*time.Second, "发现节点等待时长")
+	wait := fs.Duration("wait", 4*time.Second, "发现节点等待时长（仅在无运行中实例时生效）")
 	fs.Parse(args)
 	paths := fs.Args()
 	if *text == "" && len(paths) == 0 {
@@ -288,9 +326,30 @@ func cmdSend(args []string) error {
 	if err != nil {
 		return err
 	}
+
+	// 有实例在跑时交给它发送：节点表、配对令牌、失败重试都在那个进程里，
+	// 本进程自己扫描会因发现端口被占用而失败（历史上 send 因此"没反应"）。
+	if ipc.Ping() == nil {
+		if *text != "" {
+			if err := ipc.SendText(*text); err != nil {
+				return fmt.Errorf("交给运行中的实例发送失败: %w", err)
+			}
+			fmt.Println("已交给运行中的 copywhere 实例发送文本")
+			return nil
+		}
+		if err := ipc.SendPaths(paths); err != nil {
+			return fmt.Errorf("交给运行中的实例发送失败: %w", err)
+		}
+		fmt.Printf("已交给运行中的 copywhere 实例发送 %d 项内容\n", len(paths))
+		return nil
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), *wait)
 	defer cancel()
-	peers := app.ScanPeers(ctx, cfg)
+	peers, err := app.ScanPeers(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("%w\n提示：发现端口 %d/udp 被其它程序占用时无法扫描，请关闭占用者后重试", err, cfg.DiscoveryPort)
+	}
 	if len(peers) == 0 {
 		return fmt.Errorf("未发现在线节点（等待 %s）", *wait)
 	}

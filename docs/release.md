@@ -35,13 +35,20 @@ goversioninfo -o cmd/copywhere/rsrc_windows_amd64.syso cmd/copywhere/versioninfo
 
 ```powershell
 $v = "vX.Y.Z"   # 与 CHANGELOG / git tag 保持一致
-go build -trimpath -ldflags "-s -w -H windowsgui -X copywhere/internal/app.Version=$v" `
+go build -trimpath -ldflags "-s -w -X copywhere/internal/app.Version=$v" `
   -o copywhere-$v-windows-amd64.exe ./cmd/copywhere
 .\copywhere-$v-windows-amd64.exe version   # 应输出 copywhere vX.Y.Z
 ```
 
-`-H windowsgui` 使双击启动时不弹控制台黑框（桌面窗口依赖）；exe 图标与版本
-信息由 `cmd/copywhere/rsrc_windows_amd64.syso` 自动嵌入，无需额外步骤。
+**不要加 `-H windowsgui`**：GUI 子系统会让 PowerShell 不等待进程，
+`copywhere nodes`、`copywhere version` 等子命令表现为"没输出、命令立刻返回"，
+`|` 与 `>` 也拿不到内容（cmd.exe 会等待，但 PowerShell 不会）。
+控制台子系统下，双击启动时 `hideOwnConsole()` 会立即隐藏系统新建的控制台窗口，
+托盘 + WebView2 窗口照常工作（开发构建一直如此）。发布前请在 PowerShell 里实测
+`.\copywhere-$v-windows-amd64.exe version` 与 `.\copywhere-$v-windows-amd64.exe nodes`：
+必须等命令执行完、有输出、`$LASTEXITCODE` 为 0。
+
+exe 图标与版本信息由 `cmd/copywhere/rsrc_windows_amd64.syso` 自动嵌入，无需额外步骤。
 
 产物运行需要系统 WebView2 运行时（Win10 1803+ / Win11 一般自带）；发布说明中应保留该前提。
 

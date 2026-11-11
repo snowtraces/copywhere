@@ -119,7 +119,7 @@ internal/record/
 
 要求：Go 1.26.4+（与 go.mod 一致）、Windows 10 1803+ / Windows 11、系统 WebView2
 运行时。Wails 依赖固定为 `github.com/wailsapp/wails/v3 v3.1.0`，Windows 构建不需要 CGO。
-v0.6.0 发布构建实测 13,292,544 B（v0.4.0 基线 9,192,448 B，+3.9 MiB：Wails 运行时、
+v0.6.0 发布构建实测 13,300,736 B（v0.4.0 基线 9,192,448 B，+3.9 MiB：Wails 运行时、
 WebView2 宿主与 v0.5.0 新增的 IPC/右键菜单代码，不含系统 WebView2 本身）。
 
 ```powershell
@@ -128,8 +128,8 @@ go build -o copywhere.exe ./cmd/copywhere
 copywhere.exe                 # 双击/无参数 → 桌面窗口
 copywhere.exe wails           # 显式子命令（等价）
 
-# 发布构建（标准流程见 docs/release.md：先更新 versioninfo.json 并重生成 rsrc）
-go build -trimpath -ldflags "-s -w -H windowsgui -X copywhere/internal/app.Version=v0.6.0" `
+# 发布构建（标准流程见 docs/release.md；控制台子系统，双击时程序自行隐藏控制台）
+go build -trimpath -ldflags "-s -w -X copywhere/internal/app.Version=v0.6.0" `
   -o copywhere-v0.6.0-windows-amd64.exe ./cmd/copywhere
 ```
 

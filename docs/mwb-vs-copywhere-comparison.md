@@ -1,8 +1,8 @@
 # MouseWithoutBorders（PowerToys）× copywhere 技术对比报告
 
-> 说明：本文写于浏览器面板时期（v0.4.0）。当前分支已把 GUI 统一为 Wails v3
-> 桌面窗口（无浏览器/HTTP 面板、无 TUI），文中「Web 面板 / SSE / `/api/debug`」等
-> 描述仅作历史对照。
+> 说明：本文的对比结论写于浏览器面板时期（v0.4.0），其中「面板 / SSE / `/api/debug`」等
+> 表述已被 v0.6.0 的 Wails v3 桌面窗口取代（下文的当前形态描述已按 v0.6.0 校正；
+> 历史实现细节仍保留作对照）。
 
 > 对比对象
 > - **MWB**：`PowerToys/src/modules/MouseWithoutBorders`（C# / .NET 8 / WinForms，约 22.7k LOC，4 个可执行体）
@@ -40,7 +40,7 @@
 - 线程繁多：UI / InputCallback(STA,Highest) / Helper / InputSimulation(串行注入) / Receiver / 每条 TCP 连接一个 STA 线程。
 
 **copywhere —— 单进程多协程**
-- 一个 `copywhere.exe`（`-H windowsgui`）内含：transport server、discovery、monitor、KVM、webui 全部以 goroutine 运行；`context` 统一生命周期。
+- 一个 `copywhere.exe` 内含：transport server、discovery、monitor、KVM 与 Wails v3 桌面窗口（`internal/wailsui`）全部以 goroutine 运行；`context` 统一生命周期。
 - 唯一的"额外线程"是 `clip.clipboardThread`——**永久 `LockOSThread` 的专用剪贴板线程**，串行化所有 `OpenClipboard/CloseClipboard`（解决 Go 调度器迁移导致 Close 静默失败、剪贴板泄漏的经典坑）。
 - 输入钩子在独立 OS 线程消息泵上运行（`input_windows.go`）。
 
@@ -61,7 +61,7 @@
 - **UDP 广播自动发现**（各网段定向广播 + 127.0.0.1），2s 公告，12s TTL；节点 ID = `sha256(MachineGuid)` 稳定指纹，8 字节随机 session 判进程重启。
 - **多网卡地址合并 + 优选排序**（同指纹多来源 IP 归一节点，`192.168.*` 恒优先于 ZeroTier 等虚拟网段），发送时逐地址尝试任一成功即成功。
 - **无 KVM 长连**、传输是**每文件一条 TCP 短连接**（JSON 头 + 裸负载 + JSON 应答，收完即关）；仅 KVM 会话期维持一条 TCP。
-- 端口规划：47830/udp 发现、47831/tcp 传输、47832/tcp KVM、47890 面板。
+- 端口规划：47830/udp 发现、47831/tcp 传输、47832/tcp KVM（窗口界面走进程内 Go 绑定，不再有面板端口）。
 
 **评价**：这是两项目**最本质的架构分野**。
 - copywhere 的"广播 + 稳定指纹 + 地址合并"是 MWB **完全没有**的能力，直接消灭了 MWB 最被诟病的"手工填机器名/IP、DNS 解析失败、DHCP 换 IP 就失联"痛点——**copywhere 在这一维度明显更优**。
@@ -99,7 +99,7 @@
 | 断点/续传 | 无 | 无（但有慢链路超时预算） |
 | 超时策略 | `SendTimeout=500ms`、`CONNECT_TIMEOUT=60s`、剪贴板握手 30s | **按 256KB/s 动态预算** `60s+size/256KB`，ZeroTier 慢链路不误杀 |
 | 发送失败补偿 | 无应用层重试（靠 socket 重连） | **60s 暂存重试队列**（`flushLoop`），对端上线即补发 |
-| 进度反馈 | 仅 tray 文本 tooltip | **双向 256KB 粒度进度** → 面板实时进度条 |
+| 进度反馈 | 仅 tray 文本 tooltip | **双向 256KB 粒度进度** → 桌面窗口实时进度条 |
 | 大文件上限 | 剪贴板文件 100MB；拖拽不限；文本 20MB/图 50MB | 单文件 4GB、文本 4MB；剪贴板自动阈值默认 10MB |
 
 **评价**：copywhere 的可靠性工程（sha256、原子落盘、动态超时预算、重试队列、双向进度）**全面优于 MWB**。MWB 的校验强度（2^8~2^17 的伪造检出）在现代标准下是**明显脆弱点**。唯一 copywhere 不如 MWB 的是**没有断点续传**——但两者都不做分块续传，MWB 甚至更差（大文件走单条 pull 连接，中断即重来）。
@@ -116,7 +116,7 @@
 
 **copywhere —— 明文传输 + 逐对令牌 + 人工 TOFU**
 - **传输内容不加密**（仅 LAN 假设 + 令牌准入）；文件靠 sha256 保证完整性但不保证机密性。
-- **逐对独立配对令牌**（`trust.go`，`peers.json`）：面板点击配对 → 对端**人工确认弹窗**（150s、不响应 Esc、须明确裁决）→ 双向交换各自签发的令牌；`sender_id` 须在信任库且 token 常数时间比对相等。未配对一律拒绝。
+- **逐对独立配对令牌**（`trust.go`，`peers.json`）：窗口点「配对」→ 对端**人工确认弹窗**（150s、不响应 Esc、须明确裁决）→ 双向交换各自签发的令牌；`sender_id` 须在信任库且 token 常数时间比对相等。未配对一律拒绝。
 - 单独解除配对即删除记录，**立即双向失效**；config 共享 token 已彻底废弃。
 - KVM 复用同一配对令牌体系（`hello` 携带令牌，被控端按 `id` 查表比对）。
 
@@ -163,7 +163,7 @@
 
 **MWB —— 有完整 DnD 跨屏**：`InputHook` 检测按住拖动越过边缘 → 12 步状态机（`DragDropStep01~12`）→ 把 helper 窗口"瞬移逼出 `DragEnter`"问出资源管理器正在拖的文件名 → `InputSimulation.MouseUp()` 合成终止源端拖拽 → 目标机落 `Desktop\MouseWithoutBorders\` 并打开。**单文件**，跨第二台机器有 `ChangeDropMachine` 接力。用 70×70 半透明主窗当拖拽"影像"。
 
-**copywhere —— 无系统级拖拽跨屏**。全局拖拽投送只在**自家 web 面板内**（把文件拖进浏览器窗口，走手动发送通道，不受阈值限制），不是 Windows 资源管理器的原生拖拽。
+**copywhere —— 无系统级拖拽跨屏**。全局拖拽投送只在**自家桌面窗口内**（把文件拖进窗口即按真实路径投送，不受阈值限制；输入端聚焦后 Ctrl+V 也能直接投送），不是 Windows 资源管理器的原生拖拽。
 
 **评价**：**这是 copywhere 相对 MWB 唯一"整块缺失"的重量级功能**。真实资源管理器拖拽跨屏的 UX 价值很高（直接把文件"甩"到对面屏幕），但它极其脏、竞态多（`FindWindow`+20×20ms 轮询逼 DragEnter、合成 MouseUp、完整性边界），是 MWB 的**高维护成本反面教材**。对 copywhere 是"诱人但危险"的借鉴项，见第 12 节。
 
@@ -216,7 +216,7 @@
 - 注释密度高且诚实（`RealData` 类的坑、`clip` 线程亲和的根因、混合版本兼容性风险都写进文档）。
 - 弱点：`app.go` 单文件 1418 行偏大；无 MWB 式的"运行时对象 dump"自省诊断。
 
-**评价**：copywhere 的工程健康度**显著优于** MWB 的遗留核心；MWB 唯一值得抄的质量实践是**诊断能力**（环形缓冲日志、包收发统计、线程栈转储）——copywhere 目前只有普通 log + 面板日志抽屉。
+**评价**：copywhere 的工程健康度**显著优于** MWB 的遗留核心；MWB 唯一值得抄的质量实践是**诊断能力**（环形缓冲日志、包收发统计、线程栈转储）——copywhere 目前只有普通 log + 窗口日志抽屉。
 
 ---
 
@@ -242,7 +242,7 @@
 | 注入回声区分 | RealData 竞态 hack | LLMHF_INJECTED 正确 | **copywhere** |
 | 触控板支持 | 无 | PTP HID 自研识别 | **copywhere** |
 | 慢链路容错 | 超时较硬 | 动态预算 + 重试队列 | **copywhere** |
-| 图形界面 | WinForms（老） | Web 面板 + SSE + 主题 | **copywhere** |
+| 图形界面 | WinForms（老） | Wails v3 桌面窗口（WebView2）+ 深浅主题 | **copywhere** |
 | 代码可维护性 | 遗留巨石 | 分层 + 71 单测 | **copywhere** |
 | 运行时诊断 | 环形日志+对象dump | 普通 log | **MWB** |
 
@@ -256,7 +256,7 @@
 
 > ✅ **B1 / B2 / B3 均已落地**（见 CHANGELOG「Unreleased」）：B1 事件驱动检测
 > （`internal/clip/watch_windows.go`，轮询保留为兜底）、B3 运行时诊断
-> （`internal/diag` + 面板 `/api/debug`）、B2 富格式同步（`type="rich"`，
+> （`internal/diag` + 窗口日志/诊断）、B2 富格式同步（`type="rich"`，
 > 经发现层 `caps:["rich"]` 能力协商向后兼容，见 protocol.md 3.6）。
 
 **B1. 剪贴板检测改为事件驱动（借鉴 MWB `AddClipboardFormatListener`）**
@@ -270,7 +270,7 @@
 - 收益：显著实用性提升。需在 Header 新增可选字段（向后兼容：旧节点只认 text，忽略富格式）。
 
 **B3. 运行时诊断三件套（借鉴 MWB `Logger` 环形缓冲 + 包统计 + 线程栈转储）**
-- 做法：KVM/传输收发包计数、活动会话状态、节点表做成内存环形缓冲 + 一个 `/api/debug` 端点 dump；钩子/剪贴板线程加"计数看门狗"，面板日志抽屉旁暴露。
+- 做法：KVM/传输收发包计数、活动会话状态、节点表做成内存环形缓冲 + 一个诊断入口 dump；钩子/剪贴板线程加"计数看门狗"，在窗口日志抽屉旁暴露。
 - 收益：copywhere 目前排障靠肉眼 log，跨机问题（尤其 KVM 手感/丢包）难定位。
 
 ### 🟡 建议评估（高价值、中等成本）
@@ -288,7 +288,7 @@
 
 **B6. 大内容"节拍照 + 按需 pull + 反向 push 回退"（借鉴 MWB `Clipboard` beat + `ClipboardAsk`）**
 - 现状：copywhere 是"复制即推"（超阈值直接跳过），被动。
-- 做法：可选——对超阈值内容只发一个轻量"我有内容"通知（面板角标），用户在面板点"接收"再拉。适合"大文件但只有一两台要"的场景，减少无脑广播。
+- 做法：可选——对超阈值内容只发一个轻量"我有内容"通知（窗口角标），用户在窗口点"接收"再拉。适合"大文件但只有一两台要"的场景，减少无脑广播。
 - 代价：引入反向连接与 pull 语义，中等复杂度。**属于产品模式选择，非纯技术**。
 
 ### 🔴 谨慎 / 暂不建议
@@ -320,7 +320,7 @@
 
 ## 13. 结论
 
-1. **两个项目解决的是同一问题的两端**：MWB 为"4 台固定机 + 低延迟软 KVM"深度优化（常连接、事件驱动、Universal 坐标、锁屏），copywhere 为"任意节点 + 零部署 + 内容同步"深度优化（广播发现、sha256、TOFU 配对、Web 面板、多文件/目录）。**copywhere 在部署、发现、可靠性、准入信任、文件覆盖、KVM 稳健性、工程质量上整体领先；MWB 在传输机密性、剪贴板事件实时性、富格式、系统级拖拽、锁屏、KVM 绝对坐标与链式多机上领先。**
+1. **两个项目解决的是同一问题的两端**：MWB 为"4 台固定机 + 低延迟软 KVM"深度优化（常连接、事件驱动、Universal 坐标、锁屏），copywhere 为"任意节点 + 零部署 + 内容同步"深度优化（广播发现、sha256、TOFU 配对、Wails 桌面窗口、多文件/目录）。**copywhere 在部署、发现、可靠性、准入信任、文件覆盖、KVM 稳健性、工程质量上整体领先；MWB 在传输机密性、剪贴板事件实时性、富格式、系统级拖拽、锁屏、KVM 绝对坐标与链式多机上领先。**
 
 2. **最值得立即借鉴的三点**：
    - **B4 Universal 65535 绝对坐标注入** —— 直接解决 copywhere 自认无解的"跨机光标快慢不一致"，可删掉整套手调系数。

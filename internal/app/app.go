@@ -1474,14 +1474,27 @@ func (a *App) flushLoop(ctx context.Context) {
 // ---------- 命令行辅助 ----------
 
 // ScanPeers 在 ctx 时限内广播并收集在线节点。
-func ScanPeers(ctx context.Context, cfg *config.Config) []discovery.Peer {
+//
+// 发现端口被占用（最常见：桌面窗口/run 实例正在运行）时会返回 error 而不是
+// 空列表——早期版本把绑定失败静默吞掉，命令行只能打印"未发现在线节点"，
+// 让用户以为命令失效。
+func ScanPeers(ctx context.Context, cfg *config.Config) ([]discovery.Peer, error) {
 	id := nodeID()
 	store := discovery.NewStore(id)
 	store.SetLocalSubnets(localSubnets())
 	interval := time.Duration(cfg.AnnounceSec) * time.Second
-	go discovery.Run(ctx, cfg.DiscoveryPort, cfg.TransferPort, interval, cfg.NodeName, id, store)
-	<-ctx.Done()
-	return store.Alive(time.Duration(cfg.PeerTTLSec) * time.Second)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- discovery.Run(ctx, cfg.DiscoveryPort, cfg.TransferPort, interval, cfg.NodeName, id, store)
+	}()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return nil, err
+		}
+	case <-ctx.Done():
+	}
+	return store.Alive(time.Duration(cfg.PeerTTLSec) * time.Second), nil
 }
 
 // SendToPeers 一次性把文件或文本发送到给定节点（不受自动同步阈值限制，不重试）。

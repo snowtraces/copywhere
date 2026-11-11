@@ -56,9 +56,9 @@
 
 ## 3. 验证方法（真机）
 
-1. 构建：`go build -ldflags "-H windowsgui" -o copywhere.exe ./cmd/copywhere`
-2. 开关：面板「设置 → 跨屏控制 → 触控板双指滚动（实验性）」或配置文件
-   `kvm_touchpad_gestures`（默认关闭）；面板改动热生效，无需重启。PoC 日志
+1. 构建：`go build -o copywhere.exe ./cmd/copywhere`
+2. 开关：窗口「设置 → 跨屏控制 → 触控板双指滚动（实验性）」或配置文件
+   `kvm_touchpad_gestures`（默认关闭）；窗口改动热生效，无需重启。PoC 日志
    由 `input.SetTouchpadDebug(true)` 控制（默认关），形如：
    `copywhere/input: 触控板双指滚动 delta=-120 横向=false 接管中=true`
 3. 用例矩阵：

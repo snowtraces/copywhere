@@ -10,9 +10,9 @@ import (
 
 func TestServeAndSend(t *testing.T) {
 	got := make(chan Command, 4)
-	srv, err := Serve(func(c Command) error {
+	srv, err := Serve(func(c Command) (any, error) {
 		got <- c
-		return nil
+		return nil, nil
 	})
 	if err != nil {
 		t.Fatalf("启动管道失败: %v", err)
@@ -47,11 +47,11 @@ func TestServeAndSend(t *testing.T) {
 }
 
 func TestHandlerErrorReturnedToClient(t *testing.T) {
-	srv, err := Serve(func(c Command) error {
+	srv, err := Serve(func(c Command) (any, error) {
 		if c.Cmd == "boom" {
-			return errors.New("处理失败")
+			return nil, errors.New("处理失败")
 		}
-		return nil
+		return nil, nil
 	})
 	if err != nil {
 		t.Fatalf("启动管道失败: %v", err)
@@ -65,7 +65,7 @@ func TestHandlerErrorReturnedToClient(t *testing.T) {
 
 func TestSendWithoutServer(t *testing.T) {
 	// 先占位再关闭，确保管道不存在。
-	srv, err := Serve(func(Command) error { return nil })
+	srv, err := Serve(func(Command) (any, error) { return nil, nil })
 	if err != nil {
 		t.Fatalf("启动管道失败: %v", err)
 	}
@@ -79,10 +79,12 @@ func TestSendWithoutServer(t *testing.T) {
 func TestRestartServer(t *testing.T) {
 	// 关闭后能立刻重新监听（验证 Close 不会让管道句柄/线程卡死）。
 	for i := 0; i < 3; i++ {
-		srv, err := Serve(func(Command) error { return nil })
+		srv, err := Serve(func(Command) (any, error) { return nil, nil })
 		if err != nil {
 			t.Fatalf("第 %d 次启动失败: %v", i, err)
 		}
+		// 断言失败时也要释放管道实例，否则后续 Serve 会撞 ERROR_PIPE_BUSY。
+		t.Cleanup(srv.Close)
 		if err := Ping(); err != nil {
 			t.Fatalf("第 %d 次 ping 失败: %v", i, err)
 		}

@@ -63,17 +63,21 @@ Microsoft Edge WebView2 Runtime）。
 git clone <本仓库>
 cd copywhere
 
-# 开发构建（-H windowsgui 确保双击启动时不弹出控制台黑框）
-go build -ldflags "-H windowsgui" -o copywhere.exe ./cmd/copywhere
+# 开发构建（控制台子系统；双击启动时程序会自行隐藏控制台窗口）
+go build -o copywhere.exe ./cmd/copywhere
 
 # 发布构建（注入版本号，与 CHANGELOG / git tag 保持一致）
 $v = "v0.6.0"
-go build -trimpath -ldflags "-s -w -H windowsgui -X copywhere/internal/app.Version=$v" `
-  -o copywhere.exe ./cmd/copywhere
+go build -trimpath -ldflags "-s -w -X copywhere/internal/app.Version=$v" `
+  -o copywhere-$v-windows-amd64.exe ./cmd/copywhere
 
 go test ./...        # 运行全部单元测试
 copywhere version    # 查看版本号
 ```
+
+> 发布构建**不要**加 `-H windowsgui`：GUI 子系统会让 PowerShell 不等待进程，
+> `version` / `nodes` / `send` 等子命令会表现为"没有输出、立刻返回"，
+> `|`、`>` 与退出码也都不可用。双击不弹黑框由程序内的 `hideOwnConsole()` 负责。
 
 exe 图标与版本信息由 `cmd/copywhere/rsrc_windows_amd64.syso` 提供（`go build` 自动嵌入）；
 重新生成方式见 [docs/release.md](docs/release.md)。
@@ -148,8 +152,8 @@ copywhere run [-config 路径]
 | `copywhere init` | 生成默认配置 |
 | `copywhere run [-config 路径]` | 启动无窗口服务（日志到标准输出，适合服务器 / SSH） |
 | `copywhere wails [-config 路径]` | 启动服务 + 系统托盘 + 桌面窗口（与 `run` 互斥） |
-| `copywhere nodes [-config 路径] [-wait 4s]` | 扫描并列出在线节点（含多网卡地址合并结果） |
-| `copywhere send [-config 路径] [-text 内容] [-wait 4s] 文件/目录...` | 立即发送到所有在线节点，不受阈值限制 |
+| `copywhere nodes [-config 路径] [-wait 4s]` | 列出在线节点；**已有实例在运行**时直接查询该实例（发现端口被它占用，子进程不再重复监听） |
+| `copywhere send [-config 路径] [-text 内容] [-wait 4s] 文件/目录...` | 立即发送到所有在线节点，不受阈值限制；有实例在运行时交给它发送（含 `-text`），不重复投送到本机 |
 | `copywhere shell [-install\|-uninstall\|-status]` | 管理资源管理器右键菜单「用 copywhere 发送」（窗口启动时自动注册） |
 | `copywhere shell-send 文件/目录...` | 右键菜单内部调用：经命名管道把路径交给运行中的窗口实例 |
 | `copywhere clip-test` | 本机剪贴板读写自检（覆盖并尝试恢复剪贴板） |
@@ -163,12 +167,13 @@ copywhere — 局域网剪贴板/文件自动同步工具
 
 用法:
   copywhere init                            生成默认配置
-  copywhere run [-config 路径]              启动无窗口服务（节点发现 + 传输，日志到标准输出）
+  copywhere run [-config 路径]              启动无窗口服务（日志到标准输出，适合服务器 / SSH）
   copywhere wails [-config 路径]            启动服务 + 系统托盘 + Wails v3 桌面窗口
                                             （WebView2；无参数双击 exe 即进入该模式）
-  copywhere nodes [-config 路径] [-wait 4s] 扫描并列出局域网在线节点
+  copywhere nodes [-config 路径] [-wait 4s] 列出在线节点（有实例运行时直接查询该实例）
   copywhere send [-config 路径] [-text 内容] [-wait 4s] 文件/目录...
-                                            立即发送到所有在线节点（不受大小阈值限制）
+                                            立即发送到所有在线节点（不受大小阈值限制；
+                                            有实例运行时交给该实例发送）
   copywhere shell [-install|-uninstall|-status]
                                             管理资源管理器右键菜单「用 copywhere 发送」
   copywhere shell-send 文件/目录...         右键菜单调用：交给正在运行的实例发送
@@ -186,7 +191,9 @@ copywhere — 局域网剪贴板/文件自动同步工具
   - run 运行期间，复制（Ctrl+C）小于阈值的文件或文本，会自动推送到所有在线节点
   - 对端收到文件后保存到接收目录并自动写回其剪贴板，直接 Ctrl+V 即可
   - 在资源管理器里右键文件/文件夹 →「用 copywhere 发送」= 立即发送，
-    不受阈值限制；该项由窗口启动时注册（可在窗口「设置 → 通用」关闭）
+    不受阈值限制；该项由桌面窗口启动时注册（可在窗口「设置 → 通用」关闭）
+  - 桌面窗口运行时，nodes / send / shell-send 都通过本机命名管道交给它处理
+    （发现端口与配对状态都在该进程里，子进程不再重复监听）
 
 配置文件: ~/.copywhere/config.json（接收目录: ~/.copywhere/files）
 ```
@@ -351,7 +358,7 @@ gofmt -l .   # 输出应为空
   「解除锁定」。
 - **托盘图标默认在折叠区**（Windows 11 默认策略）：点任务栏 `^` 把图标拖到任务栏，
   或在 设置 → 个性化 → 任务栏 → 其他系统托盘图标 里打开。
-- **桌面窗口日志**：`~/.copywhere/gui.log`（windowsgui 构建没有控制台，这是唯一能
+- **桌面窗口日志**：`~/.copywhere/gui.log`（双击启动时控制台被立即隐藏，这是唯一能
   看到启动过程与错误的地方；启动版本、崩溃堆栈都写在这里；超过 4MB 清空重来）。
 - **提权/低完整性环境**：低完整性进程写不了用户目录、托盘图标会被丢弃、输入注入
   会被拒，窗口会明确拒绝启动并说明原因；提权环境下 shell 菜单/注入行为也受系统
