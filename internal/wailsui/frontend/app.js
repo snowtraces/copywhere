@@ -145,6 +145,13 @@ async function loadRecords() {
   renderSub();
 }
 
+async function loadLogs() {
+  const lines = await call("Logs");
+  app.logs = (Array.isArray(lines) ? lines : []).slice(-1000);
+  if (app.logOpen) renderLogs();
+  updateLogBadge();
+}
+
 // ---------- 传输记录持久化 ----------
 
 // slimFeed 生成可写进 localStorage 的精简记录：去掉渲染用字段，
