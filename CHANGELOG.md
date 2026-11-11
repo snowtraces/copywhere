@@ -26,12 +26,17 @@
 - **修复**：**文件选择器取消不再误报**——Wails v3 把用户取消当作错误返回
   （`Dialog.OpenFile failed: error getting selection: cancelled by user`），此前会弹
   「打开文件选择器失败」；现在识别为正常取消并静默处理，只有真实故障才提示。
+- **新增**：**命令行发送委派 + 默认等待结果汇总**——窗口实例在跑时，`send` 不再自己
+  监听端口，而是通过命名管道建任务（`send-job`/`send-text`），由窗口在后台发送并记录
+  每个对端的结果；命令行默认轮询到完成，逐条打印 `[成功]/[重试]/[失败]` 与汇总，
+  有致命失败退出码 1。`-no-wait` 只建任务即返回，新增 `copywhere status <任务id>` 查询。
+  管道只承载毫秒级请求，大文件传输不会堵住右键发送或二次启动。
 - **修复**：**命令行子命令在 PowerShell 里"没有输出/立刻返回"**——原先发布产物是 GUI 子系统
   （`-H windowsgui`），PowerShell 不等待这类进程，`version` / `nodes` / `send` / `doctor`
-  表现为命令失效，`|`、`>` 与退出码都拿不到；而改成控制台子系统又会让双击闪一下黑框。
-  现在改为发布**两个文件**：`copywhere.exe`（GUI 子系统，双击不弹控制台）与
-  `copywhere-cli.exe`（控制台子系统，命令行专用，PowerShell 等待、输出/管道/退出码正常）；
-  `copywhere.exe` 带子命令时自动转交同目录的 CLI；同时不再抢占调用方已给的标准句柄。
+  表现为命令失效（裸调用与 `>` 重定向拿不到输出与退出码，控制台子系统又会让双击闪黑框）。
+  现在保持 **单文件**：同一 exe 兼作命令行客户端，窗口实例在跑时经命名管道委派执行并
+  等待结果；脚本用管道取输出（`copywhere.exe nodes | Out-File n.txt`）。另提供可选的
+  `copywhere-cli.exe`（控制台子系统），供需要 `>` 或裸退出码的场景使用。
 - **修复**：**再次双击唤回窗口时内容区空白**——被激活的窗口有时只恢复框架、WebView2
   内容不重绘；现在 `ActivateExistingWindow` 在 `ShowWindow` 后显式
   `InvalidateRect` + `UpdateWindow`，唤回即出完整界面。

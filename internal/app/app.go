@@ -1018,20 +1018,34 @@ func textDetail(text string) string {
 
 // SendFiles 同步一批剪贴板文件（多文件/目录自动打包 zip）；对端不可达时进入重试队列。
 func (a *App) SendFiles(paths []string, total int64) {
+	a.SendFilesWithResult(paths)
+}
+
+// SendFilesWithResult 与 SendFiles 相同，但把每个对端的投递结果交回调用方
+// （供 GUI 承接的命令行委派等待并汇总）。结果表示"本轮尝试结果"，
+// 不可达节点仍会进入重试队列，因此不代表最终送达。
+func (a *App) SendFilesWithResult(paths []string) []SendResult {
 	res := a.sendFilePayload(paths)
 	if a.hasRetryableFailure(res) {
 		a.pushPending(pendingEntry{kind: "files", paths: paths, expires: time.Now().Add(pendingTTL)})
 		log.Printf("部分节点不可达，%s 内将对在线节点重试", pendingTTL)
 	}
+	return res
 }
 
 // SendText 同步剪贴板文本；对端不可达时进入重试队列。
 func (a *App) SendText(text string) {
+	a.SendTextWithResult(text)
+}
+
+// SendTextWithResult 与 SendText 相同，但返回每个对端的投递结果。
+func (a *App) SendTextWithResult(text string) []SendResult {
 	res := a.sendTextPayload(text)
 	if a.hasRetryableFailure(res) {
 		a.pushPending(pendingEntry{kind: "text", text: text, expires: time.Now().Add(pendingTTL)})
 		log.Printf("部分节点不可达，%s 内将对在线节点重试", pendingTTL)
 	}
+	return res
 }
 
 // CopyText 把文本写回本机剪贴板，并标记为本机写入，避免被剪贴板监控再次

@@ -4,7 +4,7 @@
   <img src="internal/wailsui/frontend/favicon.png" width="72" alt="copywhere 图标">
 </p>
 
-**局域网剪贴板 / 文件自动同步 + 鼠标键盘跨屏工具**（Windows，Go 实现，绿色免安装；桌面窗口与命令行两个 exe 放同一目录，界面依赖系统 WebView2 运行时）。
+**局域网剪贴板 / 文件自动同步 + 鼠标键盘跨屏工具**（Windows，Go 实现，绿色免安装单文件；界面依赖系统 WebView2 运行时）。
 
 - **剪贴板同步**：在一台机器上 **Ctrl+C** 复制小于阈值的文件（默认 10MB）、文本或截图，
   局域网内所有在线 `copywhere` 节点会自动收到：文件落盘到接收目录并写回其剪贴板，
@@ -50,7 +50,7 @@
 
 ### 下载预编译 exe
 
-从 [GitHub Releases](../../releases) 下载 `copywhere-vX.Y.Z-windows-amd64.exe`（桌面窗口）与 `copywhere-cli-vX.Y.Z-windows-amd64.exe`（命令行），放在**同一目录**，
+从 [GitHub Releases](../../releases) 下载 `copywhere-vX.Y.Z-windows-amd64.exe`，一个文件即可：命令行直接用同一个 exe（窗口在跑时经本机管道委派执行并等待结果），脚本用管道取输出，例如 `copywhere.exe nodes | Out-File n.txt`。
 双击即可运行——首次启动自动生成默认配置（节点名默认为主机名，可在窗口「设置」修改）。
 需要系统 WebView2 运行时（Windows 10 1803+ / Windows 11 一般已预装；缺失时请安装
 Microsoft Edge WebView2 Runtime）。
@@ -63,11 +63,11 @@ Microsoft Edge WebView2 Runtime）。
 git clone <本仓库>
 cd copywhere
 
-# 桌面窗口（GUI 子系统：双击不弹控制台）
+# 一个文件就够：GUI 子系统，双击不弹控制台；命令行走同一 exe（委派给窗口实例）
 go build -trimpath -ldflags "-s -w -H windowsgui -X main.buildFlavor=gui" `
   -o copywhere.exe ./cmd/copywhere
 
-# 命令行（控制台子系统：PowerShell 等待、输出/管道/退出码正常）
+# 可选：控制台子系统版本，想跳过 cmd 包装、直接跑 CLI 时用
 go build -trimpath -ldflags "-s -w -X main.buildFlavor=cli" `
   -o copywhere-cli.exe ./cmd/copywhere
 
@@ -75,19 +75,17 @@ go build -trimpath -ldflags "-s -w -X main.buildFlavor=cli" `
 $v = "v0.6.0"
 go build -trimpath -ldflags "-s -w -H windowsgui -X copywhere/internal/app.Version=$v -X main.buildFlavor=gui" `
   -o copywhere-$v-windows-amd64.exe ./cmd/copywhere
-go build -trimpath -ldflags "-s -w -X copywhere/internal/app.Version=$v -X main.buildFlavor=cli" `
-  -o copywhere-cli-$v-windows-amd64.exe ./cmd/copywhere
 
-go test ./...        # 运行全部单元测试
-copywhere-cli version    # 查看版本号
+go test ./...            # 运行全部单元测试
+.\copywhere.exe version  # 查看版本号（有窗口实例时经管道委派，默认等待结果）
 ```
 
-> **为什么是两个 exe**：GUI 子系统（`-H windowsgui`）双击不弹控制台，但 PowerShell
-> 不等待这类进程，`|`、`>`、`$LASTEXITCODE` 都拿不到；控制台子系统能被 PowerShell
-> 正确等待，但双击时 Windows 必然先创建控制台窗口（会闪一下黑框）。
-> 两个诉求在同一份二进制里无法同时满足，因此拆成：`copywhere.exe` 只负责双击开窗口，
-> 命令行全部走 `copywhere-cli.exe`；`copywhere.exe <子命令>` 会自动转交给同目录的 CLI。
-
+> **命令行与管道**：GUI 子系统（`-H windowsgui`）双击不弹控制台，但 PowerShell 不等待
+> 这类进程——`copywhere.exe nodes > f.txt` 会立刻返回、文件是空的、退出码也不可靠
+> （控制台子系统能被等待，但双击必然闪一下黑框）。所以命令行走"管道"或"委派"：
+> 单条命令直接跑（窗口在跑时经命名管道委派给它执行并等待结果），脚本用
+> `copywhere.exe nodes | Out-File f.txt` 拿到输出与退出码（管道会强制 PowerShell 等待）。
+> 确实需要 `>` 或裸退出码时，另用可选的 `copywhere-cli.exe`（控制台子系统）。
 exe 图标与版本信息由 `cmd/copywhere/rsrc_windows_amd64.syso` 提供（`go build` 自动嵌入）；
 重新生成方式见 [docs/release.md](docs/release.md)。
 
@@ -155,8 +153,8 @@ copywhere run [-config 路径]
 
 ### 命令
 
-命令行由 `copywhere-cli.exe` 执行（例如 `copywhere-cli nodes`）；`copywhere.exe` 带子命令会自动转交给它，
-但 PowerShell 下请直接用 `copywhere-cli.exe`（对 GUI 子系统进程不等待、无法取输出）。
+命令行直接用 `copywhere.exe`（例如 `copywhere.exe nodes`）；若同目录另放了 `copywhere-cli.exe`，也可直接用它，
+两者在 PowerShell 里的等待、输出、`>` 重定向与退出码都正常。
 
 | 命令 | 说明 |
 | --- | --- |
@@ -165,7 +163,8 @@ copywhere run [-config 路径]
 | `copywhere run [-config 路径]` | 启动无窗口服务（日志到标准输出，适合服务器 / SSH） |
 | `copywhere wails [-config 路径]` | 启动服务 + 系统托盘 + 桌面窗口（与 `run` 互斥） |
 | `copywhere nodes [-config 路径] [-wait 4s]` | 列出在线节点；**已有实例在运行**时直接查询该实例（发现端口被它占用，子进程不再重复监听） |
-| `copywhere send [-config 路径] [-text 内容] [-wait 4s] 文件/目录...` | 立即发送到所有在线节点，不受阈值限制；有实例在运行时交给它发送（含 `-text`），不重复投送到本机 |
+| `copywhere send [-config 路径] [-text 内容] [-wait 4s] [-no-wait] 文件/目录...` | 立即发送到所有在线节点，不受阈值限制；有实例在运行时交给它发送（含 `-text`），**默认等待并汇总**每个对端的结果（`-no-wait` 只建任务即返回） |
+| `copywhere status <任务id>` | 查询委派给窗口实例的投送任务结果（id 由 `send` 输出） |
 | `copywhere shell [-install\|-uninstall\|-status]` | 管理资源管理器右键菜单「用 copywhere 发送」（窗口启动时自动注册） |
 | `copywhere shell-send 文件/目录...` | 右键菜单内部调用：经命名管道把路径交给运行中的窗口实例 |
 | `copywhere clip-test` | 本机剪贴板读写自检（覆盖并尝试恢复剪贴板） |
@@ -177,21 +176,26 @@ copywhere run [-config 路径]
 ```text
 copywhere — 局域网剪贴板/文件自动同步工具
 
-两个可执行文件（同目录）:
-  copywhere.exe       桌面窗口（GUI 子系统）：双击启动，不弹控制台；
-                      带子命令运行时会自动转交给 copywhere-cli.exe
-  copywhere-cli.exe   命令行（控制台子系统）：PowerShell / cmd 下等待进程、
-                      输出、管道重定向与退出码都正常，批处理请用它
+用法（单文件即可）:
+  copywhere.exe <子命令>            命令行（同一个 exe；窗口实例在跑时经本机管道
+                                    委派给它执行，并等待每个对端的结果）
+  copywhere.exe                     双击 = 桌面窗口（GUI 子系统，不弹控制台）
+  若同目录另有 copywhere-cli.exe   则命令行也可直接用它（控制台子系统）
 
-用法:
+提示：PowerShell 里脚本请用管道，例如
+      copywhere.exe nodes | Out-File n.txt
+      裸调用与 > 重定向对 GUI 子系统进程不可靠（原因见 README / docs）。
+
+子命令:
   copywhere init                            生成默认配置
   copywhere run [-config 路径]              启动无窗口服务（日志到标准输出，适合服务器 / SSH）
   copywhere wails [-config 路径]            启动服务 + 系统托盘 + Wails v3 桌面窗口
                                             （WebView2；无参数双击 exe 即进入该模式）
   copywhere nodes [-config 路径] [-wait 4s] 列出在线节点（有实例运行时直接查询该实例）
-  copywhere send [-config 路径] [-text 内容] [-wait 4s] 文件/目录...
+  copywhere send [-config 路径] [-text 内容] [-wait 4s] [-no-wait] 文件/目录...
                                             立即发送到所有在线节点（不受大小阈值限制；
-                                            有实例运行时交给该实例发送）
+                                            有实例运行时交给该实例发送并等待结果汇总）
+  copywhere status <任务id>                 查询 send 委派给窗口实例的任务结果
   copywhere shell [-install|-uninstall|-status]
                                             管理资源管理器右键菜单「用 copywhere 发送」
   copywhere shell-send 文件/目录...         右键菜单调用：交给正在运行的实例发送
@@ -211,7 +215,8 @@ copywhere — 局域网剪贴板/文件自动同步工具
   - 在资源管理器里右键文件/文件夹 →「用 copywhere 发送」= 立即发送，
     不受阈值限制；该项由桌面窗口启动时注册（可在窗口「设置 → 通用」关闭）
   - 桌面窗口运行时，nodes / send / shell-send 都通过本机命名管道交给它处理
-    （发现端口与配对状态都在该进程里，子进程不再重复监听）
+    （发现端口与配对状态都在该进程里，子进程不再重复监听）；send 默认等待
+    每个对端的投递结果并汇总，脚本可用 | Out-File 取结果（不要用 >，见文档）
 
 配置文件: ~/.copywhere/config.json（接收目录: ~/.copywhere/files）
 ```

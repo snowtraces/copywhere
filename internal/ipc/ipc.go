@@ -32,8 +32,10 @@ const (
 	CmdPing     = "ping"
 	CmdActivate = "activate"
 	CmdSend     = "send"
+	CmdSendJob  = "send-job"
 	CmdSendText = "send-text"
 	CmdPeers    = "peers"
+	CmdJob      = "job"
 )
 
 // Command 是客户端发给运行中实例的请求。
@@ -41,6 +43,7 @@ type Command struct {
 	Cmd   string   `json:"cmd"`
 	Paths []string `json:"paths,omitempty"`
 	Text  string   `json:"text,omitempty"`
+	ID    string   `json:"id,omitempty"` // CmdJob：任务 id
 }
 
 // reply 是服务端的响应。
@@ -316,9 +319,6 @@ func Activate() error { return Send(Command{Cmd: CmdActivate}) }
 
 // SendPaths 请求已有实例发送这些本地路径。
 func SendPaths(paths []string) error { return Send(Command{Cmd: CmdSend, Paths: paths}) }
-
-// SendText 请求已有实例把这些文本发到全部在线节点。
-func SendText(text string) error { return Send(Command{Cmd: CmdSendText, Text: text}) }
 
 // waitNamedPipe 是 kernel32!WaitNamedPipeW 的轻量封装（x/sys 未导出该函数）。
 func waitNamedPipe(name *uint16, timeoutMs uint32) error {

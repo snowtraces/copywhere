@@ -41,12 +41,7 @@ var buildFlavor = "cli"
 
 // delegateCLI 把子命令转交给同目录的命令行版可执行文件（控制台子系统），
 // 继承标准输入输出并原样返回其退出码。
-func delegateCLI(args []string) int {
-	cli, err := findCLI()
-	if err != nil {
-		log.Printf("找不到命令行版 copywhere-cli.exe（与桌面窗口放在同一目录即可）: %v", err)
-		return 2
-	}
+func runCLI(cli string, args []string) int {
 	cmd := exec.Command(cli, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -83,21 +78,26 @@ func findCLI() (string, error) {
 func usage() {
 	fmt.Print(`copywhere — 局域网剪贴板/文件自动同步工具
 
-两个可执行文件（同目录）:
-  copywhere.exe       桌面窗口（GUI 子系统）：双击启动，不弹控制台；
-                      带子命令运行时会自动转交给 copywhere-cli.exe
-  copywhere-cli.exe   命令行（控制台子系统）：PowerShell / cmd 下等待进程、
-                      输出、管道重定向与退出码都正常，批处理请用它
+用法（单文件即可）:
+  copywhere.exe <子命令>            命令行（同一个 exe；窗口实例在跑时经本机管道
+                                    委派给它执行，并等待每个对端的结果）
+  copywhere.exe                     双击 = 桌面窗口（GUI 子系统，不弹控制台）
+  若同目录另有 copywhere-cli.exe   则命令行也可直接用它（控制台子系统）
 
-用法:
+提示：PowerShell 里脚本请用管道，例如
+      copywhere.exe nodes | Out-File n.txt
+      裸调用与 > 重定向对 GUI 子系统进程不可靠（原因见 README / docs）。
+
+子命令:
   copywhere init                            生成默认配置
   copywhere run [-config 路径]              启动无窗口服务（日志到标准输出，适合服务器 / SSH）
   copywhere wails [-config 路径]            启动服务 + 系统托盘 + Wails v3 桌面窗口
                                             （WebView2；无参数双击 exe 即进入该模式）
   copywhere nodes [-config 路径] [-wait 4s] 列出在线节点（有实例运行时直接查询该实例）
-  copywhere send [-config 路径] [-text 内容] [-wait 4s] 文件/目录...
+  copywhere send [-config 路径] [-text 内容] [-wait 4s] [-no-wait] 文件/目录...
                                             立即发送到所有在线节点（不受大小阈值限制；
-                                            有实例运行时交给该实例发送）
+                                            有实例运行时交给该实例发送并等待结果汇总）
+  copywhere status <任务id>                 查询 send 委派给窗口实例的任务结果
   copywhere shell [-install|-uninstall|-status]
                                             管理资源管理器右键菜单「用 copywhere 发送」
   copywhere shell-send 文件/目录...         右键菜单调用：交给正在运行的实例发送
@@ -117,7 +117,8 @@ func usage() {
   - 在资源管理器里右键文件/文件夹 →「用 copywhere 发送」= 立即发送，
     不受阈值限制；该项由桌面窗口启动时注册（可在窗口「设置 → 通用」关闭）
   - 桌面窗口运行时，nodes / send / shell-send 都通过本机命名管道交给它处理
-    （发现端口与配对状态都在该进程里，子进程不再重复监听）
+    （发现端口与配对状态都在该进程里，子进程不再重复监听）；send 默认等待
+    每个对端的投递结果并汇总，脚本可用 | Out-File 取结果（不要用 >，见文档）
 
 配置文件: ~/.copywhere/config.json（接收目录: ~/.copywhere/files）
 `)
@@ -125,15 +126,18 @@ func usage() {
 
 func main() {
 	log.SetFlags(log.Ltime)
-	// 桌面窗口构建（GUI 子系统）只有一种职责：开窗口。带子命令时转交同目录的
-	// copywhere-cli.exe —— GUI 子系统进程在 PowerShell 里不会被等待，自己执行
-	// 子命令既拿不到输出也拿不到退出码，交给控制台版才是可靠做法。
+	// 桌面窗口构建（GUI 子系统）只有一种职责：开窗口。带子命令时：
+	//   - 同目录有命令行版 copywhere-cli.exe：转交给它（PowerShell 下可直接用）；
+	//   - 没有：回落到本进程内的命令行实现（单文件分发时的默认路径）。
 	// 例外：shell-send 是资源管理器右键菜单的纯 IPC 动作，必须在本进程内完成
 	// （转交会为一个纯 IPC 动作额外拉起控制台子进程，反而闪黑框）。
 	if buildFlavor == "gui" && len(os.Args) > 1 &&
 		os.Args[1] != "wails" && os.Args[1] != "shell-send" {
-		os.Exit(delegateCLI(os.Args[1:]))
+		if cli, ferr := findCLI(); ferr == nil {
+			os.Exit(runCLI(cli, os.Args[1:]))
+		}
 	}
+
 	// 无参数（资源管理器双击 exe）→ 桌面前端（Wails 窗口）。
 	if len(os.Args) < 2 {
 		hideOwnConsole()
@@ -167,6 +171,8 @@ func main() {
 		err = cmdNodes(os.Args[2:])
 	case "send":
 		err = cmdSend(os.Args[2:])
+	case "status":
+		err = cmdStatus(os.Args[2:])
 	case "shell":
 		err = cmdShell(os.Args[2:])
 	case "shell-send":
@@ -379,6 +385,7 @@ func cmdSend(args []string) error {
 	configPath := fs.String("config", "", "配置文件路径")
 	text := fs.String("text", "", "发送文本而不是文件")
 	wait := fs.Duration("wait", 4*time.Second, "发现节点等待时长（仅在无运行中实例时生效）")
+	noWait := fs.Bool("no-wait", false, "委派给运行中实例时立即返回，不等待投送结果")
 	fs.Parse(args)
 	paths := fs.Args()
 	if *text == "" && len(paths) == 0 {
@@ -396,19 +403,9 @@ func cmdSend(args []string) error {
 
 	// 有实例在跑时交给它发送：节点表、配对令牌、失败重试都在那个进程里，
 	// 本进程自己扫描会因发现端口被占用而失败（历史上 send 因此"没反应"）。
+	// 默认等待任务完成并按每个对端的结果汇总；-no-wait 只建任务不等待。
 	if ipc.Ping() == nil {
-		if *text != "" {
-			if err := ipc.SendText(*text); err != nil {
-				return fmt.Errorf("交给运行中的实例发送失败: %w", err)
-			}
-			fmt.Println("已交给运行中的 copywhere 实例发送文本")
-			return nil
-		}
-		if err := ipc.SendPaths(paths); err != nil {
-			return fmt.Errorf("交给运行中的实例发送失败: %w", err)
-		}
-		fmt.Printf("已交给运行中的 copywhere 实例发送 %d 项内容\n", len(paths))
-		return nil
+		return sendViaInstance(paths, *text, *noWait)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), *wait)
@@ -422,6 +419,112 @@ func cmdSend(args []string) error {
 	}
 	log.Printf("发现 %d 个在线节点，开始发送", len(peers))
 	return app.SendToPeers(cfg, peers, paths, *text)
+}
+
+// cmdStatus 查询委派给 GUI 实例的任务（send 默认会打印 id）。
+func cmdStatus(args []string) error {
+	fs := flag.NewFlagSet("status", flag.ExitOnError)
+	fs.Parse(args)
+	id := fs.Arg(0)
+	if id == "" {
+		return fmt.Errorf("用法: copywhere status <任务id>（id 由 send 输出）")
+	}
+	var st jobStatusReply
+	if err := ipc.SendInto(ipc.Command{Cmd: ipc.CmdJob, ID: id}, &st); err != nil {
+		return fmt.Errorf("查询任务失败: %w", err)
+	}
+	if st.State == "running" {
+		fmt.Printf("任务 %s（%s）仍在进行\n", st.ID, st.Kind)
+		return nil
+	}
+	fmt.Printf("任务 %s（%s）已完成\n", st.ID, st.Kind)
+	return printJobResult(st)
+}
+
+// ---------- 命令行委派（交给运行中的 GUI 实例执行） ----------
+
+// jobStartReply 是 IPC 建任务的返回。
+type jobStartReply struct {
+	ID string `json:"id"`
+}
+
+// jobStatusReply 是任务快照。
+type jobStatusReply struct {
+	ID      string          `json:"id"`
+	Kind    string          `json:"kind"`
+	State   string          `json:"state"`
+	Results []jobPeerResult `json:"results"`
+}
+
+// sendViaInstance 把投送请求交给运行中的实例，默认等待并汇总每个对端的结果。
+//
+// 轮询而不是让管道阻塞等待：管理道是单实例串行的，一次大文件传输若占着连接，
+// 右键发送/二次启动/其它命令都会被堵住。任务在 GUI 侧异步执行，
+// 这里只发毫秒级的"查状态"请求。
+func sendViaInstance(paths []string, text string, noWait bool) error {
+	req := ipc.Command{Cmd: ipc.CmdSendJob, Paths: paths}
+	if text != "" {
+		req = ipc.Command{Cmd: ipc.CmdSendText, Text: text}
+	}
+	var started jobStartReply
+	if err := ipc.SendInto(req, &started); err != nil {
+		return fmt.Errorf("交给运行中的实例发送失败: %w", err)
+	}
+	if started.ID == "" {
+		return fmt.Errorf("运行中的实例没有返回任务 id")
+	}
+	if noWait {
+		fmt.Printf("已受理，任务 %s（用 copywhere status %s 查看）\n", started.ID, started.ID)
+		return nil
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	ticker := time.NewTicker(150 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var st jobStatusReply
+		if err := ipc.SendInto(ipc.Command{Cmd: ipc.CmdJob, ID: started.ID}, &st); err != nil {
+			return fmt.Errorf("查询任务 %s 失败: %w", started.ID, err)
+		}
+		if st.State != "running" {
+			return printJobResult(st)
+		}
+		select {
+		case <-ctx.Done():
+			fmt.Printf("已脱离等待，投送在窗口实例中继续（任务 %s）\n", started.ID)
+			return nil
+		case <-ticker.C:
+		}
+	}
+}
+
+// printJobResult 打印每个对端的结果并给出汇总；有致命失败时返回错误（退出码 1）。
+// "重试" 表示对端暂不可达、已进入 GUI 的 60s 重试队列，不算失败。
+func printJobResult(st jobStatusReply) error {
+	if len(st.Results) == 0 {
+		fmt.Println("任务完成：没有可投递的对端（可能已离线）")
+		return nil
+	}
+	ok, retry, failed := 0, 0, 0
+	for _, r := range st.Results {
+		switch {
+		case r.OK:
+			ok++
+			fmt.Printf("  [成功] %s\n", r.Peer)
+		case r.Retry:
+			retry++
+			fmt.Printf("  [重试] %s：%s（60s 内自动补发）\n", r.Peer, r.Msg)
+		default:
+			failed++
+			fmt.Printf("  [失败] %s：%s\n", r.Peer, r.Msg)
+		}
+	}
+	fmt.Printf("汇总：成功 %d、重试 %d、失败 %d\n", ok, retry, failed)
+	if failed > 0 {
+		return fmt.Errorf("有 %d 个节点投送失败", failed)
+	}
+	return nil
 }
 
 // cmdShell 管理资源管理器右键菜单（默认由桌面窗口启动时自动注册）。

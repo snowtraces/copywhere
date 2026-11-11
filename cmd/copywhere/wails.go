@@ -9,7 +9,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"strings"
 
 	"copywhere/internal/app"
 	"copywhere/internal/config"
@@ -89,6 +88,7 @@ func cmdWails(args []string) (err error) {
 
 	// 本机 IPC：右键菜单 shell-send、二次启动、命令行 nodes/send 都靠它，
 	// 不再需要 HTTP 面板。窗口实例持有完整节点表与配对令牌，命令行走这里最省事。
+	jobs := newJobRegistry(a)
 	ipcSrv, ierr := ipc.Serve(func(cmd ipc.Command) (any, error) {
 		switch cmd.Cmd {
 		case ipc.CmdPing:
@@ -99,16 +99,34 @@ func cmdWails(args []string) (err error) {
 			}
 			return nil, errors.New("窗口尚未就绪，请稍后再试")
 		case ipc.CmdSend:
+			// 右键菜单：校验 + 合并窗口后立即返回，不阻塞菜单进程。
 			return nil, a.ShellSendChecked(cmd.Paths)
+		case ipc.CmdSendJob:
+			// 命令行委派：建任务并异步执行，命令行按 job id 轮询结果。
+			valid, err := a.ValidateSendPaths(cmd.Paths)
+			if err != nil {
+				return nil, err
+			}
+			id, err := jobs.startFiles(valid)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]string{"id": id}, nil
 		case ipc.CmdSendText:
-			if strings.TrimSpace(cmd.Text) == "" {
-				return nil, errors.New("文本不能为空")
+			if err := a.ValidateSendText(cmd.Text); err != nil {
+				return nil, err
 			}
-			if len(a.Peers()) == 0 {
-				return nil, errors.New("未发现在线节点：请确认对端已运行 copywhere，且在同一网段")
+			id, err := jobs.startText(cmd.Text)
+			if err != nil {
+				return nil, err
 			}
-			a.SendText(cmd.Text)
-			return nil, nil
+			return map[string]string{"id": id}, nil
+		case ipc.CmdJob:
+			view, ok := jobs.get(cmd.ID)
+			if !ok {
+				return nil, errors.New("任务不存在或已过期")
+			}
+			return view, nil
 		case ipc.CmdPeers:
 			return a.Peers(), nil
 		default:

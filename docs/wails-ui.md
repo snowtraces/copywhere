@@ -67,6 +67,13 @@ internal/record/
   返回值为实际可发送的条目数（已过滤不存在/空的路径）；发送失败才报错。
   注意：粘贴是**手动发送语义**（不受自动同步阈值与暂停状态限制），所以这批文件若刚被
   自动同步发过，对端会再收到一份——这正是"超过阈值/已暂停时手动补发"的入口。
+- **命令行委派（v0.6.0）**：`send` 在检测到窗口实例时不再自己监听，而是通过管道
+  `send-job` / `send-text` 建任务（校验路径与可投递节点后立即返回任务 id），
+  窗口实例在独立 goroutine 里用 `App.SendFilesWithResult` 发送，并把每个对端的
+  `{peer, ok, retry, msg}` 写回任务快照；命令行默认每 150ms 轮询 `job` 直到完成，
+  打印逐对端结果与汇总（`成功/重试/失败`），有致命失败时退出码 1。
+  这样管道始终只承载毫秒级请求，大文件传输不会堵住右键发送或二次启动；
+  `-no-wait` 只建任务即返回，`copywhere status <id>` 可稍后取结果。
 - **文件选择器取消**：Wails v3 把"用户取消"也作为错误返回（`Invalid dialog call:
   Dialog.OpenFile failed: ... cancelled by user`），前端识别 `cancel` 后静默返回，
   不再弹"打开文件选择器失败"提示；只有真实故障才提示。
@@ -119,32 +126,31 @@ internal/record/
 
 要求：Go 1.26.4+（与 go.mod 一致）、Windows 10 1803+ / Windows 11、系统 WebView2
 运行时。Wails 依赖固定为 `github.com/wailsapp/wails/v3 v3.1.0`，Windows 构建不需要 CGO。
-v0.6.0 发布构建实测 13,305,344 B（v0.4.0 基线 9,192,448 B，+3.9 MiB：Wails 运行时、
+v0.6.0 发布构建实测 13,325,312 B（v0.4.0 基线 9,192,448 B，+3.9 MiB：Wails 运行时、
 WebView2 宿主与 v0.5.0 新增的 IPC/右键菜单代码，不含系统 WebView2 本身）。
 
-发布产物是两个文件（原因见「为什么是两个 exe」）：
+发布主产物是**一个** GUI 子系统 exe（双击不弹控制台）；命令行用同一个 exe：
 
 ```powershell
-# 开发/调试构建（控制台子系统，便于看日志）：全部子命令都在这里
+# 开发/调试构建（控制台子系统，便于看日志）
 go build -o copywhere-cli.exe ./cmd/copywhere
-copywhere-cli.exe             # 无参数 → 桌面窗口（控制台可见，仅调试用）
 copywhere-cli.exe version
 
-# 桌面窗口（GUI 子系统，双击不弹控制台）
+# 主产物：桌面窗口（GUI 子系统，双击不弹控制台，单文件即可用）
 go build -trimpath -ldflags "-s -w -H windowsgui -X copywhere/internal/app.Version=v0.6.0 -X main.buildFlavor=gui" `
   -o copywhere-v0.6.0-windows-amd64.exe ./cmd/copywhere
 
-# 命令行（控制台子系统：PowerShell 等待、输出/管道/退出码正常）
+# 可选：控制台子系统版本（需要 > 重定向 / 裸退出码时用）
 go build -trimpath -ldflags "-s -w -X copywhere/internal/app.Version=v0.6.0 -X main.buildFlavor=cli" `
   -o copywhere-cli-v0.6.0-windows-amd64.exe ./cmd/copywhere
 ```
 
-**为什么是两个 exe**：GUI 子系统（`-H windowsgui`）双击不弹控制台，但 PowerShell
-不等待这类进程，`|`、`>`、`$LASTEXITCODE` 都拿不到；控制台子系统能被 PowerShell
-正确等待，但双击时 Windows 必然先创建控制台窗口（闪黑框）。同一份二进制无法同时满足，
-因此 `copywhere.exe` 只负责开窗口，命令行走 `copywhere-cli.exe`；主程序带子命令时会
-自动转交给同目录的 CLI（`-X main.buildFlavor=gui` 控制该分流）。
-
+**命令行为什么要用管道**：GUI 子系统（`-H windowsgui`）双击不弹控制台，但 PowerShell
+不等待这类进程——`copywhere.exe nodes > f.txt` 会立刻返回、文件为空、退出码也不可靠；
+控制台子系统能被等待，可双击必然闪一下黑框。因此单文件保持 GUI 子系统：
+窗口实例在跑时命令经命名管道委派给它执行并等待结果，脚本用
+`copywhere.exe nodes | Out-File f.txt` 取输出与退出码；确实需要 `>` 时用可选的
+`copywhere-cli.exe`。
 冒烟测试（自动退出，隔离端口，可与本机正在运行的实例并存）：
 
 ```powershell

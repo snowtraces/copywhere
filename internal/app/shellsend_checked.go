@@ -3,13 +3,26 @@ package app
 import (
 	"errors"
 	"os"
+	"strings"
 )
 
 // ShellSendChecked 与 ShellSend 相同，但先校验路径与可投递节点，
 // 让 IPC 客户端（右键菜单 shell-send）能在失败时明确告诉用户原因。
 func (a *App) ShellSendChecked(paths []string) error {
+	valid, err := a.ValidateSendPaths(paths)
+	if err != nil {
+		return err
+	}
+	a.shellBatcher.Add(valid)
+	return nil
+}
+
+// ValidateSendPaths 过滤不可访问的路径并确认至少有一个可投递的对端。
+// 供 IPC 入口（右键发送、命令行委派）在真正建任务前给出明确原因。
+func (a *App) ValidateSendPaths(paths []string) ([]string, error) {
 	valid := make([]string, 0, len(paths))
 	for _, p := range paths {
+		p = strings.TrimSpace(p)
 		if p == "" {
 			continue
 		}
@@ -19,12 +32,22 @@ func (a *App) ShellSendChecked(paths []string) error {
 		valid = append(valid, p)
 	}
 	if len(valid) == 0 {
-		return errors.New("没有可发送的文件（路径不存在或为空）")
+		return nil, errors.New("没有可发送的文件（路径不存在或为空）")
+	}
+	if n, reason := a.sendablePeerSummary(); n == 0 {
+		return nil, errors.New(reason)
+	}
+	return valid, nil
+}
+
+// ValidateSendText 校验文本内容并确认至少有一个可投递的对端。
+func (a *App) ValidateSendText(text string) error {
+	if strings.TrimSpace(text) == "" {
+		return errors.New("文本不能为空")
 	}
 	if n, reason := a.sendablePeerSummary(); n == 0 {
 		return errors.New(reason)
 	}
-	a.shellBatcher.Add(valid)
 	return nil
 }
 

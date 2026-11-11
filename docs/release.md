@@ -33,43 +33,43 @@ goversioninfo -o cmd/copywhere/rsrc_windows_amd64.syso cmd/copywhere/versioninfo
 这一步确保 exe 属性页中的文件版本与产品版本匹配发布版本；只设置 Go 的 `-ldflags` 版本
 不会更新 Windows 资源属性。
 
-每次发布构建**两个**可执行文件：桌面窗口（GUI 子系统，双击不弹控制台）与命令行
-（控制台子系统，PowerShell 下等待进程、输出/管道/退出码正常）。两者放在同一目录，
-`copywhere.exe` 带子命令时会自动转交给 `copywhere-cli*.exe`。
+发布主产物是**一个** GUI 子系统 exe（双击不弹控制台）；命令行也用同一个 exe：
+窗口实例在跑时经命名管道委派给它执行并等待结果，没有实例时进程内独立执行。
+脚本取输出请用管道（`| Out-File`），不要用 `>`。可选的第二个产物是控制台子系统版本，
+供需要 `>` 重定向或裸退出码的脚本使用。
 
 ```powershell
 $v = "vX.Y.Z"   # 与 CHANGELOG / git tag 保持一致
 
-# 桌面窗口：GUI 子系统（不要给主程序加控制台，否则双击会闪黑框）
+# 主产物：GUI 子系统（不要加控制台，否则双击会闪黑框）
 go build -trimpath -ldflags "-s -w -H windowsgui -X copywhere/internal/app.Version=$v -X main.buildFlavor=gui" `
   -o copywhere-$v-windows-amd64.exe ./cmd/copywhere
 
-# 命令行：控制台子系统
+# 可选：控制台子系统版本（需要 > 重定向 / 裸退出码时用）
 go build -trimpath -ldflags "-s -w -X copywhere/internal/app.Version=$v -X main.buildFlavor=cli" `
   -o copywhere-cli-$v-windows-amd64.exe ./cmd/copywhere
 ```
 
-发布前在 PowerShell 里实测（必须"命令执行完才返回"、有输出、退出码正确）：
+发布前在 PowerShell 里实测：
 
 ```powershell
-.\copywhere-cli-$v-windows-amd64.exe version        # copywhere vX.Y.Z，$LASTEXITCODE=0
-.\copywhere-cli-$v-windows-amd64.exe version > out.txt   # out.txt 有内容
-.\copywhere-cli-$v-windows-amd64.exe bogus; $LASTEXITCODE # 2
-cmd /c "copywhere-$v-windows-amd64.exe version"     # 桌面窗口程序转交 CLI，同样有输出
+.\copywhere-$v-windows-amd64.exe version                 # 输出 vX.Y.Z（裸调用异步，仅供肉眼确认）
+.\copywhere-$v-windows-amd64.exe version | Out-File o.txt # 管道：等待 + 有内容
+.\copywhere-$v-windows-amd64.exe bogus 2>&1 | Out-File b.txt; $LASTEXITCODE  # 2
+.\copywhere-cli-$v-windows-amd64.exe version > out.txt   # 可选产物：> 也能落盘
 ```
 
-GUI 子系统进程在 PowerShell 里不会被等待，所以**主程序本身不适合承载命令行**；
-控制台子系统又必然给双击启动创建控制台窗口（会闪一下）。这就是拆两个产物的原因，
-不要为了"只要一个文件"把两者合回去。
-
+为什么主产物是 GUI 子系统：控制台子系统能被 PowerShell 正确等待，但双击时 Windows
+必然先创建控制台窗口（闪黑框）；GUI 子系统双击干净，代价是裸调用与 `>` 不可靠
+（PowerShell 不等待、不传句柄）。命令行因此既支持"委派给窗口实例并等待结果"，
+也建议脚本一律用管道；确实需要 `>` 时用可选的 `copywhere-cli.exe`。
 exe 图标与版本信息由 `cmd/copywhere/rsrc_windows_amd64.syso` 自动嵌入，无需额外步骤。
 
 产物运行需要系统 WebView2 运行时（Win10 1803+ / Win11 一般自带）；发布说明中应保留该前提。
 
-产物命名规范：`copywhere-$v-windows-amd64.exe`（桌面窗口）与
-`copywhere-cli-$v-windows-amd64.exe`（命令行）；必须一起上传，缺 CLI 时主程序带子命令
-会提示找不到它。产物只进 GitHub Release 附件，**不要提交进 git 仓库**。
-
+产物命名规范：`copywhere-$v-windows-amd64.exe`（主产物）；可选的
+`copywhere-cli-$v-windows-amd64.exe` 一起上传即可。产物只进 GitHub Release 附件，
+**不要提交进 git 仓库**。
 ## 4. 提交与打标签
 
 ```powershell
