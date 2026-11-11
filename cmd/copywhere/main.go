@@ -12,8 +12,11 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 	"unsafe"
@@ -28,8 +31,63 @@ import (
 	"copywhere/internal/shellmenu"
 )
 
+// buildFlavor 区分同一份代码的两个产物：
+//   - "gui"：GUI 子系统（`-H windowsgui`），双击不弹控制台，只负责桌面窗口；
+//     带子命令时转交 copywhere-cli.exe。
+//   - "cli"（默认）：控制台子系统，承载全部命令行子命令，PowerShell/管道/退出码正常。
+//
+// 由 -ldflags "-X main.buildFlavor=gui" 注入。
+var buildFlavor = "cli"
+
+// delegateCLI 把子命令转交给同目录的命令行版可执行文件（控制台子系统），
+// 继承标准输入输出并原样返回其退出码。
+func delegateCLI(args []string) int {
+	cli, err := findCLI()
+	if err != nil {
+		log.Printf("找不到命令行版 copywhere-cli.exe（与桌面窗口放在同一目录即可）: %v", err)
+		return 2
+	}
+	cmd := exec.Command(cli, args...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return ee.ExitCode()
+		}
+		log.Printf("命令行版执行失败: %v", err)
+		return 1
+	}
+	return 0
+}
+
+// findCLI 在桌面窗口 exe 所在目录查找命令行版：优先 copywhere-cli.exe，
+// 其次接受发布产物按版本命名的 copywhere-cli-vX.Y.Z-windows-amd64.exe。
+func findCLI() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Dir(exe)
+	candidate := filepath.Join(dir, "copywhere-cli.exe")
+	if _, err := os.Stat(candidate); err == nil {
+		return candidate, nil
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, "copywhere-cli-*.exe"))
+	if len(matches) > 0 {
+		sort.Strings(matches)
+		return matches[len(matches)-1], nil
+	}
+	return "", fmt.Errorf("目录 %s 下没有 copywhere-cli.exe", dir)
+}
+
 func usage() {
 	fmt.Print(`copywhere — 局域网剪贴板/文件自动同步工具
+
+两个可执行文件（同目录）:
+  copywhere.exe       桌面窗口（GUI 子系统）：双击启动，不弹控制台；
+                      带子命令运行时会自动转交给 copywhere-cli.exe
+  copywhere-cli.exe   命令行（控制台子系统）：PowerShell / cmd 下等待进程、
+                      输出、管道重定向与退出码都正常，批处理请用它
 
 用法:
   copywhere init                            生成默认配置
@@ -67,6 +125,15 @@ func usage() {
 
 func main() {
 	log.SetFlags(log.Ltime)
+	// 桌面窗口构建（GUI 子系统）只有一种职责：开窗口。带子命令时转交同目录的
+	// copywhere-cli.exe —— GUI 子系统进程在 PowerShell 里不会被等待，自己执行
+	// 子命令既拿不到输出也拿不到退出码，交给控制台版才是可靠做法。
+	// 例外：shell-send 是资源管理器右键菜单的纯 IPC 动作，必须在本进程内完成
+	// （转交会为一个纯 IPC 动作额外拉起控制台子进程，反而闪黑框）。
+	if buildFlavor == "gui" && len(os.Args) > 1 &&
+		os.Args[1] != "wails" && os.Args[1] != "shell-send" {
+		os.Exit(delegateCLI(os.Args[1:]))
+	}
 	// 无参数（资源管理器双击 exe）→ 桌面前端（Wails 窗口）。
 	if len(os.Args) < 2 {
 		hideOwnConsole()

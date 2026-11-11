@@ -4,7 +4,7 @@
   <img src="internal/wailsui/frontend/favicon.png" width="72" alt="copywhere 图标">
 </p>
 
-**局域网剪贴板 / 文件自动同步 + 鼠标键盘跨屏工具**（Windows，Go 实现，单 exe；界面依赖系统 WebView2 运行时）。
+**局域网剪贴板 / 文件自动同步 + 鼠标键盘跨屏工具**（Windows，Go 实现，绿色免安装；桌面窗口与命令行两个 exe 放同一目录，界面依赖系统 WebView2 运行时）。
 
 - **剪贴板同步**：在一台机器上 **Ctrl+C** 复制小于阈值的文件（默认 10MB）、文本或截图，
   局域网内所有在线 `copywhere` 节点会自动收到：文件落盘到接收目录并写回其剪贴板，
@@ -50,7 +50,7 @@
 
 ### 下载预编译 exe
 
-从 [GitHub Releases](../../releases) 下载 `copywhere-vX.Y.Z-windows-amd64.exe`，
+从 [GitHub Releases](../../releases) 下载 `copywhere-vX.Y.Z-windows-amd64.exe`（桌面窗口）与 `copywhere-cli-vX.Y.Z-windows-amd64.exe`（命令行），放在**同一目录**，
 双击即可运行——首次启动自动生成默认配置（节点名默认为主机名，可在窗口「设置」修改）。
 需要系统 WebView2 运行时（Windows 10 1803+ / Windows 11 一般已预装；缺失时请安装
 Microsoft Edge WebView2 Runtime）。
@@ -63,21 +63,30 @@ Microsoft Edge WebView2 Runtime）。
 git clone <本仓库>
 cd copywhere
 
-# 开发构建（控制台子系统；双击启动时程序会自行隐藏控制台窗口）
-go build -o copywhere.exe ./cmd/copywhere
+# 桌面窗口（GUI 子系统：双击不弹控制台）
+go build -trimpath -ldflags "-s -w -H windowsgui -X main.buildFlavor=gui" `
+  -o copywhere.exe ./cmd/copywhere
+
+# 命令行（控制台子系统：PowerShell 等待、输出/管道/退出码正常）
+go build -trimpath -ldflags "-s -w -X main.buildFlavor=cli" `
+  -o copywhere-cli.exe ./cmd/copywhere
 
 # 发布构建（注入版本号，与 CHANGELOG / git tag 保持一致）
 $v = "v0.6.0"
-go build -trimpath -ldflags "-s -w -X copywhere/internal/app.Version=$v" `
+go build -trimpath -ldflags "-s -w -H windowsgui -X copywhere/internal/app.Version=$v -X main.buildFlavor=gui" `
   -o copywhere-$v-windows-amd64.exe ./cmd/copywhere
+go build -trimpath -ldflags "-s -w -X copywhere/internal/app.Version=$v -X main.buildFlavor=cli" `
+  -o copywhere-cli-$v-windows-amd64.exe ./cmd/copywhere
 
 go test ./...        # 运行全部单元测试
-copywhere version    # 查看版本号
+copywhere-cli version    # 查看版本号
 ```
 
-> 发布构建**不要**加 `-H windowsgui`：GUI 子系统会让 PowerShell 不等待进程，
-> `version` / `nodes` / `send` 等子命令会表现为"没有输出、立刻返回"，
-> `|`、`>` 与退出码也都不可用。双击不弹黑框由程序内的 `hideOwnConsole()` 负责。
+> **为什么是两个 exe**：GUI 子系统（`-H windowsgui`）双击不弹控制台，但 PowerShell
+> 不等待这类进程，`|`、`>`、`$LASTEXITCODE` 都拿不到；控制台子系统能被 PowerShell
+> 正确等待，但双击时 Windows 必然先创建控制台窗口（会闪一下黑框）。
+> 两个诉求在同一份二进制里无法同时满足，因此拆成：`copywhere.exe` 只负责双击开窗口，
+> 命令行全部走 `copywhere-cli.exe`；`copywhere.exe <子命令>` 会自动转交给同目录的 CLI。
 
 exe 图标与版本信息由 `cmd/copywhere/rsrc_windows_amd64.syso` 提供（`go build` 自动嵌入）；
 重新生成方式见 [docs/release.md](docs/release.md)。
@@ -146,6 +155,9 @@ copywhere run [-config 路径]
 
 ### 命令
 
+命令行由 `copywhere-cli.exe` 执行（例如 `copywhere-cli nodes`）；`copywhere.exe` 带子命令会自动转交给它，
+但 PowerShell 下请直接用 `copywhere-cli.exe`（对 GUI 子系统进程不等待、无法取输出）。
+
 | 命令 | 说明 |
 | --- | --- |
 | `copywhere`（无参数，或**直接双击 exe**） | 进入桌面窗口模式；双击启动时自动隐藏控制台窗口，托盘常驻 |
@@ -164,6 +176,12 @@ copywhere run [-config 路径]
 
 ```text
 copywhere — 局域网剪贴板/文件自动同步工具
+
+两个可执行文件（同目录）:
+  copywhere.exe       桌面窗口（GUI 子系统）：双击启动，不弹控制台；
+                      带子命令运行时会自动转交给 copywhere-cli.exe
+  copywhere-cli.exe   命令行（控制台子系统）：PowerShell / cmd 下等待进程、
+                      输出、管道重定向与退出码都正常，批处理请用它
 
 用法:
   copywhere init                            生成默认配置

@@ -33,27 +33,42 @@ goversioninfo -o cmd/copywhere/rsrc_windows_amd64.syso cmd/copywhere/versioninfo
 这一步确保 exe 属性页中的文件版本与产品版本匹配发布版本；只设置 Go 的 `-ldflags` 版本
 不会更新 Windows 资源属性。
 
+每次发布构建**两个**可执行文件：桌面窗口（GUI 子系统，双击不弹控制台）与命令行
+（控制台子系统，PowerShell 下等待进程、输出/管道/退出码正常）。两者放在同一目录，
+`copywhere.exe` 带子命令时会自动转交给 `copywhere-cli*.exe`。
+
 ```powershell
 $v = "vX.Y.Z"   # 与 CHANGELOG / git tag 保持一致
-go build -trimpath -ldflags "-s -w -X copywhere/internal/app.Version=$v" `
+
+# 桌面窗口：GUI 子系统（不要给主程序加控制台，否则双击会闪黑框）
+go build -trimpath -ldflags "-s -w -H windowsgui -X copywhere/internal/app.Version=$v -X main.buildFlavor=gui" `
   -o copywhere-$v-windows-amd64.exe ./cmd/copywhere
-.\copywhere-$v-windows-amd64.exe version   # 应输出 copywhere vX.Y.Z
+
+# 命令行：控制台子系统
+go build -trimpath -ldflags "-s -w -X copywhere/internal/app.Version=$v -X main.buildFlavor=cli" `
+  -o copywhere-cli-$v-windows-amd64.exe ./cmd/copywhere
 ```
 
-**不要加 `-H windowsgui`**：GUI 子系统会让 PowerShell 不等待进程，
-`copywhere nodes`、`copywhere version` 等子命令表现为"没输出、命令立刻返回"，
-`|` 与 `>` 也拿不到内容（cmd.exe 会等待，但 PowerShell 不会）。
-控制台子系统下，双击启动时 `hideOwnConsole()` 会立即隐藏系统新建的控制台窗口，
-托盘 + WebView2 窗口照常工作（开发构建一直如此）。发布前请在 PowerShell 里实测
-`.\copywhere-$v-windows-amd64.exe version` 与 `.\copywhere-$v-windows-amd64.exe nodes`：
-必须等命令执行完、有输出、`$LASTEXITCODE` 为 0。
+发布前在 PowerShell 里实测（必须"命令执行完才返回"、有输出、退出码正确）：
+
+```powershell
+.\copywhere-cli-$v-windows-amd64.exe version        # copywhere vX.Y.Z，$LASTEXITCODE=0
+.\copywhere-cli-$v-windows-amd64.exe version > out.txt   # out.txt 有内容
+.\copywhere-cli-$v-windows-amd64.exe bogus; $LASTEXITCODE # 2
+cmd /c "copywhere-$v-windows-amd64.exe version"     # 桌面窗口程序转交 CLI，同样有输出
+```
+
+GUI 子系统进程在 PowerShell 里不会被等待，所以**主程序本身不适合承载命令行**；
+控制台子系统又必然给双击启动创建控制台窗口（会闪一下）。这就是拆两个产物的原因，
+不要为了"只要一个文件"把两者合回去。
 
 exe 图标与版本信息由 `cmd/copywhere/rsrc_windows_amd64.syso` 自动嵌入，无需额外步骤。
 
 产物运行需要系统 WebView2 运行时（Win10 1803+ / Win11 一般自带）；发布说明中应保留该前提。
 
-产物命名规范：`copywhere-$v-windows-amd64.exe`（未来如有跨平台再加后缀）。
-产物只进 GitHub Release 附件，**不要提交进 git 仓库**。
+产物命名规范：`copywhere-$v-windows-amd64.exe`（桌面窗口）与
+`copywhere-cli-$v-windows-amd64.exe`（命令行）；必须一起上传，缺 CLI 时主程序带子命令
+会提示找不到它。产物只进 GitHub Release 附件，**不要提交进 git 仓库**。
 
 ## 4. 提交与打标签
 
@@ -67,7 +82,7 @@ git push origin main --follow-tags
 ## 5. 创建 GitHub Release
 
 ```powershell
-gh release create vX.Y.Z .\copywhere-vX.Y.Z-windows-amd64.exe `
+gh release create vX.Y.Z .\copywhere-vX.Y.Z-windows-amd64.exe .\copywhere-cli-vX.Y.Z-windows-amd64.exe `
   --title "copywhere vX.Y.Z" --notes-file release-notes.md
 ```
 
@@ -82,7 +97,7 @@ gh release create vX.Y.Z .\copywhere-vX.Y.Z-windows-amd64.exe `
 gh release view vX.Y.Z    # 确认 tag、说明、资产齐全
 ```
 
-下载附件运行 `copywhere version`，应输出 `vX.Y.Z`。最后把新 exe 部署到
+下载两个附件后放在同一目录，运行 `copywhere-cli version`（应为 `vX.Y.Z`）与双击 `copywhere`（应无黑框、正常出窗口）。最后把新 exe 部署到
 各节点替换旧版（KVM/传输协议有变更时，**所有节点必须同步升级**）。
 
 ## 快速检查清单

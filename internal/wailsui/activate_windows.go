@@ -24,6 +24,8 @@ var (
 	procGetClassNameW         = user32.NewProc("GetClassNameW")
 	procShowWindow            = user32.NewProc("ShowWindow")
 	procSetForegroundWindow   = user32.NewProc("SetForegroundWindow")
+	procInvalidateRect        = user32.NewProc("InvalidateRect")
+	procUpdateWindow          = user32.NewProc("UpdateWindow")
 	procQueryFullProcessImage = kernel32.NewProc("QueryFullProcessImageNameW")
 )
 
@@ -59,6 +61,11 @@ func ActivateExistingWindow() bool {
 	const swRestore = 9 // SW_RESTORE
 	procShowWindow.Call(found, swRestore)
 	procSetForegroundWindow.Call(found)
+	// 从托盘恢复的窗口（尤其 WebView2）有时只显示窗口框架、内容区一片空白，
+	// 直到用户拖动或缩放才重绘。这里显式标记整窗无效并立刻跟一次重绘，
+	// 让"再次双击唤回"一定拿到已经画好的界面。
+	procInvalidateRect.Call(found, 0, 1) // bErase = TRUE
+	procUpdateWindow.Call(found)
 	return true
 }
 

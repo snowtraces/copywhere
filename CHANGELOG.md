@@ -26,11 +26,15 @@
 - **修复**：**文件选择器取消不再误报**——Wails v3 把用户取消当作错误返回
   （`Dialog.OpenFile failed: error getting selection: cancelled by user`），此前会弹
   「打开文件选择器失败」；现在识别为正常取消并静默处理，只有真实故障才提示。
-- **修复**：**命令行子命令在 PowerShell 里"没有输出/立刻返回"**——此前发布产物按
-  GUI 子系统（`-H windowsgui`）构建，PowerShell 不等待进程，`version` / `nodes` /
-  `send` / `doctor` 等表现为命令失效，`|`、`>` 与退出码都拿不到。现在发布构建改为
-  控制台子系统，双击启动仍由 `hideOwnConsole()` 立即隐藏控制台窗口；同时不再抢占
-  调用方（cmd / PowerShell / 管道）已给的标准句柄，重定向与管道输出恢复正常。
+- **修复**：**命令行子命令在 PowerShell 里"没有输出/立刻返回"**——原先发布产物是 GUI 子系统
+  （`-H windowsgui`），PowerShell 不等待这类进程，`version` / `nodes` / `send` / `doctor`
+  表现为命令失效，`|`、`>` 与退出码都拿不到；而改成控制台子系统又会让双击闪一下黑框。
+  现在改为发布**两个文件**：`copywhere.exe`（GUI 子系统，双击不弹控制台）与
+  `copywhere-cli.exe`（控制台子系统，命令行专用，PowerShell 等待、输出/管道/退出码正常）；
+  `copywhere.exe` 带子命令时自动转交同目录的 CLI；同时不再抢占调用方已给的标准句柄。
+- **修复**：**再次双击唤回窗口时内容区空白**——被激活的窗口有时只恢复框架、WebView2
+  内容不重绘；现在 `ActivateExistingWindow` 在 `ShowWindow` 后显式
+  `InvalidateRect` + `UpdateWindow`，唤回即出完整界面。
 - **修复**：**桌面窗口运行时 `nodes` / `send` 静默失效**——发现端口被窗口实例占用，
   子进程绑定失败的错误又被吞掉，只打印"未发现在线节点"。现在子命令检测到运行中的
   实例就经本机命名管道交给它处理：`nodes` 查询节点表、`send` 发送文件或文本
