@@ -3,8 +3,41 @@
 package clip
 
 import (
+	"bytes"
 	"testing"
+	"time"
 )
+
+// waitRich 等待刚写入的富文本真正可见。
+//
+// Windows 上 SetClipboardData/CloseClipboard 之后，新内容对本进程的后续读取
+// 可能有一两毫秒不可见（本机开着别的剪贴板监听者时更容易遇到）：立即 ReadRich
+// 会拿到空文本/缺格式，等一下再读就齐全了。这是剪贴板发布时序，不是读写逻辑
+// 缺陷，因此这里只对"还没生效"重试；超时后仍把最后一次读到的内容交给调用方
+// 逐项断言——真正的嵌套开关剪贴板回归（文本在、富格式丢）依然会让测试失败。
+func waitRich(t *testing.T, want Rich) Rich {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last Rich
+	var lastErr error
+	for {
+		got, err := ReadRich()
+		last, lastErr = got, err
+		if err == nil &&
+			got.Text == want.Text &&
+			bytes.Equal(got.HTML, want.HTML) &&
+			bytes.Equal(got.RTF, want.RTF) {
+			return got
+		}
+		if time.Now().After(deadline) {
+			if lastErr != nil {
+				t.Fatalf("ReadRich: %v（等待 2s 仍不可见）", lastErr)
+			}
+			return last
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
 
 // TestRichRoundTrip 是 B2 富文本读取路径的回归锁：SetRich 写入
 // 文本+HTML+RTF 后 ReadRich 必须原样读回三种格式。
@@ -28,10 +61,7 @@ func TestRichRoundTrip(t *testing.T) {
 		}
 	})
 
-	got, err := ReadRich()
-	if err != nil {
-		t.Fatalf("ReadRich: %v", err)
-	}
+	got := waitRich(t, want)
 	if got.Text != want.Text {
 		t.Errorf("Text = %q, want %q", got.Text, want.Text)
 	}

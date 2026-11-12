@@ -3,14 +3,12 @@ package wailsui
 import (
 	"context"
 	"embed"
-	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
 	"log"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -45,6 +43,28 @@ type RunOptions struct {
 	Smoke time.Duration
 	// LogWriter 非 nil 时 Wails 自身的警告/错误也写进该文件（与 wails.log 同源）。
 	LogWriter io.Writer
+}
+
+// 二次启动 / IPC 唤回时先调用它：简约界面若已收起到屏幕边缘，先展开面板，
+// 否则 SW_RESTORE 后用户只看到一个小图标，会以为窗口没打开。
+var (
+	revealHookMu sync.RWMutex
+	revealHook   func()
+)
+
+func setRevealHook(fn func()) {
+	revealHookMu.Lock()
+	revealHook = fn
+	revealHookMu.Unlock()
+}
+
+func callRevealHook() {
+	revealHookMu.RLock()
+	fn := revealHook
+	revealHookMu.RUnlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 // Run 创建 Wails v3 应用、窗口与托盘，阻塞直到用户退出。
@@ -111,55 +131,60 @@ func Run(opts RunOptions) error {
 	})
 	go svc.StartBridge(ctx)
 
-	sizePath := windowStatePath(opts.CfgPath)
-	st := readWindowState(sizePath)
+	statePath := windowStatePath(opts.CfgPath)
+	st := readWindowState(statePath)
+	screens := func() []*application.Screen { return wailsApp.Screen.GetAll() }
+	boot := newWindowBootstrap(screens, st)
 
 	var quitting atomic.Bool
 	win := wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name:                       "main",
-		Title:                      windowTitle,
-		Width:                      st.Width,
-		Height:                     st.Height,
-		MinWidth:                   minWidth,
-		MinHeight:                  minHeight,
-		URL:                        "/",
-		InitialPosition:            application.WindowCentered,
-		EnableFileDrop:             true,
-		DevToolsEnabled:            os.Getenv("CW_WAILS_DEVTOOLS") == "1",
-		BackgroundType:             application.BackgroundTypeSolid,
+		Name:            "main",
+		Title:           windowTitle,
+		Width:           boot.width,
+		Height:          boot.height,
+		MinWidth:        boot.minWidth,
+		MinHeight:       boot.minHeight,
+		MaxWidth:        boot.maxWidth,
+		MaxHeight:       boot.maxHeight,
+		Frameless:       boot.frameless,
+		DisableResize:   boot.disableResize,
+		AlwaysOnTop:     boot.alwaysOnTop,
+		InitialPosition: boot.position,
+		X:               boot.x,
+		Y:               boot.y,
+		URL:             "/",
+		EnableFileDrop:  true,
+		DevToolsEnabled: os.Getenv("CW_WAILS_DEVTOOLS") == "1",
+		// 透明背景：吸边收起后只露出应用图标本身（不需要深色方框）。
+		// 标准界面与简约面板都用不透明 CSS 背景，观感不受影响。
+		BackgroundType:             application.BackgroundTypeTransparent,
 		BackgroundColour:           application.NewRGB(10, 14, 19),
 		DefaultContextMenuDisabled: true,
+		// 无边框模式不要 Aero 阴影/圆角：首次以简约/吸边态建窗时，这些装饰会在
+		// 64x64 图标外面画出一圈灰色圆角框（切到标准界面再切回来就消失，因为那条
+		// 路径走的是运行时 SetFrameless）。图标必须只剩图标本身。
+		Windows: application.WindowsWindow{
+			DisableFramelessWindowDecorations: true,
+		},
 	})
 
+	uiWin := wailsWindow{win: win}
+	ctl := newWindowController(uiWin, nativeStyler{win: uiWin}, statePath, st, screens)
+	svc.setUI(ctl)
+	setRevealHook(ctl.Reveal)
+	defer setRevealHook(nil)
+
 	showWindow = func() {
+		ctl.Reveal() // 简约界面收起到边缘时，先展开面板再显示
 		win.Show()
 		win.Focus()
-	}
-
-	// 尺寸记忆：拖动/缩放时去抖落盘，退出时再存一次。
-	var saveMu sync.Mutex
-	var saveTimer *time.Timer
-	saveWindowSize := func() {
-		w, h := win.Size()
-		if w < minWidth || h < minHeight {
-			return // 最小化/隐藏时尺寸无意义，别写坏配置
-		}
-		windowStateWrite(sizePath, windowState{Width: w, Height: h})
-	}
-	saveDebounced := func() {
-		saveMu.Lock()
-		defer saveMu.Unlock()
-		if saveTimer != nil {
-			saveTimer.Stop()
-		}
-		saveTimer = time.AfterFunc(400*time.Millisecond, saveWindowSize)
 	}
 
 	var quitOnce sync.Once
 	quit := func() {
 		quitOnce.Do(func() {
 			quitting.Store(true)
-			saveWindowSize()
+			ctl.Stop()
 			cancel()
 			wailsApp.Quit()
 		})
@@ -171,12 +196,12 @@ func Run(opts RunOptions) error {
 			return
 		}
 		log.Printf("窗口关闭：收进托盘，同步继续在后台运行")
-		saveWindowSize()
+		ctl.Flush()
 		win.Hide()
 		e.Cancel()
 	})
-	win.OnWindowEvent(events.Common.WindowDidMove, func(*application.WindowEvent) { saveDebounced() })
-	win.OnWindowEvent(events.Common.WindowDidResize, func(*application.WindowEvent) { saveDebounced() })
+	win.OnWindowEvent(events.Common.WindowDidMove, func(*application.WindowEvent) { ctl.onMoved() })
+	win.OnWindowEvent(events.Common.WindowDidResize, func(*application.WindowEvent) { ctl.onResized() })
 
 	// 文件拖入窗口：拿到的是真实路径，直接投送，无需先上传临时目录。
 	win.OnWindowEvent(events.Common.WindowFilesDropped, func(e *application.WindowEvent) {
@@ -193,20 +218,34 @@ func Run(opts RunOptions) error {
 		}()
 	})
 
+	// 前端运行时就绪 = 原生窗口一定已创建：再套一次原生样式与几何兜底。
+	// （ApplicationStarted 可能早于 Wails 的建窗 goroutine，见 ApplyNativeStyleWhenReady。）
+	win.OnWindowEvent(events.Common.WindowRuntimeReady, func(*application.WindowEvent) {
+		ctl.ApplyNativeStyle()
+	})
+
 	wailsApp.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
-		log.Printf("Wails 桌面窗口已启动：%dx%d（关闭窗口将收进托盘继续同步）", win.Width(), win.Height())
+		// 建窗后原生句柄才可用：把"简约界面 = 无标题栏样式位"补上并重新套几何，
+		// 否则收起成 64x64 图标时会被系统最小宽度撑开/挤出屏幕。
+		// 这里异步等句柄就绪：Wails 的建窗在 Run 之后的 goroutine 里。
+		go ctl.ApplyNativeStyleWhenReady()
+		ui := ctl.State()
+		log.Printf("Wails 桌面窗口已启动：%dx%d（%s 界面；关闭窗口将收进托盘继续同步）",
+			ui.Width, ui.Height, ui.Mode)
 		svc.EmitSnapshot()
+		// 前端可能错过启动瞬间的 cw:ui：这里再推一次当前模式。
+		wailsApp.Event.Emit("cw:ui", ui)
 		if os.Getenv("CW_WAILS_DEVTOOLS") == "1" {
 			win.OpenDevTools()
 		}
 	})
 
 	wailsApp.OnShutdown(func() {
-		saveWindowSize()
+		ctl.Stop()
 		cancel()
 	})
 
-	buildTray(wailsApp, svc, opts.Core, showWindow, quit)
+	buildTray(wailsApp, svc, opts.Core, ctl, showWindow, quit)
 
 	if opts.Smoke > 0 {
 		go func() {
@@ -222,14 +261,112 @@ func Run(opts RunOptions) error {
 	return nil
 }
 
+// windowBootstrap 把窗口状态文件翻译成 Wails 建窗参数。
+// 简约界面要在一开始就按窄面板（或上次留下的 64x64 吸边图标）建窗，
+// 避免"先开大窗口再缩"的闪一下。
+type windowBootstrap struct {
+	width, height            int
+	minWidth, minHeight      int
+	maxWidth, maxHeight      int
+	frameless, disableResize bool
+	alwaysOnTop              bool
+	position                 application.WindowStartPosition
+	x, y                     int
+}
+
+func newWindowBootstrap(screens func() []*application.Screen, st windowState) windowBootstrap {
+	opts := windowBootstrap{
+		width:       st.Width,
+		height:      st.Height,
+		minWidth:    minWidth,
+		minHeight:   minHeight,
+		position:    application.WindowCentered,
+		frameless:   false,
+		alwaysOnTop: false,
+	}
+	if normalizeUIMode(st.Mode) != UIModeMini {
+		return opts
+	}
+	pinned := st.Pinned != nil && *st.Pinned
+	opts.frameless = true
+	opts.disableResize = true
+	if st.Collapsed {
+		// 上次退出时停在边缘图标：直接按 64x64 透明小窗建出来，落在同一位置。
+		opts.width, opts.height = dockSize, dockSize
+		opts.minWidth, opts.minHeight = dockSize, dockSize
+		opts.maxWidth, opts.maxHeight = dockSize, dockSize
+		// 与 effectiveTopLocked 一致：收起成图标时必须置顶。
+		opts.alwaysOnTop = true
+	} else {
+		opts.width, opts.height = miniWidth, miniHeight
+		opts.minWidth, opts.minHeight = miniWidth, miniHeight
+		opts.maxWidth, opts.maxHeight = miniWidth, miniHeight
+		opts.alwaysOnTop = pinned
+	}
+	if screens == nil {
+		return opts
+	}
+	all := screens()
+
+	// 面板：优先按记下的屏幕名（副屏跨会话稳定）恢复；旧状态没有屏幕名时
+	// 用绝对坐标反查最近的屏幕，再退到主屏。
+	panelScreen := screenByName(all, st.PanelScreen)
+	if panelScreen == nil && st.PanelCX != 0 {
+		panelScreen = screenNearestPoint(all, st.PanelCX, st.AnchorY)
+	}
+	if panelScreen == nil {
+		panelScreen = screensPrimary(all)
+	}
+	panelWork, ok := workRectOf(panelScreen)
+	if !ok {
+		return opts
+	}
+	panelCY := st.AnchorY
+	if panelCY <= 0 {
+		panelCY = panelWork.centerY()
+	}
+	var panel uiRect
+	if st.PanelCX != 0 {
+		panel = panelRect(panelWork, miniWidth, miniHeight, st.PanelCX, panelCY)
+	} else {
+		panel = floatingPanelRect(panelWork, miniWidth, miniHeight, panelCY, miniEdgeGap, st.Edge)
+	}
+
+	r := panel
+	if st.Collapsed {
+		// 图标：按记下的图标屏幕恢复；旧状态没有就与面板同屏。
+		dockScreen := screenByName(all, st.DockScreen)
+		if dockScreen == nil {
+			dockScreen = panelScreen
+		}
+		dockWork, ok := workRectOf(dockScreen)
+		if !ok {
+			dockWork = panelWork
+		}
+		dockAnchor := st.DockAnchorY
+		if dockAnchor <= 0 {
+			// 没有图标锚点（旧状态/手改文件）：按"图标顶边对齐面板顶边"推算。
+			dockAnchor = panel.Y + dockSize/2
+		}
+		r = dockedRect(dockWork, dockSize, dockAnchor, st.Edge)
+	}
+	opts.position = application.WindowXY
+	opts.x, opts.y = r.X, r.Y
+	return opts
+}
+
 // buildTray 创建系统托盘与菜单。
-func buildTray(app *application.App, svc *Service, core *appcore.App, showWindow, quit func()) {
+//
+// 菜单只保留运行期需要的基础项；界面模式由窗口里的按钮/Ctrl+M 切换，并写在
+// wails-window.json 里，下次启动沿用（默认记住上一次是简约还是标准界面）。
+func buildTray(app *application.App, svc *Service, core *appcore.App, ctl *windowController, showWindow, quit func()) {
 	tray := app.SystemTray.New()
 	tray.SetIcon(panel.AppIcon())
-	tray.SetTooltip("copywhere — 局域网剪贴板 / 文件自动同步")
+	tray.SetTooltip("copywhere — 双击打开窗口，右键打开菜单")
 
 	menu := app.NewMenu()
 	menu.Add("打开 copywhere 窗口").OnClick(func(*application.Context) { showWindow() })
+	menu.AddSeparator()
 
 	syncItem := menu.AddCheckbox("自动同步", !core.IsPaused())
 	syncItem.OnClick(func(ctx *application.Context) {
@@ -249,54 +386,51 @@ func buildTray(app *application.App, svc *Service, core *appcore.App, showWindow
 	menu.AddSeparator()
 	menu.Add("退出").OnClick(func(*application.Context) { quit() })
 
+	ctl.setOnChange(func(st UiState) {
+		app.Event.Emit("cw:ui", st)
+	})
+
 	tray.SetMenu(menu)
-	tray.OnClick(func() { tray.OpenMenu() })
-}
 
-// ---------- 窗口尺寸记忆 ----------
-
-type windowState struct {
-	Width  int `json:"width"`
-	Height int `json:"height"`
-}
-
-// windowStatePath 返回窗口尺寸状态文件（与配置文件同目录）。
-func windowStatePath(cfgPath string) string {
-	dir := filepath.Dir(cfgPath)
-	if cfgPath == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".copywhere")
+	// 托盘点击：左键双击直接打开窗口；单击仍打开菜单，但要等一个双击窗口再弹，
+	// 否则第一次单击就会进入菜单的模态循环，双击事件永远到不了托盘窗口。
+	// 右键直接弹菜单（NOTIFYICON_VERSION_4 下是 WM_CONTEXTMENU）。
+	var (
+		clickMu      sync.Mutex
+		menuTimer    *time.Timer
+		suppressTill time.Time
+	)
+	showFromTray := func() {
+		clickMu.Lock()
+		if menuTimer != nil {
+			menuTimer.Stop()
+			menuTimer = nil
+		}
+		// Windows 在双击后还会补发一次 WM_LBUTTONUP；抑制它，避免刚打开窗口
+		// 又弹出菜单。
+		suppressTill = time.Now().Add(600 * time.Millisecond)
+		clickMu.Unlock()
+		showWindow()
 	}
-	return filepath.Join(dir, "wails-window.json")
-}
-
-func readWindowState(path string) windowState {
-	var st windowState
-	if data, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(data, &st)
-	}
-	if st.Width < minWidth || st.Width > 6000 {
-		st.Width = defaultWidth
-	}
-	if st.Height < minHeight || st.Height > 4000 {
-		st.Height = defaultHeight
-	}
-	return st
-}
-
-// windowStateWrite 记录窗口尺寸：下次启动恢复（位置仍居中，避免显示器布局
-// 变化后窗口跑到屏幕外）。
-func windowStateWrite(path string, st windowState) {
-	data, err := json.Marshal(st)
-	if err != nil {
-		return
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		log.Printf("记录窗口尺寸失败: %v", err)
-	}
+	tray.OnClick(func() {
+		clickMu.Lock()
+		if time.Now().Before(suppressTill) {
+			clickMu.Unlock()
+			return
+		}
+		if menuTimer != nil {
+			menuTimer.Stop()
+		}
+		menuTimer = time.AfterFunc(trayMenuDelay(), func() {
+			clickMu.Lock()
+			menuTimer = nil
+			clickMu.Unlock()
+			tray.OpenMenu()
+		})
+		clickMu.Unlock()
+	})
+	tray.OnDoubleClick(showFromTray)
+	tray.OnRightClick(func() { tray.OpenMenu() })
 }
 
 // ---------- Wails 日志 ----------

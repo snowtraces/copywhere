@@ -791,6 +791,259 @@ body.dragging-file .composer-box { border-color: var(--accent); box-shadow: inse
 .lightbox img { max-width: 90vw; max-height: 84vh; border: 1px solid var(--border); background: var(--panel); }
 .lightbox-bar { display: flex; align-items: center; gap: 10px; font-size: 11.5px; color: var(--dim); }
 
+/* ============================================================
+   简约界面（QQ 式竖向窄面板）
+   由 Go 端窗口控制器切换：html[data-ui-mode="mini"]；
+   收起成屏幕边缘图标时窗口只有 64x64，只显示 #miniDock。
+   面板尺寸（320x520 DIP）由 Go 端固定，这里只负责内容排布。
+   ============================================================ */
+.mini, .mini-dock { display: none; }
+
+html[data-ui-mode="mini"] > body { background: transparent; }
+/* 收起态连 html 一起透明：64x64 窗口里只允许出现图标本身，不能有页面底色。 */
+html[data-ui-mode="mini"][data-mini-collapsed="1"],
+html[data-ui-mode="mini"][data-mini-collapsed="1"] > body { background: transparent; }
+html[data-ui-mode="mini"] body > .topbar,
+html[data-ui-mode="mini"] body > .main-row,
+html[data-ui-mode="mini"] body > .statusbar,
+html[data-ui-mode="mini"] body > .bgfx,
+html[data-ui-mode="mini"] body > .logdrawer { display: none; }
+
+html[data-ui-mode="mini"] body > .mini {
+  display: flex; flex-direction: column; flex: 1; min-height: 0;
+  background: var(--bg); border: 1px solid var(--border);
+}
+html[data-ui-mode="mini"][data-mini-collapsed="1"] body > .mini { display: none; }
+html[data-ui-mode="mini"][data-mini-collapsed="1"] body > .mini-dock { display: grid; }
+html[data-ui-mode="mini"][data-mini-collapsed="1"] body > .toast-wrap { display: none; }
+
+/* ---------- 收起后的边缘图标 ---------- */
+/* 窗口是 64x64 且背景透明（BackgroundTypeTransparent）：收起后桌面上只看到
+   应用图标本身，没有深色方框与边框；整块 64x64 仍是点击区域。
+   拖动不交给 CSS 的 --wails-draggable（见 bindMiniDockDrag）：图标需要同时
+   支持"点击展开"和"按住拖动"，而 Wails 的拖动区会在指针一动时就吞掉 click。 */
+.mini-dock {
+  position: fixed; inset: 0; place-items: center; padding: 0;
+  background: transparent; border: 0; --wails-draggable: no-drag;
+  cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none;
+}
+.mini-dock:active { cursor: grabbing; }
+.mini-dock:hover .mini-dock-img { filter: brightness(1.12) drop-shadow(0 3px 9px rgba(0, 0, 0, .5)); }
+.mini-dock:active .mini-dock-img { transform: scale(.94); }
+.mini-dock-img {
+  width: 46px; height: 46px; display: block; pointer-events: none;
+  -webkit-user-drag: none;
+  opacity: .85; /* 半透明：不抢桌面内容的注意力 */
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, .45));
+  transition: transform .12s ease, filter .12s linear;
+}
+.mini-dock-badge {
+  position: absolute; top: 0; right: 0; min-width: 15px; height: 15px;
+  display: grid; place-items: center; padding: 0 3px;
+  background: var(--err); color: #fff; font-size: 9.5px; font-weight: 700;
+  border: 1px solid var(--bg);
+}
+.mini-dock-badge[hidden] { display: none; }
+/* 收起时的错误提示：角标加一圈亮边，和"有新记录"区分开（原文进运行日志）。
+   用内阴影而不是 outline：角标贴在窗口右上角，外扩的圈会被窗口边缘裁掉。 */
+.mini-dock-badge.err { box-shadow: inset 0 0 0 2px #fff; }
+
+/* ---------- 面板头（可拖动窗口） ---------- */
+.mini-head {
+  flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 10px;
+  background: var(--bg-soft); border-bottom: 1px solid var(--border);
+  --wails-draggable: drag;
+}
+.mini-acts { display: flex; gap: 2px; flex: none; --wails-draggable: no-drag; }
+.mini-brand { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.mini-avatar {
+  width: 30px; height: 30px; flex: none; display: grid; place-items: center;
+  background: var(--accent-weak); color: var(--accent); border: 1px solid var(--accent);
+  font-weight: 700; font-size: 13px;
+}
+.mini-id { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.mini-id b {
+  font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mini-sub {
+  font-size: 10px; color: var(--dim); font-variant-numeric: tabular-nums;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mini-btn {
+  width: 24px; height: 24px; display: grid; place-items: center; padding: 0; flex: none;
+  color: var(--dim); background: transparent; border: 1px solid transparent;
+  transition: color .12s linear, border-color .12s linear, background-color .12s linear;
+}
+.mini-btn .ic { width: 14px; height: 14px; }
+.mini-btn:hover { color: var(--accent); border-color: var(--border); background: var(--bg); }
+.mini-btn.close:hover { color: var(--err); border-color: var(--err); }
+.mini-btn.on { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+.mini-btn.primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+.mini-btn.primary:hover { color: var(--accent-ink); outline: 1px solid var(--accent); outline-offset: 1px; }
+
+/* ---------- 状态条 ---------- */
+.mini-bar {
+  flex: none; display: flex; align-items: center; gap: 7px; padding: 5px 10px;
+  font-size: 10.5px; color: var(--dim); background: var(--bg);
+  border-bottom: 1px solid var(--border-dim); font-variant-numeric: tabular-nums;
+}
+.mini-bar .grow { flex: 1; }
+.mini-count { color: var(--faint); }
+.mini-link {
+  font-size: 10.5px; color: var(--dim); padding: 1px 6px;
+  border: 1px solid var(--border-dim); background: var(--bg-soft); white-space: nowrap;
+}
+.mini-link:hover { color: var(--accent); border-color: var(--accent); }
+
+/* ---------- 在线节点（横向一条，可滚动） ---------- */
+.mini-peers {
+  flex: none; display: flex; gap: 5px; padding: 7px 10px; overflow-x: auto;
+  border-bottom: 1px solid var(--border-dim); background: var(--bg-soft);
+  scrollbar-width: none;
+}
+.mini-peers::-webkit-scrollbar { height: 0; }
+.mini-peers:empty { display: none; }
+.mini-peer {
+  display: inline-flex; align-items: center; gap: 5px; flex: none;
+  padding: 3px 7px; border: 1px solid var(--border-dim); background: var(--bg);
+  font-size: 10.5px; color: var(--dim); white-space: nowrap;
+}
+.mini-peer.ok { border-color: var(--border); color: var(--text-2); }
+.mini-peer-dot { width: 5px; height: 5px; flex: none; background: var(--in); }
+.mini-peer-dot.err { background: var(--err); }
+.mini-peer-nm { max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
+.mini-peer-btn {
+  font-size: 10px; padding: 0 5px; line-height: 1.6;
+  border: 1px solid var(--accent); color: var(--accent); background: transparent;
+}
+.mini-peer-btn:hover { background: var(--accent); color: var(--accent-ink); }
+.mini-peer-btn[disabled] { opacity: .5; }
+.mini-empty { font-size: 10.5px; color: var(--faint); }
+
+/* ---------- 传输进度（大文件；标准工作台的进度条在简约模式下不可见） ---------- */
+.mini-xfers {
+  flex: none; display: flex; flex-direction: column; gap: 6px; padding: 6px 10px;
+  background: var(--bg-soft); border-bottom: 1px solid var(--border-dim);
+  max-height: 92px; overflow-y: auto;
+}
+.mini-xfers[hidden] { display: none; }
+.mini-xfer { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.mini-xfer-head {
+  display: flex; align-items: center; gap: 5px; min-width: 0;
+  font-size: 10px; color: var(--dim);
+}
+.mini-xfer-dir { flex: none; color: var(--accent); }
+.mini-xfer.in .mini-xfer-dir { color: var(--in); }
+.mini-xfer-name {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 10.5px; font-weight: 600; color: var(--text-2);
+}
+.mini-xfer-pct {
+  flex: none; font-variant-numeric: tabular-nums; font-weight: 700; color: var(--accent);
+}
+.mini-xfer.in .mini-xfer-pct { color: var(--in); }
+.mini-xfer-bar { height: 3px; overflow: hidden; background: var(--track); }
+.mini-xfer-bar > i { display: block; height: 100%; background: var(--accent); transition: width .12s linear; }
+.mini-xfer.in .mini-xfer-bar > i { background: var(--in); }
+
+/* ---------- 时间线（IM 式：接收靠左、发送靠右） ---------- */
+.mini-feed {
+  flex: 1; min-height: 0; overflow-y: auto; padding: 8px 10px 10px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.mini-empty-feed {
+  margin: auto; text-align: center; font-size: 10.5px; line-height: 1.9;
+  color: var(--faint); padding: 10px;
+}
+.mini-row { display: flex; min-width: 0; animation: rise .16s linear; }
+.mini-row.in { justify-content: flex-start; }
+.mini-row.out { justify-content: flex-end; }
+.mini-msg {
+  display: flex; flex-direction: column; gap: 3px; align-items: flex-start;
+  min-width: 0; max-width: 86%;
+}
+.mini-row.out .mini-msg { align-items: flex-end; }
+.mini-who {
+  display: flex; align-items: baseline; gap: 6px; max-width: 100%; padding: 0 2px;
+  font-size: 9.5px; color: var(--faint); font-variant-numeric: tabular-nums;
+}
+.mini-who-name {
+  max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 10px; font-weight: 600; color: var(--dim);
+}
+.mini-row.out .mini-who-name { color: var(--accent); }
+.mini-who-time { flex: none; }
+.mini-bubble {
+  max-width: 100%; min-width: 0; padding: 5px 8px; text-align: left;
+  background: var(--bubble-in-bg); border: 1px solid var(--border);
+  color: var(--text-2); font-size: 11.5px; line-height: 1.55;
+  transition: border-color .12s linear;
+}
+.mini-row.in .mini-bubble { border-left: 2px solid var(--in); }
+.mini-row.out .mini-bubble {
+  background: var(--bubble-out-bg); border-right: 2px solid var(--accent);
+}
+.mini-row.fail .mini-bubble { border-color: var(--err); }
+.mini-bubble:hover { border-color: var(--border-lit); }
+.mini-bubble.text {
+  white-space: pre-wrap; overflow-wrap: anywhere; user-select: text;
+  max-height: 132px; overflow: hidden; cursor: pointer;
+}
+.mini-bubble.text.open { max-height: none; }
+.mini-bubble.img {
+  max-width: 200px; padding: 2px; background: var(--bg);
+  border-width: 2px; cursor: zoom-in;
+}
+.mini-img { display: block; max-width: 100%; max-height: 132px; background: var(--bg); }
+.mini-row.in .mini-img:hover { outline: 1px solid var(--in); outline-offset: -1px; }
+.mini-row.out .mini-img:hover { outline: 1px solid var(--accent); outline-offset: -1px; }
+.mini-bubble.file {
+  display: flex; align-items: center; gap: 7px; min-width: 168px;
+}
+.mini-bubble.file.clickable { cursor: pointer; }
+.mini-fico {
+  width: 30px; height: 30px; flex: none; display: grid; place-items: center;
+  font-size: 8.5px; font-weight: 700; letter-spacing: .5px; color: #fff;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .28);
+}
+.mini-finfo { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.mini-fname {
+  font-size: 11.5px; font-weight: 600; color: var(--text); line-height: 1.35;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; word-break: break-all;
+}
+.mini-fmeta { font-size: 9.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.mini-fail {
+  font-size: 9.5px; color: var(--err); border: 1px solid var(--err); padding: 0 4px;
+}
+
+/* ---------- 输入区 ---------- */
+.mini-composer {
+  flex: none; display: flex; align-items: flex-end; gap: 5px; padding: 7px 8px;
+  border-top: 1px solid var(--border); background: var(--bg-soft);
+}
+.mini-composer textarea {
+  flex: 1; min-width: 0; resize: none; min-height: 24px; max-height: 88px;
+  padding: 3px 5px; line-height: 1.5; font-size: 11.5px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  font-family: var(--mono); user-select: text;
+  overflow-y: hidden; /* 默认没有滚动条；内容超过上限时才出现（见 .scroll） */
+}
+.mini-composer textarea.scroll { overflow-y: auto; }
+.mini-composer textarea::placeholder { color: var(--faint); }
+.mini-composer textarea:focus { outline: none; border-color: var(--accent); }
+.mini-composer .mini-btn { margin-bottom: 1px; }
+.mini-composer .mini-btn.primary { margin-left: 1px; }
+html[data-ui-mode="mini"] body.dragging-file .mini { outline: 2px dashed var(--accent); outline-offset: -5px; }
+
+/* ---------- 简约界面里的弹层 ---------- */
+html[data-ui-mode="mini"] .modal-backdrop,
+html[data-ui-mode="mini"] .sheet-backdrop { padding: 8px; }
+html[data-ui-mode="mini"] .modal { width: 100%; padding: 14px; }
+html[data-ui-mode="mini"] .modal-acts { flex-wrap: wrap; }
+html[data-ui-mode="mini"] .toast-wrap { bottom: 54px; }
+html[data-ui-mode="mini"] .toast { max-width: calc(100vw - 24px); font-size: 11px; }
+
 @media (max-width: 1180px) {
   .dock { width: 276px; }
   .brand .ver { display: none; }

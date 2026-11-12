@@ -486,6 +486,21 @@ func TestImagePreview(t *testing.T) {
 	if _, err := s.ImagePreview(filepath.Join(cfg.ReceiveDir, "missing.png")); err == nil {
 		t.Fatal("不存在的图片应报错")
 	}
+
+	// 发送端记录指向本机任意路径：LocalImagePreview 不做接收目录边界限制。
+	url, err = s.LocalImagePreview(outside)
+	if err != nil {
+		t.Fatalf("预览本机图片失败: %v", err)
+	}
+	if !strings.HasPrefix(url, prefix) {
+		t.Fatalf("本机图片 data URL 前缀不符: %q", url)
+	}
+	if _, err := s.LocalImagePreview(txt); err == nil || !strings.Contains(err.Error(), "仅支持图片") {
+		t.Fatalf("本机非图片应被拒绝，实际: %v", err)
+	}
+	if _, err := s.LocalImagePreview(filepath.Join(t.TempDir(), "missing.png")); err == nil {
+		t.Fatal("本机不存在的图片应报错")
+	}
 }
 
 func TestStartBridgeForwardsBusEvents(t *testing.T) {

@@ -115,6 +115,17 @@ type Core interface {
 	CopyText(text string) error
 }
 
+// uiControl 是桌面窗口的外观控制能力（生产环境由 windowController 实现）。
+// 抽成接口后，界面模式的绑定方法可以脱离真实窗口单测。
+type uiControl interface {
+	State() UiState
+	SetMode(mode string) error
+	SetPinned(on bool) error
+	SetCollapsed(collapsed bool) error
+	BeginDrag() error
+	Hide()
+}
+
 // Service 是绑定给 Wails 前端的服务实例。
 // Wails 以 goroutine 并发调用这些方法，所有对 cfg 的读写都在 mu 下进行。
 type Service struct {
@@ -131,6 +142,9 @@ type Service struct {
 
 	hookMu       sync.RWMutex
 	pauseChanged func(paused bool)
+
+	uiMu sync.RWMutex
+	ui   uiControl
 }
 
 // NewService 创建绑定服务。core/cfg/bus 必须非 nil。
@@ -159,6 +173,19 @@ func (s *Service) setPauseHook(fn func(bool)) {
 	s.hookMu.Lock()
 	s.pauseChanged = fn
 	s.hookMu.Unlock()
+}
+
+// setUI 注入窗口外观控制器（窗口创建后调用；前端在此之前不会发起调用）。
+func (s *Service) setUI(ui uiControl) {
+	s.uiMu.Lock()
+	s.ui = ui
+	s.uiMu.Unlock()
+}
+
+func (s *Service) currentUI() uiControl {
+	s.uiMu.RLock()
+	defer s.uiMu.RUnlock()
+	return s.ui
 }
 
 func (s *Service) firePauseHook(paused bool) {
@@ -279,6 +306,139 @@ func (s *Service) Peers() []Peer {
 
 // Records 返回时间线记录（旧 → 新，来自事件总线缓存）。
 func (s *Service) Records() []panel.FileView { return s.bus.Files() }
+
+// Logs 返回缓存的运行日志。
+func (s *Service) Logs() []string { return s.bus.Logs() }
+
+// Paired 返回已配对设备列表。
+func (s *Service) Paired() []PairedNode {
+	list := s.core.PairedList()
+	out := make([]PairedNode, len(list))
+	for i, e := range list {
+		out[i] = PairedNode{ID: e.ID, Name: e.Name, PairedAt: e.PairedAt.Format("2006-01-02 15:04")}
+	}
+	return out
+}
+
+// Settings 返回设置页视图。
+func (s *Service) Settings() Settings {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return Settings{
+		NodeName:      s.cfg.NodeName,
+		ReceiveDir:    s.cfg.ReceiveDir,
+		MaxAutoCopyMB: s.cfg.MaxAutoCopyMB,
+		AutoPaste:     s.cfg.AutoPaste,
+		TextSync:      s.cfg.TextSync,
+		KVMEnabled:    s.cfg.KVMOn(),
+		KVMTouchpad:   s.cfg.KVMTouchpadOn(),
+		KVMTouchSpeed: s.cfg.KVMTouchpadSpeedPct(),
+		KVMMoveMs:     s.cfg.KVMMoveMs,
+		KVMReflowMs:   s.cfg.KVMReflowMs,
+		KVMSpeedPct:   s.cfg.KVMSpeedPct,
+		KVMLeft:       s.cfg.KVMLeft,
+		KVMRight:      s.cfg.KVMRight,
+		KVMEdgeDZ:     s.cfg.KVMEdgeDeadZone(),
+		ShellMenu:     s.cfg.ShellMenuOn(),
+		DiscoveryPort: s.cfg.DiscoveryPort,
+		TransferPort:  s.cfg.TransferPort,
+		KVMPort:       s.cfg.KVMPort,
+		AnnounceSec:   s.cfg.AnnounceSec,
+		PeerTTLSec:    s.cfg.PeerTTLSec,
+		ConfigPath:    s.cfgPath,
+	}
+}
+
+// Info 是「关于」区块需要的静态信息。
+type Info struct {
+	Version    string `json:"version"`
+	ConfigPath string `json:"configPath"`
+	ReceiveDir string `json:"receiveDir"`
+	ExePath    string `json:"exePath"`
+	PanelMode  string `json:"panelMode"`
+}
+
+// Info 返回关于信息。
+func (s *Service) Info() Info {
+	exe, _ := os.Executable()
+	s.mu.Lock()
+	dir := s.cfg.ReceiveDir
+	s.mu.Unlock()
+	return Info{
+		Version:    appcore.Version,
+		ConfigPath: s.cfgPath,
+		ReceiveDir: dir,
+		ExePath:    exe,
+		PanelMode:  "Wails v3（WebView2 独立窗口）",
+	}
+}
+
+// ---------- 界面模式（标准 / 简约） ----------
+
+// UiState 返回界面模式快照。前端启动时读一次，之后靠 "cw:ui" 事件同步。
+func (s *Service) UiState() UiState {
+	ui := s.currentUI()
+	if ui == nil {
+		return UiState{Mode: UIModeStandard}
+	}
+	return ui.State()
+}
+
+// SetUiMode 切换标准界面（宽窗口）与简约界面（竖向窄面板）。
+func (s *Service) SetUiMode(mode string) (UiState, error) {
+	ui := s.currentUI()
+	if ui == nil {
+		return UiState{Mode: UIModeStandard}, errors.New("窗口尚未就绪")
+	}
+	if err := ui.SetMode(mode); err != nil {
+		return ui.State(), err
+	}
+	return ui.State(), nil
+}
+
+// SetAlwaysOnTop 切换简约界面的「固定在屏幕最上层」。
+func (s *Service) SetAlwaysOnTop(on bool) (UiState, error) {
+	ui := s.currentUI()
+	if ui == nil {
+		return UiState{Mode: UIModeStandard}, errors.New("窗口尚未就绪")
+	}
+	if err := ui.SetPinned(on); err != nil {
+		return ui.State(), err
+	}
+	return ui.State(), nil
+}
+
+// SetCollapsed 把简约界面收起到屏幕左右边缘（只剩一个图标），或从图标展开。
+func (s *Service) SetCollapsed(collapsed bool) (UiState, error) {
+	ui := s.currentUI()
+	if ui == nil {
+		return UiState{Mode: UIModeStandard}, errors.New("窗口尚未就绪")
+	}
+	if err := ui.SetCollapsed(collapsed); err != nil {
+		return ui.State(), err
+	}
+	return ui.State(), nil
+}
+
+// BeginWindowDrag 让吸边图标进入系统拖动循环（前端判定按住移动超过阈值后调用）。
+// 用原生拖动保证窗口跟手；松手后的位置由窗口事件吸附到最近的左/右边缘并记住。
+func (s *Service) BeginWindowDrag() error {
+	ui := s.currentUI()
+	if ui == nil {
+		return errors.New("窗口尚未就绪")
+	}
+	return ui.BeginDrag()
+}
+
+// HideWindow 把窗口收进托盘（进程、同步与剪贴板监听继续）。
+func (s *Service) HideWindow() error {
+	ui := s.currentUI()
+	if ui == nil {
+		return errors.New("窗口尚未就绪")
+	}
+	ui.Hide()
+	return nil
+}
 
 // ---------- 操作 ----------
 
@@ -535,6 +695,30 @@ func (s *Service) ImagePreview(path string) (string, error) {
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", errors.New("仅允许预览接收目录内的文件")
 	}
+	return readImagePreview(abs, ct)
+}
+
+// LocalImagePreview 返回本机任意图片路径的 data URL（发送端记录的缩略图/灯箱）。
+// 与 ImagePreview 的差别是不限制在接收目录内：发送端记录指向用户自己的文件。
+// 仍然只接受常见图片扩展名并限制大小，避免超大数据塞进 WebView。
+func (s *Service) LocalImagePreview(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", errors.New("路径为空")
+	}
+	ct, ok := imageContentType(path)
+	if !ok {
+		return "", errors.New("仅支持图片预览")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", errors.New("路径非法")
+	}
+	return readImagePreview(abs, ct)
+}
+
+// readImagePreview 读取图片并编码为 data URL（调用方已完成扩展名与目录校验）。
+func readImagePreview(abs, ct string) (string, error) {
 	fi, err := os.Stat(abs)
 	if err != nil {
 		return "", errors.New("文件不存在")

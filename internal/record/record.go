@@ -12,5 +12,6 @@ type File struct {
 	Size   int64
 	Status string
 	Detail string
-	Text   bool // true=文本同步记录（Name 为内容预览）
+	Path   string // 本机路径：接收=落盘路径，发送=源文件路径（文本/打包项可能为空）
+	Text   bool   // true=文本同步记录（Name 为内容预览）
 }

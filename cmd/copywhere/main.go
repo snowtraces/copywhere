@@ -41,7 +41,7 @@ func usage() {
 
 用法（单文件即可）:
   copywhere.exe <子命令>            命令行（同一个 exe；窗口实例在跑时经本机管道
-                                    委派给它执行，并等待每个对端的结果）
+                                    委派给它执行）
   copywhere.exe                     双击 = 桌面窗口（GUI 子系统，不弹控制台）
 
 提示：PowerShell 里脚本请用管道，例如
@@ -77,8 +77,9 @@ func usage() {
   - 在资源管理器里右键文件/文件夹 →「用 copywhere 发送」= 立即发送，
     不受阈值限制；该项由桌面窗口启动时注册（可在窗口「设置 → 通用」关闭）
   - 桌面窗口运行时，nodes / send / shell-send 都通过本机命名管道交给它处理
-    （发现端口与配对状态都在该进程里，子进程不再重复监听）；send 默认等待
-    每个对端的投递结果并汇总，脚本可用 | Out-File 取结果（不要用 >，见文档）
+    （发现端口与配对状态都在该进程里，子进程不再重复监听）；send 默认只受理并
+    打印任务 id，结果用 status 查询；要一次拿到汇总才加 -wait-result，脚本可用
+    | Out-File 取结果（不要用 >，见文档）
 
 配置文件: ~/.copywhere/config.json（接收目录: ~/.copywhere/files）
 `)
@@ -356,7 +357,8 @@ func cmdSend(args []string) error {
 
 	// 有实例在跑时交给它发送：节点表、配对令牌、失败重试都在那个进程里，
 	// 本进程自己扫描会因发现端口被占用而失败（历史上 send 因此"没反应"）。
-	// 默认等待任务完成并按每个对端的结果汇总；-no-wait 只建任务不等待。
+	// 默认只建任务并立即返回（打印任务 id，结果用 status 查）；-wait-result 才等到
+	// 投送结束并汇总每个对端的结果。
 	if ipc.Ping() == nil {
 		return sendViaInstance(paths, *text, *waitResult, *timeout)
 	}
@@ -409,7 +411,7 @@ type jobStatusReply struct {
 	Results []jobPeerResult `json:"results"`
 }
 
-// sendViaInstance 把投送请求交给运行中的实例，默认等待并汇总每个对端的结果。
+// sendViaInstance 把投送请求交给运行中的实例；-wait-result 时才等待并汇总每个对端的结果。
 //
 // 轮询而不是让管道阻塞等待：管理道是单实例串行的，一次大文件传输若占着连接，
 // 右键发送/二次启动/其它命令都会被堵住。任务在 GUI 侧异步执行，

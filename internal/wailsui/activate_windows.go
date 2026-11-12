@@ -58,6 +58,9 @@ func ActivateExistingWindow() bool {
 	if found == 0 {
 		return false
 	}
+	// 简约界面可能收起到屏幕边缘只剩一个图标：先展开面板再恢复，否则用户
+	// 只看到一个 52x52 的小图标，会以为窗口没打开。
+	callRevealHook()
 	const swRestore = 9 // SW_RESTORE
 	procShowWindow.Call(found, swRestore)
 	procSetForegroundWindow.Call(found)

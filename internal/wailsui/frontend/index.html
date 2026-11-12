@@ -6,6 +6,19 @@
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="alternate icon" type="image/png" href="/favicon.png">
 <title>copywhere</title>
+<script>
+// 首帧前先按上次的界面模式打标记：简约窗口（320x520）不会先闪一下标准界面。
+// 权威状态在 Go 端 wails-window.json，这里只是给 CSS 一个初始值。
+try {
+  if (localStorage.getItem("cw-ui-mode") === "mini") {
+    document.documentElement.setAttribute("data-ui-mode", "mini");
+    // 上次退出时是吸边图标：64x64 窗口里不要先画一帧面板。
+    if (localStorage.getItem("cw-ui-collapsed") === "1") {
+      document.documentElement.setAttribute("data-mini-collapsed", "1");
+    }
+  }
+} catch (e) { /* 存储不可用时按标准界面渲染 */ }
+</script>
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
@@ -45,6 +58,9 @@
   </div>
 
   <div class="top-actions">
+    <button class="iconbtn" id="btnMiniMode" title="切换到简约界面（Ctrl+M）" aria-label="切换到简约界面">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M8 3h8v18H8zM11 7h2M11 10h2M11 18h2"/></svg>
+    </button>
     <button class="iconbtn" id="btnPause" title="暂停自动同步" aria-label="暂停自动同步">
       <svg class="ic" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg>
     </button>
@@ -119,7 +135,7 @@
           <svg class="ic" viewBox="0 0 24 24"><path d="M21 12l-8 8a5 5 0 0 1-7-7l8-8a4 4 0 0 1 6 6l-8 8a2 2 0 0 1-3-3l7-7"/></svg>
         </button>
         <textarea class="cinput" id="composerInput" rows="1"
-          placeholder="输入文本，回车发送 / Shift+回车换行；复制文件后在此 Ctrl+V 或拖入窗口即投送"
+          placeholder="Shift+Enter换行；可直接粘贴文件"
           aria-label="要发送的文本"></textarea>
         <button class="btn primary btn-send" id="btnSend" title="发送文本（Enter）">
           <svg class="ic" viewBox="0 0 24 24"><path d="M4 12l16-8-6 16-2-6zM12 14l4-4"/></svg>
@@ -197,6 +213,65 @@
   <span class="grow"></span>
   <span id="statusRight">—</span>
 </footer>
+
+<!-- 简约界面：QQ 式竖向窄面板。窗口尺寸与无边框由 Go 端控制器负责，
+     这里只负责内容布局；收起成屏幕边缘图标时只显示下面的 #miniDock。 -->
+<div class="mini" id="miniShell">
+  <header class="mini-head">
+    <div class="mini-brand">
+      <span class="mini-avatar" id="miniAvatar">?</span>
+      <span class="mini-id">
+        <b id="miniName">—</b>
+        <span class="mini-sub" id="miniSub">—</span>
+      </span>
+    </div>
+    <div class="mini-acts">
+      <button class="mini-btn" id="btnMiniPin" title="固定在屏幕最上层" aria-label="固定在屏幕最上层" aria-pressed="false">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M12 3v8M8 6h8l2 3-6 2-6-2zM12 11v10"/></svg>
+      </button>
+      <button class="mini-btn" id="btnMiniCollapse" title="收起到屏幕边缘（只留图标）" aria-label="收起到屏幕边缘">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M14 4h6v16h-6M10 12H3M6 9l-3 3 3 3"/></svg>
+      </button>
+      <button class="mini-btn" id="btnMiniStandard" title="回到标准界面（Ctrl+M）" aria-label="回到标准界面">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M4 5h16v11H4zM9 20h6M12 16v4"/></svg>
+      </button>
+      <button class="mini-btn close" id="btnMiniHide" title="收进托盘（同步继续）" aria-label="收进托盘">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="mini-bar">
+    <span class="dot" id="miniDot"></span>
+    <span id="miniSync">同步中</span>
+    <span class="mini-count" id="miniCount">在线 0</span>
+    <span class="grow"></span>
+    <button class="mini-link" id="btnMiniPause">暂停</button>
+  </div>
+
+  <div class="mini-peers" id="miniPeers" aria-label="在线节点"></div>
+
+  <div class="mini-xfers" id="miniXfer" aria-live="polite" hidden></div>
+
+  <div class="mini-feed" id="miniFeed" aria-live="polite"></div>
+
+  <div class="mini-composer">
+    <button class="mini-btn" id="btnMiniAttach" title="选择文件或文件夹" aria-label="选择文件或文件夹">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M21 12l-8 8a5 5 0 0 1-7-7l8-8a4 4 0 0 1 6 6l-8 8a2 2 0 0 1-3-3l7-7"/></svg>
+    </button>
+    <textarea id="miniInput" rows="1" placeholder="输入文本，回车发送…" aria-label="要发送的文本"></textarea>
+    <button class="mini-btn primary" id="btnMiniSend" title="发送（Enter）" aria-label="发送">
+      <svg class="ic" viewBox="0 0 24 24"><path d="M4 12l16-8-6 16-2-6zM12 14l4-4"/></svg>
+    </button>
+  </div>
+</div>
+
+<!-- 吸边收起后只剩这个图标：点击展开简约面板，按住拖动可改变位置（吸到最近一侧）。
+     图标就是应用图标（favicon.svg 的折纸飞机），与托盘/窗口保持同一形象。 -->
+<button class="mini-dock" id="miniDock" title="点击展开 · 按住拖动调整位置" aria-label="展开简约面板（可拖动）">
+  <img class="mini-dock-img" src="/favicon.svg" width="44" height="44" alt="" draggable="false">
+  <span class="mini-dock-badge" id="miniDockBadge" hidden>0</span>
+</button>
 
 <!-- 运行日志抽屉 -->
 <aside class="logdrawer" id="logDrawer" aria-label="运行日志" aria-hidden="true">

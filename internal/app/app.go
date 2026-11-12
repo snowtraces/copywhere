@@ -928,7 +928,7 @@ func (a *App) onFileReceived(sender, path string, dup bool, bundle bool) {
 		}
 		a.addFile(record.File{
 			Time: time.Now(), In: true, Peer: sender,
-			Name: recordName, Size: size, Status: status, Detail: path,
+			Name: recordName, Size: size, Status: status, Detail: path, Path: path,
 		})
 	}
 }
@@ -1094,6 +1094,12 @@ func (a *App) SendImage(png []byte) {
 func (a *App) sendFilePayload(paths []string) []SendResult {
 	var payloadPath, sendName string
 	var cleanup func()
+	// 记录里保留源路径：发送端双击记录可在资源管理器中定位原始文件/目录
+	// （打包后的 zip 是临时文件，发送结束即删除，不能作为定位目标）。
+	sourcePath := ""
+	if len(paths) > 0 {
+		sourcePath = paths[0]
+	}
 	isBundle := false // true = 合成 zip（多文件/目录打包），对端将自动解包
 	if len(paths) == 1 {
 		fi, err := os.Stat(paths[0])
@@ -1202,7 +1208,7 @@ func (a *App) sendFilePayload(paths []string) []SendResult {
 			Time: time.Now(), In: false, Peer: r.Peer,
 			Name: sendName, Size: size,
 			Status: map[bool]string{true: "已发送", false: "失败"}[r.OK],
-			Detail: r.Msg,
+			Detail: r.Msg, Path: sourcePath,
 		})
 	}
 	return res
