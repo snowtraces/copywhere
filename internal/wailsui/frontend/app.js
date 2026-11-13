@@ -1276,7 +1276,6 @@ function toggleMiniFavFilter() {
   app.miniFeedSig = null;
   renderMiniFeed();
 }
-}
 
 function renderRecordBody(r) {
   if (r.text) {
