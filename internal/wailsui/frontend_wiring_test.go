@@ -58,7 +58,7 @@ func TestFrontendWiring(t *testing.T) {
 		"sendMiniText", "handleComposerPaste", "hideWindow",
 		"isTextRecord", "recordPath", "previewImage", "copyRecordText",
 		"miniTextBubble", "miniImageBubble", "miniFileBubble",
-		"starSvg", "updateRecordRowFav", "toggleRecordFav",
+		"starSvg", "updateRecordRowFav", "updateMiniRowFav", "toggleRecordFav",
 		"applyFeedFilter", "setFeedFilter", "updateFavBadges", "updateMiniFavBtn", "toggleMiniFavFilter",
 	}
 	for _, name := range critical {

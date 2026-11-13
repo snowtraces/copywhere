@@ -527,13 +527,19 @@ function miniNearBottom() {
   return !box || box.scrollHeight - box.scrollTop - box.clientHeight < 40;
 }
 
+function miniFeedSignature() {
+  const source = app.miniFavOnly ? app.feed.filter((r) => r.fav) : app.feed;
+  const list = source.slice(-MINI_FEED_MAX);
+  return (app.miniFavOnly ? "fav:" : "all:") + list.map((r) => (r.key || [r.date, r.time, r.in, r.name, r.detail].join("|")) + (r.fav ? ":1" : ":0")).join("~");
+}
+
 function renderMiniFeed() {
   const box = $("miniFeed");
   if (!box) return;
   const source = app.miniFavOnly ? app.feed.filter((r) => r.fav) : app.feed;
   const list = source.slice(-MINI_FEED_MAX);
   // 状态快照每 2 秒到达一次：内容没变就不重建 DOM，避免图片反复走 binding 读盘。
-  const sig = (app.miniFavOnly ? "fav:" : "all:") + list.map((r) => (r.key || [r.date, r.time, r.in, r.name, r.detail].join("|")) + (r.fav ? ":1" : ":0")).join("~");
+  const sig = miniFeedSignature();
   if (sig === app.miniFeedSig && box.childElementCount) return;
   app.miniFeedSig = sig;
 
@@ -565,6 +571,7 @@ function miniRow(r) {
   const isImage = !text && !!path && IMG_EXT.test(r.name || "");
   const row = document.createElement("div");
   row.className = `mini-row ${r.in ? "in" : "out"}${failed ? " fail" : ""}${r.fav ? " is-fav" : ""}`;
+  if (r.key) row.dataset.key = r.key;
   const who = r.in ? r.peer || "未知节点" : (app.state && app.state.nodeName) || "本机";
 
   const msg = document.createElement("div");
@@ -707,7 +714,6 @@ async function setUiMode(mode) {
   try {
     const ui = await call("SetUiMode", mode);
     applyUiState(ui);
-    toast(mode === "mini" ? "简约界面：拖到屏幕左右边缘会收起成图标" : "已回到标准界面");
   } catch (e) {
     toast("切换界面失败: " + errText(e), true);
   }
@@ -721,7 +727,6 @@ async function toggleMiniPin() {
   const on = !(app.ui && app.ui.alwaysOnTop);
   try {
     applyUiState(await call("SetAlwaysOnTop", on));
-    toast(on ? "已固定在屏幕最上层" : "已取消置顶");
   } catch (e) {
     toast("切换置顶失败: " + errText(e), true);
   }
@@ -820,7 +825,6 @@ async function sendMiniText() {
     await call("SendText", text);
     input.value = "";
     autoSizeMiniComposer();
-    toast("已发送");
   } catch (e) {
     toast("发送失败: " + errText(e), true);
   } finally {
@@ -1169,11 +1173,22 @@ function updateRecordRowFav(row, r) {
   }
 }
 
+function updateMiniRowFav(row, r) {
+  row.classList.toggle("is-fav", !!r.fav);
+  const favBtn = row.querySelector(".mini-fav-btn");
+  if (favBtn) {
+    favBtn.title = r.fav ? "取消收藏" : "收藏";
+    favBtn.setAttribute("aria-label", favBtn.title);
+    favBtn.classList.toggle("fav-active", !!r.fav);
+    favBtn.innerHTML = `<svg class="ic" viewBox="0 0 24 24" style="width:10px;height:10px" aria-hidden="true">${starSvg(r.fav)}</svg>`;
+  }
+}
+
 function toggleRecordFav(r) {
   if (!r) return;
   r.fav = !r.fav;
 
-  // 同步所有匹配当前记录 key 的 DOM 行
+  // 同步标准界面所有匹配当前记录 key 的 DOM 行
   if (r.key) {
     const rows = document.querySelectorAll("#timeline .chat-row");
     rows.forEach((row) => {
@@ -1181,21 +1196,34 @@ function toggleRecordFav(r) {
         updateRecordRowFav(row, r);
       }
     });
+
+    // 同步简约界面 DOM 行：就地更新类名与星标，避免 innerHTML 重建导致页面刷新跳动
+    const miniRows = document.querySelectorAll("#miniFeed .mini-row");
+    miniRows.forEach((row) => {
+      if (row.dataset.key === r.key) {
+        updateMiniRowFav(row, r);
+      }
+    });
   }
 
   updateFavBadges();
   applyFeedFilter();
+
+  // 若处于简约模式
+  if (app.ui && app.ui.mode === "mini") {
+    if (app.miniFavOnly) {
+      // 仅在"仅看收藏"过滤视图下，取消收藏需要移出列表才重新渲染
+      app.miniFeedSig = null;
+      renderMiniFeed();
+    } else {
+      // 全量时间线下已就地更新 DOM，同步最新签名以防后续定时器误判重建
+      app.miniFeedSig = miniFeedSignature();
+    }
+  }
+
   // 写 feed.json（保留 fav 标记）+ 写 favorites.json（收藏独立文件）
   schedulePersistFeed();
   persistFavorites();
-
-  // 若处于简约模式，重绘 miniFeed
-  app.miniFeedSig = null;
-  if (app.ui && app.ui.mode === "mini") {
-    renderMiniFeed();
-  }
-
-  toast(r.fav ? "已收藏" : "已取消收藏");
 }
 
 function applyFeedFilter() {
@@ -1561,7 +1589,6 @@ async function sendText() {
     await call("SendText", text);
     input.value = "";
     autoSizeComposer();
-    toast("已发送");
   } catch (e) {
     toast("发送失败: " + errText(e), true);
   } finally {
@@ -1629,7 +1656,6 @@ async function togglePause() {
   const next = !(app.state && app.state.paused);
   try {
     await call("SetPaused", next);
-    toast(next ? "已暂停自动同步（手动发送不受影响）" : "已恢复自动同步");
   } catch (e) {
     toast("切换失败: " + errText(e), true);
   }
@@ -1879,7 +1905,6 @@ function applyTheme(t) {
 function cycleTheme() {
   const i = THEMES.indexOf(app.theme);
   applyTheme(THEMES[(i + 1) % THEMES.length]);
-  toast(`主题：${{ auto: "跟随系统", light: "浅色", dark: "深色" }[app.theme]}`);
 }
 
 // ---------------------------------------------------------------- Toast / 确认 / 灯箱
