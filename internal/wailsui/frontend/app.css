@@ -391,12 +391,14 @@ button:focus:not(:focus-visible) { outline: none; }
 }
 
 .fdate { display: flex; align-items: center; gap: 10px; width: 100%; margin: 2px 0 0; }
+.fdate[hidden] { display: none; }
 .fdate::before, .fdate::after { content: ""; flex: 1; height: 1px; background: var(--border); }
 .fdate span {
   font-size: 10.5px; color: var(--dim); padding: 1px 10px; border: 1px solid var(--border-dim);
   background: var(--bg); letter-spacing: .8px;
 }
 .chat-row { display: flex; gap: 10px; max-width: min(72%, 640px); animation: rise .16s linear; }
+.chat-row[hidden] { display: none; }
 .chat-row.out { align-self: flex-end; flex-direction: row-reverse; }
 @keyframes rise { from { opacity: 0; transform: translateY(5px); } }
 .ava {
