@@ -584,7 +584,7 @@ function miniRow(r) {
   favBtn.className = `mini-fav-btn${r.fav ? " fav-active" : ""}`;
   favBtn.title = r.fav ? "取消收藏" : "收藏";
   favBtn.setAttribute("aria-label", favBtn.title);
-  favBtn.innerHTML = `<svg class="ic" viewBox="0 0 24 24" style="width:11px;height:11px" aria-hidden="true">${starSvg(r.fav)}</svg>`;
+  favBtn.innerHTML = `<svg class="ic" viewBox="0 0 24 24" style="width:10px;height:10px" aria-hidden="true">${starSvg(r.fav)}</svg>`;
   favBtn.onclick = (e) => {
     e.stopPropagation();
     toggleRecordFav(r);
