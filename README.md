@@ -71,7 +71,7 @@ git clone <本仓库>
 cd copywhere
 
 # 发布构建（唯一产物：GUI 子系统，双击不弹控制台）
-$v = "v0.6.3"
+$v = "v0.6.4"
 go build -trimpath -ldflags "-s -w -H windowsgui -X copywhere/internal/app.Version=$v -X main.buildFlavor=gui" `
   -o copywhere-$v-windows-amd64.exe ./cmd/copywhere
 

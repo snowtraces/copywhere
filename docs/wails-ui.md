@@ -217,8 +217,8 @@ WebView2 宿主与 v0.5.0 新增的 IPC/右键菜单代码，不含系统 WebVie
 
 ```powershell
 # 主产物（唯一发布文件）
-go build -trimpath -ldflags "-s -w -H windowsgui -X copywhere/internal/app.Version=v0.6.3 -X main.buildFlavor=gui" `
-  -o copywhere-v0.6.3-windows-amd64.exe ./cmd/copywhere
+go build -trimpath -ldflags "-s -w -H windowsgui -X copywhere/internal/app.Version=v0.6.4 -X main.buildFlavor=gui" `
+  -o copywhere-v0.6.4-windows-amd64.exe ./cmd/copywhere
 
 # 开发调试构建（控制台子系统，便于看日志；不发布）
 go build -o copywhere-dev.exe ./cmd/copywhere

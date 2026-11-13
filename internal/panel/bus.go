@@ -47,8 +47,8 @@ type FileView struct {
 	Size   int64  `json:"size"`
 	Status string `json:"status"`
 	Detail string `json:"detail"`
-	Path   string `json:"path"` // 本机路径：接收=落盘路径，发送=源文件路径
-	Text   bool   `json:"text"` // true=文本同步记录（name 为内容预览）
+	Path   string `json:"path"`          // 本机路径：接收=落盘路径，发送=源文件路径
+	Text   bool   `json:"text"`          // true=文本同步记录（name 为内容预览）
 	Fav    bool   `json:"fav,omitempty"` // true=已收藏
 }
 

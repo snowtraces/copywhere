@@ -155,4 +155,3 @@ func saveFavorites(path string, list []panel.FileView) error {
 	}
 	return nil
 }
-

@@ -354,4 +354,3 @@ func TestServiceRecordsAndFeedOperations(t *testing.T) {
 		t.Fatalf("ClearFeed 后磁盘应为空记录，实际 %d", len(onDiskEmpty))
 	}
 }
-
