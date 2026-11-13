@@ -556,7 +556,7 @@ func TestBindingFQNIsStable(t *testing.T) {
 	if fqn != "copywhere/internal/wailsui.Service" {
 		t.Fatalf("绑定服务 FQN = %q，前端常量需要同步修改", fqn)
 	}
-	for _, m := range []string{"State", "Peers", "Records", "SendText", "SendFiles", "PasteFiles", "SaveSettings", "SetKVMNeighbor", "CopyText", "PasteFiles"} {
+	for _, m := range []string{"State", "Peers", "Records", "SendText", "SendFiles", "PasteFiles", "SaveSettings", "SetKVMNeighbor", "CopyText", "SaveFeed", "ClearFeed"} {
 		if _, ok := ptr.MethodByName(m); !ok {
 			t.Fatalf("绑定方法 %s 缺失", m)
 		}

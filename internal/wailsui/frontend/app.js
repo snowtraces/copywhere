@@ -245,10 +245,16 @@ async function loadRecords() {
   app.feed = [];
   app.recordsSeen.clear();
   app.lastDate = "";
-  // 先铺上一次运行留下的历史（localStorage），再合并本进程事件总线里的记录：
-  // 两边可能重叠（窗口重载），addRecord 的 key 去重会处理。
-  for (const r of loadPersistedFeed()) addRecord(r, true);
+  // 先铺从 .copywhere/feed.json 读到的历史；若存在旧版 localStorage 记录则合并迁移
   for (const r of list) addRecord(r, true);
+  const legacy = loadPersistedFeed();
+  if (legacy.length > 0) {
+    for (const r of legacy) addRecord(r, true);
+    schedulePersistFeed();
+    try {
+      localStorage.removeItem(FEED_KEY);
+    } catch (e) {}
+  }
   renderSub();
 }
 
@@ -259,10 +265,10 @@ async function loadLogs() {
   updateLogBadge();
 }
 
-// ---------- 传输记录持久化 ----------
+// ---------- 传输记录持久化（~/.copywhere/feed.json） ----------
 
-// slimFeed 生成可写进 localStorage 的精简记录：去掉渲染用字段，
-// 文本内容截断，条数取最近 FEED_MAX 条（旧面板同样只做截断）。
+// slimFeed 生成可写进 .copywhere/feed.json 的精简记录：去掉渲染用字段，
+// 文本内容截断，条数取最近 FEED_MAX 条。
 // text/path 必须一起持久化：丢了 text 会让文本记录在下次启动后显示成文件卡片。
 function slimFeed() {
   return app.feed.slice(-FEED_MAX).map((r) => ({
@@ -279,7 +285,7 @@ function slimFeed() {
   }));
 }
 
-// loadPersistedFeed 读取上一次运行留下的记录；损坏/不可用时静默忽略。
+// loadPersistedFeed 读取旧版 localStorage 遗留的历史记录（用于平滑迁移到 .copywhere/feed.json）。
 function loadPersistedFeed() {
   try {
     const raw = localStorage.getItem(FEED_KEY);
@@ -287,34 +293,40 @@ function loadPersistedFeed() {
     const list = JSON.parse(raw);
     return Array.isArray(list) ? list : [];
   } catch (e) {
-    console.warn("读取历史传输记录失败", e);
+    console.warn("读取旧版历史传输记录失败", e);
     return [];
   }
 }
 
-// schedulePersistFeed 去抖写入：新纪录密集到达时合并成一次写。
+// schedulePersistFeed 去抖写入：新纪录密集到达时合并成一次写，落盘到 ~/.copywhere/feed.json。
 function schedulePersistFeed() {
   if (app.feedTimer) clearTimeout(app.feedTimer);
   app.feedTimer = setTimeout(() => {
     app.feedTimer = 0;
     try {
-      localStorage.setItem(FEED_KEY, JSON.stringify(slimFeed()));
+      const slim = slimFeed();
+      call("SaveFeed", slim).catch((e) => {
+        console.warn("保存传输记录到 .copywhere 失败", e);
+      });
     } catch (e) {
-      console.warn("保存传输记录失败（可能超出存储配额）", e);
+      console.warn("保存传输记录失败", e);
     }
   }, FEED_WRITE_DELAY);
 }
 
-// clearPersistedFeed 清空 localStorage 里的历史（「清空显示」时调用）。
+// clearPersistedFeed 清空 ~/.copywhere/feed.json 里的历史（「清空显示」时调用）。
 function clearPersistedFeed() {
   if (app.feedTimer) {
     clearTimeout(app.feedTimer);
     app.feedTimer = 0;
   }
+  call("ClearFeed").catch((e) => {
+    console.warn("清空 .copywhere 传输记录失败", e);
+  });
   try {
     localStorage.removeItem(FEED_KEY);
   } catch (e) {
-    console.warn("清空历史传输记录失败", e);
+    console.warn("清空旧版 localStorage 传输记录失败", e);
   }
 }
 
@@ -968,7 +980,7 @@ function addRecord(r, silent) {
   }
   timeline.appendChild(recordRow(rec));
   renderSub();
-  schedulePersistFeed();
+  if (!silent) schedulePersistFeed();
   if (near || silent) scrollToBottom();
   // 简约面板可见时增量重绘；收起成图标时只把新记录记到角标上。
   if (app.ui && app.ui.mode === "mini" && app.ui.collapsed) bumpMiniBadge();

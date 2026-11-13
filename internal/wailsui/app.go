@@ -185,6 +185,7 @@ func Run(opts RunOptions) error {
 		quitOnce.Do(func() {
 			quitting.Store(true)
 			ctl.Stop()
+			svc.FlushFeed()
 			cancel()
 			wailsApp.Quit()
 		})
@@ -197,6 +198,7 @@ func Run(opts RunOptions) error {
 		}
 		log.Printf("窗口关闭：收进托盘，同步继续在后台运行")
 		ctl.Flush()
+		svc.FlushFeed()
 		win.Hide()
 		e.Cancel()
 	})

@@ -145,6 +145,13 @@ type Service struct {
 
 	uiMu sync.RWMutex
 	ui   uiControl
+
+	feedMu        sync.Mutex
+	feed          []panel.FileView
+	feedKeys      map[string]struct{}
+	feedPath      string
+	feedSaveTimer *time.Timer
+	feedDirty     bool
 }
 
 // NewService 创建绑定服务。core/cfg/bus 必须非 nil。
@@ -152,12 +159,32 @@ func NewService(core Core, cfg *config.Config, cfgPath string, bus *panel.Bus) *
 	if cfgPath == "" && cfg != nil {
 		cfgPath = cfg.Path
 	}
+	fPath := feedFilePath(cfgPath)
+	initialFeed := loadFeed(fPath)
+	feedKeys := make(map[string]struct{}, len(initialFeed))
+	for _, r := range initialFeed {
+		feedKeys[feedRecordKey(r)] = struct{}{}
+	}
+	if bus != nil {
+		for _, r := range bus.Files() {
+			k := feedRecordKey(r)
+			if _, ok := feedKeys[k]; !ok {
+				feedKeys[k] = struct{}{}
+				initialFeed = append(initialFeed, r)
+			}
+		}
+	}
+	initialFeed = sanitizeFeed(initialFeed)
+
 	return &Service{
-		core:    core,
-		cfg:     cfg,
-		cfgPath: cfgPath,
-		bus:     bus,
-		started: time.Now(),
+		core:     core,
+		cfg:      cfg,
+		cfgPath:  cfgPath,
+		bus:      bus,
+		started:  time.Now(),
+		feedPath: fPath,
+		feed:     initialFeed,
+		feedKeys: feedKeys,
 	}
 }
 
@@ -240,6 +267,11 @@ func (s *Service) StartBridge(ctx context.Context) {
 			if !ok {
 				return
 			}
+			if ev.Type == panel.EvFile {
+				if fv, ok := ev.Data.(panel.FileView); ok {
+					s.appendFeedRecord(fv)
+				}
+			}
 			s.emitEvent(ev)
 		case <-ticker.C:
 			s.EmitSnapshot()
@@ -304,8 +336,102 @@ func (s *Service) Peers() []Peer {
 	return out
 }
 
-// Records 返回时间线记录（旧 → 新，来自事件总线缓存）。
-func (s *Service) Records() []panel.FileView { return s.bus.Files() }
+// Records 返回时间线记录（旧 → 新，来自 feed.json 持久化与当前运行事件）。
+func (s *Service) Records() []panel.FileView {
+	s.feedMu.Lock()
+	defer s.feedMu.Unlock()
+	out := make([]panel.FileView, len(s.feed))
+	copy(out, s.feed)
+	return out
+}
+
+func (s *Service) appendFeedRecord(fv panel.FileView) {
+	s.feedMu.Lock()
+	defer s.feedMu.Unlock()
+	k := feedRecordKey(fv)
+	if _, ok := s.feedKeys[k]; ok {
+		return
+	}
+	s.feedKeys[k] = struct{}{}
+	s.feed = append(s.feed, fv)
+	if len(s.feed) > maxFeedRecords {
+		drop := s.feed[:len(s.feed)-maxFeedRecords]
+		s.feed = s.feed[len(s.feed)-maxFeedRecords:]
+		for _, d := range drop {
+			delete(s.feedKeys, feedRecordKey(d))
+		}
+	}
+	s.scheduleSaveFeedLocked()
+}
+
+func (s *Service) scheduleSaveFeedLocked() {
+	s.feedDirty = true
+	if s.feedSaveTimer != nil {
+		s.feedSaveTimer.Stop()
+	}
+	s.feedSaveTimer = time.AfterFunc(feedSaveDelay, func() {
+		s.feedMu.Lock()
+		defer s.feedMu.Unlock()
+		s.feedSaveTimer = nil
+		if !s.feedDirty {
+			return
+		}
+		s.feedDirty = false
+		if err := saveFeed(s.feedPath, s.feed); err != nil {
+			log.Printf("保存传输动态失败: %v", err)
+		}
+	})
+}
+
+// FlushFeed 立即把当前传输动态落盘（退出或窗口关闭时调用）。
+func (s *Service) FlushFeed() {
+	s.feedMu.Lock()
+	defer s.feedMu.Unlock()
+	if s.feedSaveTimer != nil {
+		s.feedSaveTimer.Stop()
+		s.feedSaveTimer = nil
+	}
+	if s.feedDirty {
+		s.feedDirty = false
+		if err := saveFeed(s.feedPath, s.feed); err != nil {
+			log.Printf("立即落盘传输动态失败: %v", err)
+		}
+	}
+}
+
+// SaveFeed 保存传输记录列表到 ~/.copywhere/feed.json。
+func (s *Service) SaveFeed(records []panel.FileView) error {
+	s.feedMu.Lock()
+	defer s.feedMu.Unlock()
+	if s.feedSaveTimer != nil {
+		s.feedSaveTimer.Stop()
+		s.feedSaveTimer = nil
+	}
+	s.feed = sanitizeFeed(records)
+	s.feedKeys = make(map[string]struct{}, len(s.feed))
+	for _, r := range s.feed {
+		s.feedKeys[feedRecordKey(r)] = struct{}{}
+	}
+	s.feedDirty = false
+	return saveFeed(s.feedPath, s.feed)
+}
+
+// ClearFeed 清空传输记录（~/.copywhere/feed.json 与内存）。
+func (s *Service) ClearFeed() error {
+	s.feedMu.Lock()
+	defer s.feedMu.Unlock()
+	if s.feedSaveTimer != nil {
+		s.feedSaveTimer.Stop()
+		s.feedSaveTimer = nil
+	}
+	s.feed = nil
+	s.feedKeys = make(map[string]struct{})
+	s.feedDirty = false
+	if s.bus != nil {
+		s.bus.ClearFiles()
+	}
+	return saveFeed(s.feedPath, nil)
+}
 
 // Logs 返回缓存的运行日志。
 func (s *Service) Logs() []string { return s.bus.Logs() }

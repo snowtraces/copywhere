@@ -70,3 +70,15 @@ func TestBusCancel(t *testing.T) {
 		t.Fatalf("取消后订阅者数应为 0，实际 %d", got)
 	}
 }
+
+func TestBusClearFiles(t *testing.T) {
+	b := NewBus()
+	b.AddFile(record.File{Time: time.Now(), Name: "test.txt", Size: 10})
+	if len(b.Files()) != 1 {
+		t.Fatalf("期望有 1 条文件记录，实际 %d", len(b.Files()))
+	}
+	b.ClearFiles()
+	if len(b.Files()) != 0 {
+		t.Fatalf("清空后应为 0 条，实际 %d", len(b.Files()))
+	}
+}

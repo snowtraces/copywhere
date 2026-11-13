@@ -114,6 +114,13 @@ func (b *Bus) Files() []FileView {
 	return out
 }
 
+// ClearFiles 清空缓存的文件记录。
+func (b *Bus) ClearFiles() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.files = nil
+}
+
 // Subscribers 返回当前 SSE 订阅者数量（0 时服务端可跳过周期快照构建）。
 func (b *Bus) Subscribers() int {
 	b.mu.Lock()
