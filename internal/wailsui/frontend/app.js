@@ -255,7 +255,7 @@ async function loadRecords() {
     schedulePersistFeed();
     try {
       localStorage.removeItem(FEED_KEY);
-    } catch (e) {}
+    } catch (e) { }
   }
   updateFavBadges();
   applyFeedFilter();
@@ -472,7 +472,7 @@ function renderMiniPeers() {
         toast(`已与 ${p.name} 完成配对`);
         // 配对成功后立刻刷新节点表：否则这条"未配对"记录要等下一次 2s 快照
         // 才消失，期间按钮会恢复成可点的「配对」。
-        await loadPeers().catch(() => {});
+        await loadPeers().catch(() => { });
       } catch (err) {
         toast("配对失败: " + errText(err), true);
       } finally {
@@ -1018,11 +1018,13 @@ function addRecord(r, silent) {
   if (!r) return;
   // 兼容旧版 localStorage：当时 slimFeed 没有存 text 字段，重启后文本记录
   // 会退化成文件卡片。这里统一归一化，之后的时间线/简约面板都只看 r.text。
-  const rec = { ...r, text: isTextRecord(r), fav: !!r.fav };
-  const key = [rec.date, rec.time, rec.in ? 1 : 0, rec.peer, rec.name, rec.size, rec.detail].join("|");
+  const key = [r.date, r.time, r.in ? 1 : 0, r.peer, r.name, r.size, r.detail].join("|");
   if (app.recordsSeen.has(key)) return;
   app.recordsSeen.add(key);
-  app.feed.push({ ...rec, key });
+  // rec 同时是 app.feed 里的元素和传给 recordRow 的对象，共享同一引用，
+  // 确保 toggleRecordFav(r) 修改 r.fav 后 app.feed.filter(r=>r.fav) 能感知到。
+  const rec = { ...r, text: isTextRecord(r), fav: !!r.fav, key };
+  app.feed.push(rec);
 
   const timeline = $("timeline");
   $("feedEmpty").hidden = true;
@@ -1967,7 +1969,7 @@ function bindStaticUI() {
   $("btnSaveSettings").onclick = saveSettings;
   $("btnBrowseReceiveDir").onclick = () => {
     const dir = $("cfgReceiveDir").value.trim();
-    if (dir) openPath(dir, false).catch(() => {});
+    if (dir) openPath(dir, false).catch(() => { });
   };
 
   $("btnLogs").onclick = () => (app.logOpen ? closeLogs() : openLogs());
