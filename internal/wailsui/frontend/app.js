@@ -143,6 +143,8 @@ const app = {
   dragName: "",
   lastDate: "",
   feedTimer: 0,
+  feedFilter: "all", // "all" | "fav"
+  miniFavOnly: false, // 简约时间线是否仅显示收藏
   // 界面模式由 Go 端窗口控制器持有（wails-window.json），前端只缓存快照。
   ui: { mode: "standard", collapsed: false, edge: "right", alwaysOnTop: false },
   miniUnread: 0,
@@ -255,6 +257,8 @@ async function loadRecords() {
       localStorage.removeItem(FEED_KEY);
     } catch (e) {}
   }
+  updateFavBadges();
+  applyFeedFilter();
   renderSub();
 }
 
@@ -270,8 +274,10 @@ async function loadLogs() {
 // slimFeed 生成可写进 .copywhere/feed.json 的精简记录：去掉渲染用字段，
 // 文本内容截断，条数取最近 FEED_MAX 条。
 // text/path 必须一起持久化：丢了 text 会让文本记录在下次启动后显示成文件卡片。
+// fav 持久化保存用户的消息收藏状态。
 function slimFeed() {
   return app.feed.slice(-FEED_MAX).map((r) => ({
+    id: r.id || "",
     date: r.date || "",
     time: r.time || "",
     in: !!r.in,
@@ -282,7 +288,35 @@ function slimFeed() {
     detail: String(r.detail || "").slice(0, FEED_TEXT_MAX),
     path: r.path || "",
     text: !!r.text,
+    fav: !!r.fav,
   }));
+}
+
+// slimFav 生成可写进 ~/.copywhere/favorites.json 的精简收藏记录。
+// id 字段是跨文件的关联键，必须随收藏记录一并持久化。
+function slimFav(r) {
+  return {
+    id: r.id || "",
+    date: r.date || "",
+    time: r.time || "",
+    in: !!r.in,
+    peer: r.peer || "",
+    name: r.name || "",
+    size: r.size || 0,
+    status: r.status || "",
+    detail: String(r.detail || "").slice(0, FEED_TEXT_MAX),
+    path: r.path || "",
+    text: !!r.text,
+    fav: true,
+  };
+}
+
+// persistFavorites 将当前收藏列表写入 ~/.copywhere/favorites.json。
+function persistFavorites() {
+  const favs = app.feed.filter((r) => r.fav).map(slimFav);
+  call("SaveFavorites", favs).catch((e) => {
+    console.warn("保存收藏记录到 .copywhere 失败", e);
+  });
 }
 
 // loadPersistedFeed 读取旧版 localStorage 遗留的历史记录（用于平滑迁移到 .copywhere/feed.json）。
@@ -496,9 +530,10 @@ function miniNearBottom() {
 function renderMiniFeed() {
   const box = $("miniFeed");
   if (!box) return;
-  const list = app.feed.slice(-MINI_FEED_MAX);
+  const source = app.miniFavOnly ? app.feed.filter((r) => r.fav) : app.feed;
+  const list = source.slice(-MINI_FEED_MAX);
   // 状态快照每 2 秒到达一次：内容没变就不重建 DOM，避免图片反复走 binding 读盘。
-  const sig = list.map((r) => r.key || [r.date, r.time, r.in, r.name, r.detail].join("|")).join("~");
+  const sig = (app.miniFavOnly ? "fav:" : "all:") + list.map((r) => (r.key || [r.date, r.time, r.in, r.name, r.detail].join("|")) + (r.fav ? ":1" : ":0")).join("~");
   if (sig === app.miniFeedSig && box.childElementCount) return;
   app.miniFeedSig = sig;
 
@@ -511,7 +546,9 @@ function renderMiniFeed() {
   if (!list.length) {
     const d = document.createElement("div");
     d.className = "mini-empty-feed";
-    d.innerHTML = "还没有传输记录<br>复制文本 / 文件即自动同步到在线节点";
+    d.innerHTML = app.miniFavOnly
+      ? "暂无收藏消息<br>在消息上点击星标即可收藏"
+      : "还没有传输记录<br>复制文本 / 文件即自动同步到在线节点";
     box.appendChild(d);
     return;
   }
@@ -520,14 +557,14 @@ function renderMiniFeed() {
 }
 
 // miniRow 是简约面板的 IM 式消息行：接收靠左、发送靠右，
-// 上方是名字 + 时间，下方是文本 / 图片 / 文件气泡。
+// 上方是名字 + 时间 + 收藏星标，下方是文本 / 图片 / 文件气泡。
 function miniRow(r) {
   const text = !!r.text;
   const failed = String(r.status || "").includes("失败");
   const path = recordPath(r);
   const isImage = !text && !!path && IMG_EXT.test(r.name || "");
   const row = document.createElement("div");
-  row.className = `mini-row ${r.in ? "in" : "out"}${failed ? " fail" : ""}`;
+  row.className = `mini-row ${r.in ? "in" : "out"}${failed ? " fail" : ""}${r.fav ? " is-fav" : ""}`;
   const who = r.in ? r.peer || "未知节点" : (app.state && app.state.nodeName) || "本机";
 
   const msg = document.createElement("div");
@@ -542,8 +579,19 @@ function miniRow(r) {
   const tm = document.createElement("span");
   tm.className = "mini-who-time";
   tm.textContent = r.time || "";
-  if (r.in) head.append(nm, tm);
-  else head.append(tm, nm);
+
+  const favBtn = document.createElement("button");
+  favBtn.className = `mini-fav-btn${r.fav ? " fav-active" : ""}`;
+  favBtn.title = r.fav ? "取消收藏" : "收藏";
+  favBtn.setAttribute("aria-label", favBtn.title);
+  favBtn.innerHTML = `<svg class="ic" viewBox="0 0 24 24" style="width:11px;height:11px" aria-hidden="true">${starSvg(r.fav)}</svg>`;
+  favBtn.onclick = (e) => {
+    e.stopPropagation();
+    toggleRecordFav(r);
+  };
+
+  if (r.in) head.append(nm, tm, favBtn);
+  else head.append(favBtn, tm, nm);
   msg.appendChild(head);
 
   if (text) msg.appendChild(miniTextBubble(r));
@@ -841,7 +889,12 @@ function renderSub() {
   const st = app.state || {};
   const today = localDateStr(new Date());
   const todayCount = app.feed.filter((r) => r.date === today).length;
-  $("stageSub").textContent = `在线 ${app.peers.length} · 已配对 ${st.pairedCount || 0} · 今日 ${todayCount} 条`;
+  const favCount = app.feed.filter((r) => r.fav).length;
+  if (app.feedFilter === "fav") {
+    $("stageSub").textContent = `在线 ${app.peers.length} · 已配对 ${st.pairedCount || 0} · 收藏 ${favCount} 条`;
+  } else {
+    $("stageSub").textContent = `在线 ${app.peers.length} · 已配对 ${st.pairedCount || 0} · 今日 ${todayCount} 条` + (favCount > 0 ? ` · 收藏 ${favCount}` : "");
+  }
   const hint = $("composerHint");
   if (hint) {
     hint.textContent = app.peers.length
@@ -965,7 +1018,7 @@ function addRecord(r, silent) {
   if (!r) return;
   // 兼容旧版 localStorage：当时 slimFeed 没有存 text 字段，重启后文本记录
   // 会退化成文件卡片。这里统一归一化，之后的时间线/简约面板都只看 r.text。
-  const rec = { ...r, text: isTextRecord(r) };
+  const rec = { ...r, text: isTextRecord(r), fav: !!r.fav };
   const key = [rec.date, rec.time, rec.in ? 1 : 0, rec.peer, rec.name, rec.size, rec.detail].join("|");
   if (app.recordsSeen.has(key)) return;
   app.recordsSeen.add(key);
@@ -976,10 +1029,17 @@ function addRecord(r, silent) {
   const near = nearBottom();
   if (rec.date !== app.lastDate) {
     app.lastDate = rec.date;
-    timeline.appendChild(dateSeparator(rec.date));
+    const sep = dateSeparator(rec.date);
+    if (app.feedFilter === "fav" && !rec.fav) sep.hidden = true;
+    timeline.appendChild(sep);
   }
-  timeline.appendChild(recordRow(rec));
+  const row = recordRow(rec);
+  if (app.feedFilter === "fav" && !rec.fav) {
+    row.hidden = true;
+  }
+  timeline.appendChild(row);
   renderSub();
+  updateFavBadges();
   if (!silent) schedulePersistFeed();
   if (near || silent) scrollToBottom();
   // 简约面板可见时增量重绘；收起成图标时只把新记录记到角标上。
@@ -1021,7 +1081,8 @@ function scrollToBottom() {
 function recordRow(r) {
   const failed = String(r.status || "").includes("失败");
   const row = document.createElement("div");
-  row.className = `chat-row ${r.in ? "in" : "out"}${failed ? " fail" : ""}`;
+  row.className = `chat-row ${r.in ? "in" : "out"}${failed ? " fail" : ""}${r.fav ? " is-fav" : ""}`;
+  if (r.key) row.dataset.key = r.key;
   const who = r.in ? r.peer || "未知节点" : (app.state && app.state.nodeName) || "本机";
 
   row.innerHTML = `
@@ -1075,8 +1136,146 @@ function recordRow(r) {
       openPath(path, true);
     });
   }
-  if (meta.childNodes.length) bubble.appendChild(meta);
+
+  // 收藏按钮
+  const favBtn = iconButton(r.fav ? "取消收藏" : "收藏", starSvg(r.fav), () => {
+    toggleRecordFav(r);
+  });
+  favBtn.classList.add("fav-btn");
+  if (r.fav) favBtn.classList.add("fav-active");
+  meta.appendChild(favBtn);
+
+  bubble.appendChild(meta);
   return row;
+}
+
+function starSvg(filled) {
+  if (filled) {
+    return '<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" fill="currentColor"/>';
+  }
+  return '<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>';
+}
+
+function updateRecordRowFav(row, r) {
+  row.classList.toggle("is-fav", !!r.fav);
+  const favBtn = row.querySelector(".fav-btn");
+  if (favBtn) {
+    favBtn.title = r.fav ? "取消收藏" : "收藏";
+    favBtn.setAttribute("aria-label", favBtn.title);
+    favBtn.innerHTML = `<svg class="ic" viewBox="0 0 24 24" style="width:13px;height:13px" aria-hidden="true">${starSvg(r.fav)}</svg>`;
+    favBtn.classList.toggle("fav-active", !!r.fav);
+  }
+}
+
+function toggleRecordFav(r) {
+  if (!r) return;
+  r.fav = !r.fav;
+
+  // 同步所有匹配当前记录 key 的 DOM 行
+  if (r.key) {
+    const rows = document.querySelectorAll("#timeline .chat-row");
+    rows.forEach((row) => {
+      if (row.dataset.key === r.key) {
+        updateRecordRowFav(row, r);
+      }
+    });
+  }
+
+  updateFavBadges();
+  applyFeedFilter();
+  // 写 feed.json（保留 fav 标记）+ 写 favorites.json（收藏独立文件）
+  schedulePersistFeed();
+  persistFavorites();
+
+  // 若处于简约模式，重绘 miniFeed
+  app.miniFeedSig = null;
+  if (app.ui && app.ui.mode === "mini") {
+    renderMiniFeed();
+  }
+
+  toast(r.fav ? "已收藏" : "已取消收藏");
+}
+
+function applyFeedFilter() {
+  const isFavView = app.feedFilter === "fav";
+  const rows = document.querySelectorAll("#timeline .chat-row");
+  for (const row of rows) {
+    const isFav = row.classList.contains("is-fav");
+    row.hidden = isFavView && !isFav;
+  }
+
+  const timeline = $("timeline");
+  if (timeline) {
+    const dates = timeline.querySelectorAll(".fdate");
+    dates.forEach((d) => {
+      let next = d.nextElementSibling;
+      let hasVisible = false;
+      while (next && !next.classList.contains("fdate")) {
+        if (next.classList.contains("chat-row") && !next.hidden) {
+          hasVisible = true;
+          break;
+        }
+        next = next.nextElementSibling;
+      }
+      d.hidden = !hasVisible;
+    });
+  }
+
+  const emptyAll = $("feedEmpty");
+  const emptyFav = $("favEmpty");
+  const totalFavs = app.feed.filter((r) => r.fav).length;
+
+  if (isFavView) {
+    if (emptyAll) emptyAll.hidden = true;
+    if (emptyFav) emptyFav.hidden = totalFavs > 0;
+  } else {
+    if (emptyFav) emptyFav.hidden = true;
+    if (emptyAll) emptyAll.hidden = app.feed.length > 0;
+  }
+
+  renderSub();
+}
+
+function setFeedFilter(filter) {
+  app.feedFilter = filter;
+  const filterAll = $("filterAll");
+  const filterFav = $("filterFav");
+  if (filterAll) {
+    filterAll.classList.toggle("active", filter === "all");
+    filterAll.setAttribute("aria-selected", filter === "all" ? "true" : "false");
+  }
+  if (filterFav) {
+    filterFav.classList.toggle("active", filter === "fav");
+    filterFav.setAttribute("aria-selected", filter === "fav" ? "true" : "false");
+  }
+  applyFeedFilter();
+}
+
+function updateFavBadges() {
+  const count = app.feed.filter((r) => r.fav).length;
+  const badge = $("favBadge");
+  if (badge) {
+    badge.textContent = String(count);
+    badge.hidden = count === 0;
+  }
+  updateMiniFavBtn();
+}
+
+function updateMiniFavBtn() {
+  const btn = $("btnMiniFavFilter");
+  if (!btn) return;
+  const count = app.feed.filter((r) => r.fav).length;
+  btn.textContent = count > 0 ? `收藏 (${count})` : "收藏";
+  btn.classList.toggle("active", app.miniFavOnly);
+  btn.title = app.miniFavOnly ? "切换回全部消息" : "仅查看已收藏消息";
+}
+
+function toggleMiniFavFilter() {
+  app.miniFavOnly = !app.miniFavOnly;
+  updateMiniFavBtn();
+  app.miniFeedSig = null;
+  renderMiniFeed();
+}
 }
 
 function renderRecordBody(r) {
@@ -1757,6 +1956,9 @@ function bindStaticUI() {
     b.addEventListener("click", () => switchView(b.dataset.view));
   });
 
+  $("filterAll").onclick = () => setFeedFilter("all");
+  $("filterFav").onclick = () => setFeedFilter("fav");
+
   $("btnPause").onclick = togglePause;
   $("btnTheme").onclick = cycleTheme;
   $("btnSettings").onclick = openSettings;
@@ -1807,6 +2009,7 @@ function bindStaticUI() {
   $("btnMiniHide").onclick = hideWindow;
   $("miniDock").onclick = expandFromDock;
   bindMiniDockDrag($("miniDock"));
+  $("btnMiniFavFilter").onclick = toggleMiniFavFilter;
   $("btnMiniPause").onclick = togglePause;
   $("btnMiniAttach").onclick = pickFiles;
   $("btnMiniSend").onclick = sendMiniText;
@@ -1831,21 +2034,37 @@ function bindStaticUI() {
     }
   };
 
-  $("btnClearFeed").onclick = () =>
-    confirmAction("清空显示", "清空本窗口的时间线显示与历史记录（不影响对端与已传输的文件）。", "清空", () => {
+  $("btnClearFeed").onclick = () => {
+    const favCount = app.feed.filter((r) => r.fav).length;
+    const msg = favCount > 0
+      ? `清空本窗口的时间线显示与历史记录。\n当前有 ${favCount} 条已收藏消息，将自动安全保留。`
+      : "清空本窗口的时间线显示与历史记录（不影响对端与已传输的文件）。";
+    confirmAction("清空显示", msg, "清空", () => {
+      const favs = app.feed.filter((r) => r.fav);
       const timeline = $("timeline");
       const empty = $("feedEmpty");
+      const favEmpty = $("favEmpty");
       timeline.innerHTML = "";
-      if (empty) {
-        timeline.appendChild(empty);
-        empty.hidden = false;
-      }
+      if (empty) timeline.appendChild(empty);
+      if (favEmpty) timeline.appendChild(favEmpty);
+
       app.feed = [];
       app.recordsSeen.clear();
       app.lastDate = "";
-      clearPersistedFeed();
+      for (const r of favs) {
+        addRecord(r, true);
+      }
+      if (favs.length > 0) {
+        schedulePersistFeed();
+      } else {
+        clearPersistedFeed();
+      }
+      updateFavBadges();
+      applyFeedFilter();
       renderSub();
+      syncMini();
     });
+  };
 
   $("btnCopyPairHint").onclick = () =>
     toast("在另一台机器上打开 copywhere（同一网段），它会出现在设备坞；点「配对」并在对端确认即可。");

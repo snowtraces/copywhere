@@ -49,7 +49,7 @@ func TestFrontendWiring(t *testing.T) {
 		"loadState", "loadPeers", "loadRecords", "loadLogs", "loadPendingPair", "loadUiState",
 		"applyState", "renderSub", "renderPeers", "addRecord", "renderLayout",
 		"bindStaticUI", "bindWailsEvents", "toast",
-		"loadPersistedFeed", "slimFeed", "schedulePersistFeed", "clearPersistedFeed",
+		"loadPersistedFeed", "slimFeed", "slimFav", "persistFavorites", "schedulePersistFeed", "clearPersistedFeed",
 		"pickFiles", "pasteFilesFromClipboard", "sendText",
 		"boot", "renderLogs", "updateLogBadge", "openLogs", "closeLogs", "togglePause",
 		"applyUiState", "renderMini", "renderMiniPeers", "renderMiniFeed", "renderMiniXfers",
@@ -58,6 +58,8 @@ func TestFrontendWiring(t *testing.T) {
 		"sendMiniText", "handleComposerPaste", "hideWindow",
 		"isTextRecord", "recordPath", "previewImage", "copyRecordText",
 		"miniTextBubble", "miniImageBubble", "miniFileBubble",
+		"starSvg", "updateRecordRowFav", "toggleRecordFav",
+		"applyFeedFilter", "setFeedFilter", "updateFavBadges", "updateMiniFavBtn", "toggleMiniFavFilter",
 	}
 	for _, name := range critical {
 		defined := regexp.MustCompile(`(?m)^(?:async\s+)?function\s+` + regexp.QuoteMeta(name) + `\s*\(`).MatchString(js)

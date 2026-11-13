@@ -152,6 +152,11 @@ type Service struct {
 	feedPath      string
 	feedSaveTimer *time.Timer
 	feedDirty     bool
+
+	favMu   sync.Mutex
+	favPath string
+	favs    []panel.FileView
+	favKeys map[string]struct{}
 }
 
 // NewService 创建绑定服务。core/cfg/bus 必须非 nil。
@@ -161,15 +166,30 @@ func NewService(core Core, cfg *config.Config, cfgPath string, bus *panel.Bus) *
 	}
 	fPath := feedFilePath(cfgPath)
 	initialFeed := loadFeed(fPath)
+
+	favP := favoritesFilePath(cfgPath)
+	initialFavs := loadFavorites(favP)
+	favKeys := make(map[string]struct{}, len(initialFavs))
+	for _, r := range initialFavs {
+		favKeys[feedRecordKey(r)] = struct{}{}
+	}
+
 	feedKeys := make(map[string]struct{}, len(initialFeed))
-	for _, r := range initialFeed {
-		feedKeys[feedRecordKey(r)] = struct{}{}
+	for i, r := range initialFeed {
+		k := feedRecordKey(r)
+		feedKeys[k] = struct{}{}
+		if _, ok := favKeys[k]; ok {
+			initialFeed[i].Fav = true
+		}
 	}
 	if bus != nil {
 		for _, r := range bus.Files() {
 			k := feedRecordKey(r)
 			if _, ok := feedKeys[k]; !ok {
 				feedKeys[k] = struct{}{}
+				if _, ok := favKeys[k]; ok {
+					r.Fav = true
+				}
 				initialFeed = append(initialFeed, r)
 			}
 		}
@@ -185,6 +205,9 @@ func NewService(core Core, cfg *config.Config, cfgPath string, bus *panel.Bus) *
 		feedPath: fPath,
 		feed:     initialFeed,
 		feedKeys: feedKeys,
+		favPath:  favP,
+		favs:     initialFavs,
+		favKeys:  favKeys,
 	}
 }
 
@@ -431,6 +454,43 @@ func (s *Service) ClearFeed() error {
 		s.bus.ClearFiles()
 	}
 	return saveFeed(s.feedPath, nil)
+}
+
+// Favorites 返回已收藏的消息列表（独立保存在 ~/.copywhere/favorites.json）。
+func (s *Service) Favorites() []panel.FileView {
+	s.favMu.Lock()
+	defer s.favMu.Unlock()
+	out := make([]panel.FileView, len(s.favs))
+	copy(out, s.favs)
+	return out
+}
+
+// SaveFavorites 将收藏列表持久化到 ~/.copywhere/favorites.json，并同步 feed 中对应记录的 Fav 标记。
+func (s *Service) SaveFavorites(records []panel.FileView) error {
+	s.favMu.Lock()
+	defer s.favMu.Unlock()
+
+	clean := make([]panel.FileView, 0, len(records))
+	favKeys := make(map[string]struct{}, len(records))
+	for _, r := range records {
+		panel.EnsureRecordID(&r)
+		r.Fav = true
+		clean = append(clean, r)
+		favKeys[feedRecordKey(r)] = struct{}{}
+	}
+	s.favs = clean
+	s.favKeys = favKeys
+
+	// 同步 feed 内存中对应记录的 Fav 标记，并触发 feed.json 落盘
+	s.feedMu.Lock()
+	for i, r := range s.feed {
+		_, ok := favKeys[feedRecordKey(r)]
+		s.feed[i].Fav = ok
+	}
+	s.scheduleSaveFeedLocked()
+	s.feedMu.Unlock()
+
+	return saveFavorites(s.favPath, s.favs)
 }
 
 // Logs 返回缓存的运行日志。

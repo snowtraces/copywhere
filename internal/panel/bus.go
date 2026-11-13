@@ -5,6 +5,8 @@
 package panel
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"sync"
 
 	"copywhere/internal/app"
@@ -36,6 +38,7 @@ const (
 // FileView 是 record.File 的 JSON 视图。
 // 导出供其它前端（Wails 桌面窗口）复用同一份记录视图，避免两套字段定义漂移。
 type FileView struct {
+	ID     string `json:"id"`
 	Time   string `json:"time"`
 	Date   string `json:"date"` // 日期（2006-01-02），供前端做日期分组
 	In     bool   `json:"in"`
@@ -46,6 +49,18 @@ type FileView struct {
 	Detail string `json:"detail"`
 	Path   string `json:"path"` // 本机路径：接收=落盘路径，发送=源文件路径
 	Text   bool   `json:"text"` // true=文本同步记录（name 为内容预览）
+	Fav    bool   `json:"fav,omitempty"` // true=已收藏
+}
+
+// EnsureRecordID 保证消息拥有独立唯一标识；若已有则直接返回，为空时基于属性派生确定性标识。
+func EnsureRecordID(r *FileView) string {
+	if r.ID != "" {
+		return r.ID
+	}
+	h := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%t|%s|%s|%d|%t|%s",
+		r.Date, r.Time, r.In, r.Peer, r.Name, r.Size, r.Text, r.Detail)))
+	r.ID = fmt.Sprintf("msg_%x", h[:8])
+	return r.ID
 }
 
 // Bus 收集运行事件：缓存日志与文件记录供前端补齐历史，
@@ -165,7 +180,7 @@ func (b *Bus) publishLocked(ev Event, targets map[chan Event]struct{}) {
 }
 
 func fileToJSON(r record.File) FileView {
-	return FileView{
+	fv := FileView{
 		Time:   r.Time.Format("15:04:05"),
 		Date:   r.Time.Format("2006-01-02"),
 		In:     r.In,
@@ -177,4 +192,6 @@ func fileToJSON(r record.File) FileView {
 		Path:   r.Path,
 		Text:   r.Text,
 	}
+	EnsureRecordID(&fv)
+	return fv
 }
