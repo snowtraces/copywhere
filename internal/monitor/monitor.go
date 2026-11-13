@@ -14,7 +14,7 @@ package monitor
 
 import (
 	"context"
-	"crypto/sha256"
+	"crypto/md5"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -52,8 +52,7 @@ const pollInterval = 400 * time.Millisecond
 // Run 阻塞运行剪贴板监控，直到 ctx 结束。
 // threshold/textSync 通过 getter 每次检测读取，使面板修改配置后即时生效。
 func Run(ctx context.Context, guard Guard, threshold func() int64, textSync func() bool, sender Sender) {
-	lastSeq := clip.Seq() // 忽略启动时剪贴板里的既有内容
-	var lastFP, lastTextFP, lastImgFP string
+	d := newDetector(guard, threshold, textSync, sender)
 
 	// 事件通道：容量 1 的带缓冲通道 + 非阻塞投递 = 天然合并（coalescing），
 	// 变化再密集也只保留一次待检测；检测本身幂等（按 seq/指纹去重）。
@@ -75,95 +74,6 @@ func Run(ctx context.Context, guard Guard, threshold func() int64, textSync func
 	t := time.NewTicker(pollInterval)
 	defer t.Stop()
 
-	// detect 执行一轮完整检测（文件 → 文本 → 截图 优先级），返回是否消耗了
-	// 一个新序号。事件与轮询两条触发路径共用，保证语义完全一致。
-	detect := func() {
-		seq := clip.Seq()
-		if seq == lastSeq {
-			return // 序号未变：事件与轮询互为去重
-		}
-		lastSeq = seq
-
-		if guard.Paused != nil && guard.Paused.Load() {
-			return // 自动同步已暂停：跳过当前内容，恢复后不补发
-		}
-		if guard.OwnSeq != nil && seq == guard.OwnSeq.Load() {
-			return // 本进程自己写入的
-		}
-		if guard.LastReceivedAt != nil &&
-			time.Since(time.Unix(0, guard.LastReceivedAt.Load())) < 3*time.Second {
-			return // 刚收到远端内容，防回环兜底
-		}
-
-		// 优先处理文件列表
-		if files, err := clip.ReadFiles(); err == nil && len(files) > 0 {
-			fp, total, ferr := fingerprint(files)
-			if ferr != nil {
-				log.Printf("读取剪贴板文件信息失败: %v", ferr)
-				return
-			}
-			if fp == lastFP {
-				return // 同一批文件，避免重复发送
-			}
-			lastFP = fp
-			if th := threshold(); th > 0 && total > th {
-				log.Printf("剪贴板文件共 %s，超过自动同步阈值 %s，已跳过（可在面板或用 send 命令手动发送）",
-					bytesize.Human(total), bytesize.Human(th))
-				return
-			}
-			log.Printf("检测到剪贴板文件 %d 个，共 %s，开始同步", len(files), bytesize.Human(total))
-			diag.Mark("monitor") // 发送是多节点同步 IO（可长达数分钟），先把心跳续上
-			sender.SendFiles(files, total)
-			return
-		}
-
-		// 再处理文本：存在有效文本时按文本同步（带位图的文本多为
-		// Excel/Word 等复制时附带的预览位图，不应误当截图发送）。
-		// 读的是带格式版本：HTML/RTF 一并搬运，两端均支持时对端
-		// Ctrl+V 粘贴效果与本机一致；对旧版本由 app 层降级为纯文本。
-		if rich, terr := clip.ReadRich(); terr == nil && rich.Text != "" {
-			// 去重键是全文（文本+富格式）指纹而非纯文本：序号已变、文本相同
-			// 但格式不同（如先纯文后富本复制同一选区）时只看 Text 会静默丢格式。
-			// 显式分段哈希（段间 0x00 分隔）：避免拼接产生的边界歧义碰撞。
-			h := sha256.New()
-			h.Write([]byte(rich.Text))
-			h.Write([]byte{0})
-			h.Write(rich.HTML)
-			h.Write([]byte{0})
-			h.Write(rich.RTF)
-			fp := hex.EncodeToString(h.Sum(nil)[:8])
-			if textSync() && fp != lastTextFP {
-				lastTextFP = fp
-				if rich.HasFormats() {
-					log.Printf("检测到剪贴板富文本 %d 字符（含富格式 %s），开始同步",
-						len(rich.Text), bytesize.Human(rich.Size()))
-				} else {
-					log.Printf("检测到剪贴板文本 %d 字符，开始同步", len(rich.Text))
-				}
-				sender.SendRich(rich)
-			}
-			return
-		}
-
-		// 最后兜底：无文件无文本，检测截图位图（Win+Shift+S / PrintScreen
-		// 等截图直接写入剪贴板、不落盘的情形）
-		if img, err := clip.ReadImage(); err == nil && len(img) > 0 {
-			sum := sha256.Sum256(img)
-			fp := hex.EncodeToString(sum[:8])
-			if fp == lastImgFP {
-				return // 同一张截图，避免重复发送
-			}
-			lastImgFP = fp
-			if th := threshold(); th > 0 && int64(len(img)) > th {
-				log.Printf("剪贴板截图 %s，超过自动同步阈值 %s，已跳过",
-					bytesize.Human(int64(len(img))), bytesize.Human(th))
-				return
-			}
-			log.Printf("检测到剪贴板截图 %s，开始同步", bytesize.Human(int64(len(img))))
-			sender.SendImage(img)
-		}
-	}
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -175,8 +85,150 @@ func Run(ctx context.Context, guard Guard, threshold func() int64, textSync func
 		// 即历史上那个 CloseClipboard 泄漏类故障），心跳随即陈旧，
 		// 看门狗会转储堆栈定位问题。
 		diag.Mark("monitor")
-		detect()
+		d.detect()
 	}
+}
+
+type detector struct {
+	guard     Guard
+	threshold func() int64
+	textSync  func() bool
+	sender    Sender
+
+	lastSeq uint32
+	lastMD5 string
+
+	getSeq    func() uint32
+	readFiles func() ([]string, error)
+	readRich  func() (clip.Rich, error)
+	readImage func() ([]byte, error)
+	calcFP    func(paths []string) (string, int64, error)
+}
+
+func newDetector(guard Guard, threshold func() int64, textSync func() bool, sender Sender) *detector {
+	return &detector{
+		guard:     guard,
+		threshold: threshold,
+		textSync:  textSync,
+		sender:    sender,
+		lastSeq:   clip.Seq(),
+		getSeq:    clip.Seq,
+		readFiles: clip.ReadFiles,
+		readRich:  clip.ReadRich,
+		readImage: clip.ReadImage,
+		calcFP:    fingerprint,
+	}
+}
+
+// detect 执行一轮完整检测（文件 → 文本 → 截图 优先级）。
+// 针对监听本地剪切板消息做连续性去重，每次消息生成一个 md5，
+// 下一次发现连续复制静默跳过并在 log 中记录，只针对连续复制，跨消息复制继续推送。
+func (d *detector) detect() {
+	seq := d.getSeq()
+	if seq == d.lastSeq {
+		return // 序号未变：事件与轮询互为去重
+	}
+	d.lastSeq = seq
+
+	if d.guard.Paused != nil && d.guard.Paused.Load() {
+		return // 自动同步已暂停：跳过当前内容，恢复后不补发
+	}
+	if d.guard.OwnSeq != nil && seq == d.guard.OwnSeq.Load() {
+		return // 本进程自己写入的
+	}
+	if d.guard.LastReceivedAt != nil &&
+		time.Since(time.Unix(0, d.guard.LastReceivedAt.Load())) < 3*time.Second {
+		return // 刚收到远端内容，防回环兜底
+	}
+
+	// 优先处理文件列表
+	if files, err := d.readFiles(); err == nil && len(files) > 0 {
+		fp, total, ferr := d.calcFP(files)
+		if ferr != nil {
+			log.Printf("读取剪贴板文件信息失败: %v", ferr)
+			return
+		}
+		msgMD5 := md5Files(fp)
+		if msgMD5 == d.lastMD5 {
+			log.Printf("剪贴板文件连续重复，已跳过（md5: %s）", msgMD5)
+			return
+		}
+		d.lastMD5 = msgMD5
+		if th := d.threshold(); th > 0 && total > th {
+			log.Printf("剪贴板文件共 %s，超过自动同步阈值 %s，已跳过（可在面板或用 send 命令手动发送）",
+				bytesize.Human(total), bytesize.Human(th))
+			return
+		}
+		log.Printf("检测到剪贴板文件 %d 个，共 %s，开始同步", len(files), bytesize.Human(total))
+		diag.Mark("monitor") // 发送是多节点同步 IO（可长达数分钟），先把心跳续上
+		d.sender.SendFiles(files, total)
+		return
+	}
+
+	// 再处理文本：存在有效文本时按文本同步（带位图的文本多为
+	// Excel/Word 等复制时附带的预览位图，不应误当截图发送）。
+	// 读的是带格式版本：HTML/RTF 一并搬运，两端均支持时对端
+	// Ctrl+V 粘贴效果与本机一致；对旧版本由 app 层降级为纯文本。
+	if rich, terr := d.readRich(); terr == nil && rich.Text != "" {
+		if !d.textSync() {
+			return
+		}
+		msgMD5 := md5Rich(rich)
+		if msgMD5 == d.lastMD5 {
+			log.Printf("剪贴板文本连续重复，已跳过（md5: %s）", msgMD5)
+			return
+		}
+		d.lastMD5 = msgMD5
+		if rich.HasFormats() {
+			log.Printf("检测到剪贴板富文本 %d 字符（含富格式 %s），开始同步",
+				len(rich.Text), bytesize.Human(rich.Size()))
+		} else {
+			log.Printf("检测到剪贴板文本 %d 字符，开始同步", len(rich.Text))
+		}
+		d.sender.SendRich(rich)
+		return
+	}
+
+	// 最后兜底：无文件无文本，检测截图位图（Win+Shift+S / PrintScreen
+	// 等截图直接写入剪贴板、不落盘的情形）
+	if img, err := d.readImage(); err == nil && len(img) > 0 {
+		msgMD5 := md5Image(img)
+		if msgMD5 == d.lastMD5 {
+			log.Printf("剪贴板截图连续重复，已跳过（md5: %s）", msgMD5)
+			return
+		}
+		d.lastMD5 = msgMD5
+		if th := d.threshold(); th > 0 && int64(len(img)) > th {
+			log.Printf("剪贴板截图 %s，超过自动同步阈值 %s，已跳过",
+				bytesize.Human(int64(len(img))), bytesize.Human(th))
+			return
+		}
+		log.Printf("检测到剪贴板截图 %s，开始同步", bytesize.Human(int64(len(img))))
+		d.sender.SendImage(img)
+		return
+	}
+}
+
+func md5Files(fp string) string {
+	sum := md5.Sum([]byte(fp))
+	return hex.EncodeToString(sum[:])
+}
+
+func md5Rich(r clip.Rich) string {
+	h := md5.New()
+	h.Write([]byte(r.Text))
+	if len(r.HTML) > 0 || len(r.RTF) > 0 {
+		h.Write([]byte{0})
+		h.Write(r.HTML)
+		h.Write([]byte{0})
+		h.Write(r.RTF)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func md5Image(img []byte) string {
+	sum := md5.Sum(img)
+	return hex.EncodeToString(sum[:])
 }
 
 func thresholdLabel(threshold int64) string {
