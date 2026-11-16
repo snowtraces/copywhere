@@ -90,10 +90,12 @@ func (w *sinkWriter) Write(p []byte) (int, error) {
 }
 
 type pendingEntry struct {
-	kind    string // "files" | "text" | "rich"
-	paths   []string
-	text    string
-	rich    *clip.Rich // kind=="rich"
+	kind  string // "files" | "text" | "rich"
+	paths []string
+	text  string
+	rich  *clip.Rich // kind=="rich"
+	// peers 是本轮投递失败的节点指纹：补发只针对它们，已成功的节点不再重复收一份。
+	peers   []string
 	expires time.Time
 }
 
@@ -203,15 +205,53 @@ func (a *App) isRejected(id string) bool {
 	return a.rejected[id]
 }
 
-// sendablePeers 返回在线且未因 token 不一致被暂停的节点。
+// sendablePeers 返回本轮参与投递的在线节点：已配对（本机持有对端签发的令牌）
+// 且未因 token 不一致被暂停。
+//
+// 未配对节点不参与任何消息投递：它们必然失败，而失败又会被判为"可重试"，
+// 于是整包内容被反复重发给已经成功的节点（现场表现：复制一次，对端收到十几份
+// 同一文件/文本）。未配对节点照旧留在节点表与节点坞里，供用户完成配对。
 func (a *App) sendablePeers() []discovery.Peer {
 	var out []discovery.Peer
 	for _, p := range a.store.Alive(a.ttl()) {
-		if !a.isRejected(p.ID) {
+		if a.isRejected(p.ID) {
+			continue
+		}
+		if e, ok := a.trust.Get(p.ID); !ok || e.PeerToken == "" {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// deliveryPeers 返回本轮实际参与投递的节点。
+// only 为空 = 全部可投递节点（正常发送）；非空 = 仅其中仍可投递的这些指纹
+// （补发时只发上一轮失败的节点，避免已经成功的节点重复收一份）。
+func (a *App) deliveryPeers(only []string) []discovery.Peer {
+	all := a.sendablePeers()
+	if len(only) == 0 {
+		return all
+	}
+	want := make(map[string]bool, len(only))
+	for _, id := range only {
+		want[id] = true
+	}
+	out := make([]discovery.Peer, 0, len(only))
+	for _, p := range all {
+		if want[p.ID] {
 			out = append(out, p)
 		}
 	}
 	return out
+}
+
+// logNoSendableTargets 记录"有在线节点但都不可投递"的原因（无在线节点时静默：
+// 那是正常状态，不该刷日志）。只在正常发送（非补发）路径调用。
+func (a *App) logNoSendableTargets(what string) {
+	if n := len(a.store.Alive(a.ttl())); n > 0 {
+		log.Printf("跳过发送 %s：%d 个在线节点均未配对或鉴权被拒（可在窗口中配对）", what, n)
+	}
 }
 
 // nodeID 是本机的稳定节点指纹：同一台机器重启后不变，
@@ -1023,13 +1063,10 @@ func (a *App) SendFiles(paths []string, total int64) {
 
 // SendFilesWithResult 与 SendFiles 相同，但把每个对端的投递结果交回调用方
 // （供 GUI 承接的命令行委派等待并汇总）。结果表示"本轮尝试结果"，
-// 不可达节点仍会进入重试队列，因此不代表最终送达。
+// 不可达节点仍会进入重试队列（每个载荷最多补发一次），因此不代表最终送达。
 func (a *App) SendFilesWithResult(paths []string) []SendResult {
 	res := a.sendFilePayload(paths)
-	if a.hasRetryableFailure(res) {
-		a.pushPending(pendingEntry{kind: "files", paths: paths, expires: time.Now().Add(pendingTTL)})
-		log.Printf("部分节点不可达，%s 内将对在线节点重试", pendingTTL)
-	}
+	a.enqueueRetry(res, pendingEntry{kind: "files", paths: paths})
 	return res
 }
 
@@ -1041,10 +1078,7 @@ func (a *App) SendText(text string) {
 // SendTextWithResult 与 SendText 相同，但返回每个对端的投递结果。
 func (a *App) SendTextWithResult(text string) []SendResult {
 	res := a.sendTextPayload(text)
-	if a.hasRetryableFailure(res) {
-		a.pushPending(pendingEntry{kind: "text", text: text, expires: time.Now().Add(pendingTTL)})
-		log.Printf("部分节点不可达，%s 内将对在线节点重试", pendingTTL)
-	}
+	a.enqueueRetry(res, pendingEntry{kind: "text", text: text})
 	return res
 }
 
@@ -1063,11 +1097,8 @@ func (a *App) CopyText(text string) error {
 // 一次复制即可覆盖混合版本环境。富文本不可达时同样进入重试队列。
 func (a *App) SendRich(r clip.Rich) {
 	res := a.sendRichPayload(r)
-	if a.hasRetryableFailure(res) {
-		rr := r
-		a.pushPending(pendingEntry{kind: "rich", rich: &rr, expires: time.Now().Add(pendingTTL)})
-		log.Printf("部分节点不可达，%s 内将对在线节点重试", pendingTTL)
-	}
+	rr := r
+	a.enqueueRetry(res, pendingEntry{kind: "rich", rich: &rr})
 }
 
 // SendImage 同步剪贴板截图：先落盘到接收目录的「截图」子目录
@@ -1085,13 +1116,16 @@ func (a *App) SendImage(png []byte) {
 	}
 	log.Printf("剪贴板截图已保存：%s，开始同步", path)
 	res := a.sendFilePayload([]string{path})
-	if a.hasRetryableFailure(res) {
-		a.pushPending(pendingEntry{kind: "files", paths: []string{path}, expires: time.Now().Add(pendingTTL)})
-		log.Printf("部分节点不可达，%s 内将对在线节点重试", pendingTTL)
-	}
+	a.enqueueRetry(res, pendingEntry{kind: "files", paths: []string{path}})
 }
 
 func (a *App) sendFilePayload(paths []string) []SendResult {
+	return a.sendFilePayloadTo(paths, nil)
+}
+
+// sendFilePayloadTo 是 sendFilePayload 的实现：only 非空时只投递给这些节点
+// （失败补发路径），避免已经成功的节点重复收一份。
+func (a *App) sendFilePayloadTo(paths []string, only []string) []SendResult {
 	var payloadPath, sendName string
 	var cleanup func()
 	// 记录里保留源路径：发送端双击记录可在资源管理器中定位原始文件/目录
@@ -1138,13 +1172,12 @@ func (a *App) sendFilePayload(paths []string) []SendResult {
 		log.Printf("计算文件摘要失败: %v", err)
 		return nil
 	}
+	peers := a.deliveryPeers(only)
 	log.Printf("准备发送 %s（%s，sha256 %s…）到 %d 个在线节点",
-		sendName, bytesize.Human(size), sha[:8], len(a.sendablePeers()))
-
-	peers := a.sendablePeers()
+		sendName, bytesize.Human(size), sha[:8], len(peers))
 	if len(peers) == 0 {
-		if n := len(a.store.Alive(a.ttl())); n > 0 {
-			log.Printf("跳过发送 %s：%d 个在线节点均未配对或鉴权被拒（可在窗口中配对）", sendName, n)
+		if only == nil {
+			a.logNoSendableTargets(sendName)
 		}
 		return nil
 	}
@@ -1242,11 +1275,23 @@ func (p *progressWriter) Write(b []byte) (int, error) {
 }
 
 func (a *App) sendTextPayload(text string) []SendResult {
+	return a.sendTextPayloadTo(text, nil)
+}
+
+// sendTextPayloadTo 是 sendTextPayload 的实现：only 非空时只投递给这些节点。
+func (a *App) sendTextPayloadTo(text string, only []string) []SendResult {
 	data := []byte(text)
 	sum := sha256.Sum256(data)
 	preview := textPreview(text)
+	peers := a.deliveryPeers(only)
+	if len(peers) == 0 {
+		if only == nil {
+			a.logNoSendableTargets(preview)
+		}
+		return nil
+	}
 	var res []SendResult
-	for _, p := range a.sendablePeers() {
+	for _, p := range peers {
 		hdr := transport.Header{
 			V: 1, Type: "text",
 			Name: "text", Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:]), Sender: a.cfg.NodeName,
@@ -1278,10 +1323,22 @@ func (a *App) sendTextPayload(text string) []SendResult {
 // 确实带富格式时走 rich 通道，否则（旧版本对端 / 本来就只有纯文本）走
 // 既有 text 通道——对端看到的永远是自己能处理的内容。
 func (a *App) sendRichPayload(r clip.Rich) []SendResult {
+	return a.sendRichPayloadTo(r, nil)
+}
+
+// sendRichPayloadTo 是 sendRichPayload 的实现：only 非空时只投递给这些节点。
+func (a *App) sendRichPayloadTo(r clip.Rich, only []string) []SendResult {
 	preview := textPreview(r.Text)
 	detail := textDetail(r.Text)
+	peers := a.deliveryPeers(only)
+	if len(peers) == 0 {
+		if only == nil {
+			a.logNoSendableTargets(preview)
+		}
+		return nil
+	}
 	var res []SendResult
-	for _, p := range a.sendablePeers() {
+	for _, p := range peers {
 		useRich := r.HasFormats() && p.Supports(discovery.CapRich)
 		var data []byte
 		typ := "text" // Type/Name 同源，避免成对散落两处失同步
@@ -1406,23 +1463,16 @@ func (a *App) ttl() time.Duration {
 	return time.Duration(a.cfg.PeerTTLSec) * time.Second
 }
 
-func hasFailure(res []SendResult) bool {
-	for _, r := range res {
-		if !r.OK {
-			return true
-		}
-	}
-	return false
-}
-
-// hasRetryableFailure 是否存在值得重试的失败（token 不一致被暂停的节点不重试）。
-func (a *App) hasRetryableFailure(res []SendResult) bool {
+// retryableIDs 返回本轮需要补发的节点指纹：投递失败、且未因 token 不一致被暂停。
+// 未配对节点不会出现在投递结果里（sendablePeers 已把它们排除），因此不会触发补发。
+func (a *App) retryableIDs(res []SendResult) []string {
+	var ids []string
 	for _, r := range res {
 		if !r.OK && !a.isRejected(r.ID) {
-			return true
+			ids = append(ids, r.ID)
 		}
 	}
-	return false
+	return ids
 }
 
 // ---------- 重试队列 ----------
@@ -1433,6 +1483,26 @@ func (a *App) pushPending(e pendingEntry) {
 	a.pendingMu.Unlock()
 }
 
+// enqueueRetry 把本轮失败且值得补发的节点记入重试队列：只补发这些节点，
+// 且每个载荷最多补发一次（见 flushLoop）。
+func (a *App) enqueueRetry(res []SendResult, e pendingEntry) {
+	ids := a.retryableIDs(res)
+	if len(ids) == 0 {
+		return
+	}
+	e.peers = ids
+	e.expires = time.Now().Add(pendingTTL)
+	a.pushPending(e)
+	log.Printf("%d 个节点投递失败，%s 内各补发一次（只重发失败节点）", len(ids), pendingTTL)
+}
+
+// flushLoop 是唯一的补发通道：每 3s 检查一次待补发内容，对失败节点最多补发一次。
+//
+// 语义要点：
+//   - 补发只针对 pendingEntry.peers（上一轮失败的节点），已成功的节点不会重复收；
+//   - 每次真正发出即视为用掉唯一一次补发：成功则完成，失败则放弃并记日志；
+//   - 失败节点暂时离线（当前没有可投递目标）不消耗补发次数，等它回来再试一次，
+//     但最多等 pendingTTL。
 func (a *App) flushLoop(ctx context.Context) {
 	t := time.NewTicker(3 * time.Second)
 	defer t.Stop()
@@ -1458,31 +1528,31 @@ func (a *App) flushLoop(ctx context.Context) {
 		var back []pendingEntry
 		for _, e := range entries {
 			if now.After(e.expires) {
-				log.Printf("重试超时，放弃同步之前暂存的内容")
+				log.Printf("补发窗口（%s）已过，放弃对 %d 个节点的补发", pendingTTL, len(e.peers))
 				continue
 			}
 			var res []SendResult
 			switch e.kind {
 			case "files":
-				res = a.sendFilePayload(e.paths)
+				res = a.sendFilePayloadTo(e.paths, e.peers)
 			case "rich":
 				if e.rich == nil { // 理论不可达：入队方恒置非 nil，防御未来构造点
 					continue
 				}
-				res = a.sendRichPayload(*e.rich)
+				res = a.sendRichPayloadTo(*e.rich, e.peers)
 			default:
-				res = a.sendTextPayload(e.text)
+				res = a.sendTextPayloadTo(e.text, e.peers)
 			}
 			if res == nil {
+				// 没有可投递的目标（失败节点离线了）或载荷已不可读：
+				// 不消耗补发次数，下一轮再看，最多等到 expires。
 				back = append(back, e)
 				continue
 			}
-			if a.hasRetryableFailure(res) {
-				back = append(back, e)
-			} else if hasFailure(res) {
-				log.Printf("剩余失败节点均因 token 不一致被暂停，放弃重试")
+			if left := a.retryableIDs(res); len(left) > 0 {
+				log.Printf("补发仍失败（%d 个节点），每个载荷只补发一次，放弃", len(left))
 			} else {
-				log.Printf("暂存内容重试成功，已同步到全部在线节点")
+				log.Printf("补发成功，失败节点已送达")
 			}
 		}
 		a.pendingMu.Lock()
