@@ -81,6 +81,15 @@ func (c *Config) KVMEdgeDeadZone() int {
 	return *c.KVMEdgeDZ
 }
 
+// storeBuild 由 MSIX 商店包构建时通过 -ldflags 注入（"1"）。
+// 商店版首次生成的默认配置关闭两项能力：
+//   - KVM：全局键鼠钩子 + SendInput 注入，需用户主动开启，便于审核时明确披露；
+//   - 右键菜单：MSIX 注册表虚拟化下写 HKCU\Software\Classes 对 Explorer 不可见。
+//
+// GitHub Release 版不受影响（仍缺省开启）。注意：已存在 config.json 时沿用用户配置，
+// 这里只影响全新安装时生成的默认文件。
+var storeBuild = "0"
+
 // Default 返回默认配置。
 func Default() (*Config, error) {
 	host, _ := os.Hostname()
@@ -93,7 +102,7 @@ func Default() (*Config, error) {
 	}
 	// 边缘死区默认值写进新配置，便于用户在 config.json 里发现这个开关
 	edgeDeadZone := 48
-	return &Config{
+	cfg := &Config{
 		NodeName:      host,
 		DiscoveryPort: 47830,
 		TransferPort:  47831,
@@ -106,7 +115,13 @@ func Default() (*Config, error) {
 		KVMPort:       47832,
 		KVMSpeedPct:   100,
 		KVMEdgeDZ:     &edgeDeadZone,
-	}, nil
+	}
+	if storeBuild == "1" {
+		off := false
+		cfg.KVMEnabled = &off
+		cfg.ShellMenu = &off
+	}
+	return cfg, nil
 }
 
 // DefaultPath 返回默认配置文件路径：~/.copywhere/config.json。

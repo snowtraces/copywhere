@@ -67,6 +67,36 @@ exe 图标与版本信息由 `cmd/copywhere/rsrc_windows_amd64.syso` 自动嵌�
 
 产物命名规范：`copywhere-$v-windows-amd64.exe`（唯一产物）。产物只进 GitHub Release 附件，
 **不要提交进 git 仓库**。
+
+## 3.5 构建 MSIX 商店包（可选，Microsoft Store 渠道）
+
+商店包走 MSIX 提交：Store 会免费重签名，无需自购代码签名证书。脚本在 `tools/msix/`，
+本地测试用默认自签证书即可：
+
+```powershell
+.\tools\msix\build-msix.ps1 -Version 0.6.4.0
+```
+
+脚本会用 `-X copywhere/internal/config.storeBuild=1` 重新构建 exe，因此**商店版首次生成的
+默认配置关闭 KVM 与右键菜单**（KVM 涉及全局键鼠钩子/输入注入；右键菜单在 MSIX 注册表
+虚拟化下不生效）。GitHub Release 版行为不变。产物在 `dist\msix\`。
+
+提交 Partner Center 前，必须用应用「Product identity」页的值覆盖三个参数：
+
+```powershell
+.\tools\msix\build-msix.ps1 -Version 0.6.4.0 `
+  -IdentityName "<Package/Identity Name>" `
+  -Publisher "<CN=...>" `
+  -PublisherDisplayName "<PublisherDisplayName>"
+```
+
+清单里的 `Identity/Name`、`Identity/Publisher`、`Properties/PublisherDisplayName` 必须与
+Partner Center 完全一致，否则上传校验会被拒。上传前用 Windows App Certification Kit
+(WACK) 跑一遍；`runFullTrust` 是受限能力，提交时在 Submission options 里说明它是
+Win32 桌面应用打包成 MSIX 所必需，并在认证备注中主动披露 KVM 的全局钩子行为。
+图块资源由 `go run tools/msix/gen_assets.go` 从 favicon.png 生成，已随仓库提交，
+无需每次重跑。
+
 ## 4. 提交与打标签
 
 ```powershell
@@ -104,4 +134,5 @@ gh release view vX.Y.Z    # 确认 tag、说明、资产齐全
 - [ ] 产物 version 输出正确
 - [ ] tag 已推送（`git ls-remote --tags origin` 可见）
 - [ ] Release 附件可下载、说明完整
+- [ ] （商店渠道）MSIX 包已过 WACK，Identity 与 Partner Center 一致
 - [ ] 各节点已部署新版本

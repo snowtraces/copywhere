@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap rescap">
+
+  <!-- 提交 Partner Center 前，Identity/Name、Identity/Publisher 与
+       PublisherDisplayName 必须与应用的 Product identity 页完全一致。 -->
+  <Identity Name="{{IDENTITY_NAME}}" Publisher="{{PUBLISHER}}" Version="{{VERSION}}" ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>copywhere</DisplayName>
+    <PublisherDisplayName>{{PUBLISHER_DISPLAY_NAME}}</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <Description>局域网剪贴板 / 文件自动同步与鼠标键盘跨屏工具</Description>
+  </Properties>
+
+  <!-- WebView2 运行时要求 Windows 10 1803+，取 1809(17763) 作为下限更稳妥。 -->
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="zh-CN" />
+  </Resources>
+
+  <Applications>
+    <!-- 纯打包 Win32 应用：完整信任进程，不走 AppContainer。 -->
+    <Application Id="App" Executable="copywhere.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="copywhere"
+        Description="局域网剪贴板 / 文件自动同步与鼠标键盘跨屏工具"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile
+          Wide310x150Logo="Assets\Wide310x150Logo.png"
+          Square71x71Logo="Assets\Square71x71Logo.png"
+          Square310x310Logo="Assets\Square310x310Logo.png" />
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+
+  <!-- runFullTrust 是受限能力：提交时在 Submission options 说明这是
+       Win32 桌面应用打包成 MSIX 所必需（剪贴板监听、全局钩子、局域网端口、托盘）。
+       full trust 进程的网络访问不受 capability 限制，故不额外声明 internetClient。 -->
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>
